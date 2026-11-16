@@ -1,6 +1,10 @@
 name: Build APK
 on:
   push:
+    paths-ignore:
+      - 'notes-app/**'
+      - '.github/workflows/**'
+      - '*.md'
   workflow_dispatch:
 permissions:
   contents: write
