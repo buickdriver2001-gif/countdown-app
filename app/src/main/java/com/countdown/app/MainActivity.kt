@@ -25,6 +25,8 @@ class MainActivity : Activity() {
     private lateinit var nameInput: EditText
     private lateinit var selectedText: TextView
 
+    private var shownGlow: Glow? = null
+
     /** The date/time picked in the editor (saved when the user taps Save). */
     private var pendingTarget: Long = 0L
 
@@ -84,9 +86,18 @@ class MainActivity : Activity() {
     private fun renderCountdown() {
         val target = CountdownStore.target(this)
         val glow = CountdownStore.glow(this).resolve(target - System.currentTimeMillis())
-        findViewById<View>(R.id.card).setBackgroundResource(if (glow == Glow.NONE) R.drawable.card_bg else glow.drawable)
-        countdownText.setTextColor(glow.color)
-        findViewById<Button>(R.id.glow_button).text = "Widget glow: " + CountdownStore.glow(this).label.substringBefore(" (").substringBefore(":")
+        if (glow != shownGlow) {
+            shownGlow = glow
+            val card = findViewById<View>(R.id.card)
+            val palette = glow.palette
+            card.background = when {
+                palette != null -> MovingGlowDrawable(palette, resources.displayMetrics.density)
+                glow == Glow.NONE -> getDrawable(R.drawable.card_bg)
+                else -> getDrawable(glow.drawable)
+            }
+            countdownText.setTextColor(glow.color)
+            findViewById<Button>(R.id.glow_button).text = "Widget glow: " + CountdownStore.glow(this).shortLabel
+        }
         titleText.text = CountdownStore.name(this)
         if (target == 0L) {
             countdownText.text = "--:--:--"

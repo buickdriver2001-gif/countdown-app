@@ -22,6 +22,13 @@ class CountdownWidget : AppWidgetProvider() {
         scheduleFinish(context)
     }
 
+    override fun onAppWidgetOptionsChanged(
+        context: Context, manager: AppWidgetManager, id: Int, newOptions: android.os.Bundle
+    ) {
+        // Widget was resized: redraw the border frames to fit
+        update(context, manager, id)
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
         when (intent.action) {
@@ -34,6 +41,12 @@ class CountdownWidget : AppWidgetProvider() {
 
     companion object {
         private const val ACTION_REFRESH = "com.countdown.app.REFRESH"
+
+        private val FRAME_IDS = intArrayOf(
+            R.id.frame0, R.id.frame1, R.id.frame2, R.id.frame3, R.id.frame4, R.id.frame5,
+            R.id.frame6, R.id.frame7, R.id.frame8, R.id.frame9, R.id.frame10, R.id.frame11,
+            R.id.frame12, R.id.frame13, R.id.frame14, R.id.frame15
+        )
 
         fun updateAll(context: Context) {
             val manager = AppWidgetManager.getInstance(context)
@@ -49,7 +62,19 @@ class CountdownWidget : AppWidgetProvider() {
 
             views.setTextViewText(R.id.widget_title, CountdownStore.name(context))
             val glow = CountdownStore.glow(context).resolve(remaining)
-            views.setInt(R.id.widget_root, "setBackgroundResource", glow.drawable)
+            val palette = glow.palette
+            if (palette != null) {
+                val opts = manager.getAppWidgetOptions(id)
+                val wDp = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0).takeIf { it > 0 } ?: 250
+                val hDp = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0).takeIf { it > 0 } ?: 110
+                val frames = BorderPainter.frames(wDp, hDp, palette)
+                frames.forEachIndexed { i, bmp -> views.setImageViewBitmap(FRAME_IDS[i], bmp) }
+                views.setViewVisibility(R.id.widget_flipper, View.VISIBLE)
+                views.setInt(R.id.widget_root, "setBackgroundResource", android.R.color.transparent)
+            } else {
+                views.setViewVisibility(R.id.widget_flipper, View.GONE)
+                views.setInt(R.id.widget_root, "setBackgroundResource", glow.drawable)
+            }
             views.setTextColor(R.id.widget_chrono, glow.color)
             views.setTextColor(R.id.widget_message, glow.color)
 

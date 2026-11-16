@@ -25,7 +25,7 @@ object CountdownStore {
     }
 
     fun glow(ctx: Context): Glow =
-        Glow.values().firstOrNull { it.name == prefs(ctx).getString(KEY_GLOW, null) } ?: Glow.LEGENDARY
+        Glow.values().firstOrNull { it.name == prefs(ctx).getString(KEY_GLOW, null) } ?: Glow.AURORA
 
     fun setGlow(ctx: Context, glow: Glow) {
         prefs(ctx).edit().putString(KEY_GLOW, glow.name).apply()
