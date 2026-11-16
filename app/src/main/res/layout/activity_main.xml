@@ -13,16 +13,17 @@
 
         <!-- Live countdown card -->
         <LinearLayout
+            android:id="@+id/card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
             android:background="@drawable/card_bg"
             android:gravity="center_horizontal"
             android:orientation="vertical"
-            android:paddingTop="32dp"
-            android:paddingBottom="32dp"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp">
+            android:paddingTop="36dp"
+            android:paddingBottom="36dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp">
 
             <TextView
                 android:id="@+id/title_text"
@@ -117,5 +118,12 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="Add widget to home screen" />
+
+        <Button
+            android:id="@+id/glow_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Widget glow" />
     </LinearLayout>
 </ScrollView>

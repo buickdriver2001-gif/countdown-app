@@ -48,6 +48,10 @@ class CountdownWidget : AppWidgetProvider() {
             val remaining = target - System.currentTimeMillis()
 
             views.setTextViewText(R.id.widget_title, CountdownStore.name(context))
+            val glow = CountdownStore.glow(context).resolve(remaining)
+            views.setInt(R.id.widget_root, "setBackgroundResource", glow.drawable)
+            views.setTextColor(R.id.widget_chrono, glow.color)
+            views.setTextColor(R.id.widget_message, glow.color)
 
             when {
                 target == 0L -> showMessage(views, "Tap to set a date")

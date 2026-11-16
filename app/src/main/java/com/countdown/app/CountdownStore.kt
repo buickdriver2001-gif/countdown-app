@@ -8,6 +8,7 @@ object CountdownStore {
     private const val PREFS = "countdown"
     private const val KEY_NAME = "name"
     private const val KEY_TARGET = "target"
+    private const val KEY_GLOW = "glow"
     const val DEFAULT_NAME = "My Countdown"
 
     fun name(ctx: Context): String =
@@ -21,6 +22,13 @@ object CountdownStore {
             .putString(KEY_NAME, name.trim())
             .putLong(KEY_TARGET, target)
             .apply()
+    }
+
+    fun glow(ctx: Context): Glow =
+        Glow.values().firstOrNull { it.name == prefs(ctx).getString(KEY_GLOW, null) } ?: Glow.LEGENDARY
+
+    fun setGlow(ctx: Context, glow: Glow) {
+        prefs(ctx).edit().putString(KEY_GLOW, glow.name).apply()
     }
 
     /** Formats milliseconds as total HH:MM:SS (hours keep counting past 24, no days). */

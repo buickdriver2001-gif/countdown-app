@@ -1,6 +1,7 @@
 package com.countdown.app
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.appwidget.AppWidgetManager
@@ -9,6 +10,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.format.DateFormat
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -52,6 +54,7 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.pick_button).setOnClickListener { pickDateTime() }
         findViewById<Button>(R.id.save_button).setOnClickListener { save() }
         findViewById<Button>(R.id.widget_button).setOnClickListener { addWidget() }
+        findViewById<Button>(R.id.glow_button).setOnClickListener { pickGlow() }
     }
 
     override fun onResume() {
@@ -64,8 +67,26 @@ class MainActivity : Activity() {
         handler.removeCallbacks(ticker)
     }
 
+    private fun pickGlow() {
+        val all = Glow.values()
+        val current = CountdownStore.glow(this)
+        AlertDialog.Builder(this)
+            .setTitle("Widget glow")
+            .setSingleChoiceItems(all.map { it.label }.toTypedArray(), all.indexOf(current)) { dlg, which ->
+                CountdownStore.setGlow(this, all[which])
+                CountdownWidget.updateAll(this)
+                renderCountdown()
+                dlg.dismiss()
+            }
+            .show()
+    }
+
     private fun renderCountdown() {
         val target = CountdownStore.target(this)
+        val glow = CountdownStore.glow(this).resolve(target - System.currentTimeMillis())
+        findViewById<View>(R.id.card).setBackgroundResource(if (glow == Glow.NONE) R.drawable.card_bg else glow.drawable)
+        countdownText.setTextColor(glow.color)
+        findViewById<Button>(R.id.glow_button).text = "Widget glow: " + CountdownStore.glow(this).label.substringBefore(" (").substringBefore(":")
         titleText.text = CountdownStore.name(this)
         if (target == 0L) {
             countdownText.text = "--:--:--"

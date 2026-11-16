@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Arc Raiders-style loot glow: soft colored rings fading outward around a bright edge -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape><corners android:radius="28dp" /><stroke android:width="3dp" android:color="#144BE36B" /></shape>
+    </item>
+    <item android:bottom="2dp" android:left="2dp" android:right="2dp" android:top="2dp">
+        <shape><corners android:radius="26dp" /><stroke android:width="3dp" android:color="#264BE36B" /></shape>
+    </item>
+    <item android:bottom="4dp" android:left="4dp" android:right="4dp" android:top="4dp">
+        <shape><corners android:radius="24dp" /><stroke android:width="3dp" android:color="#474BE36B" /></shape>
+    </item>
+    <item android:bottom="6dp" android:left="6dp" android:right="6dp" android:top="6dp">
+        <shape><corners android:radius="22dp" /><stroke android:width="3dp" android:color="#804BE36B" /></shape>
+    </item>
+    <item android:bottom="8dp" android:left="8dp" android:right="8dp" android:top="8dp">
+        <shape>
+            <gradient android:angle="270" android:startColor="#F21F2733" android:endColor="#F2141A22" />
+            <corners android:radius="20dp" />
+            <stroke android:width="2dp" android:color="#FF4BE36B" />
+        </shape>
+    </item>
+</layer-list>
