@@ -43,6 +43,11 @@ class GameView(context: Context) : View(context) {
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
     }
     private val hudDim = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#8A93A3"); textSize = 12 * d }
+    private val nukeReadyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#FFB13B"); textSize = 12 * d }
+    private val tacticPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#3DA5FF"); textSize = 12 * d; letterSpacing = 0.08f
+        typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+    }
     private val btnPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#CC1A1F27") }
     private val btnText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE; textSize = 15 * d; textAlign = Paint.Align.CENTER
@@ -63,6 +68,21 @@ class GameView(context: Context) : View(context) {
         typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
     }
     private val dimPaint = Paint().apply { color = Color.parseColor("#B0000000") }
+
+    private val zombieColor = Color.parseColor("#FF3B3B")
+    private val infPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = 1.6f * d; color = Color.parseColor("#9CFF4D"); strokeCap = Paint.Cap.ROUND
+    }
+    private val infRect = RectF()
+
+    private fun blend(a: Int, b: Int, t: Float): Int {
+        val u = 1f - t
+        return Color.rgb(
+            (Color.red(a) * u + Color.red(b) * t).toInt(),
+            (Color.green(a) * u + Color.green(b) * t).toInt(),
+            (Color.blue(a) * u + Color.blue(b) * t).toInt()
+        )
+    }
 
     private val playerColor = Color.parseColor("#FFE066")
     private val hunterColor = Color.parseColor("#3DA5FF")
@@ -180,13 +200,13 @@ class GameView(context: Context) : View(context) {
         // Nuke scorch marks and blasts
         for (n in world.nukes) {
             val cx = n.x * d; val cy = n.y * d
-            val r = World.NUKE_RADIUS * d
+            val r = (kotlin.math.hypot(width.toDouble(), height.toDouble()) * 1.05).toFloat()
             val scorch = (1f - n.age / 6f).coerceIn(0f, 1f)
             nukePaint.style = Paint.Style.FILL
             nukePaint.color = Color.argb((60 * scorch).toInt(), 60, 30, 10)
             c.drawCircle(cx, cy, r * 0.85f, nukePaint)
-            if (n.age < 0.6f) {
-                val p = n.age / 0.6f
+            if (n.age < 0.9f) {
+                val p = n.age / 0.9f
                 nukePaint.color = Color.argb(((1f - p) * 230).toInt(), 255, 240, 200)
                 c.drawCircle(cx, cy, r * (0.2f + 0.5f * p), nukePaint)
                 nukePaint.style = Paint.Style.STROKE
@@ -211,18 +231,28 @@ class GameView(context: Context) : View(context) {
         }
 
         for (h in world.humans) {
-            val col = when (h.role) { Role.PLAYER -> playerColor; Role.HUNTER -> hunterColor; Role.STRAY -> strayColor }
-            glowPaint.color = col
-            glowPaint.alpha = 55
-            c.drawCircle(h.x * d, h.y * d, 10 * d, glowPaint)
+            val base = when (h.role) { Role.PLAYER -> playerColor; Role.HUNTER -> hunterColor; Role.STRAY -> strayColor }
+            // Infected dots drift toward zombie red
+            val inf = h.infection.coerceIn(0f, 1f)
+            val col = blend(base, zombieColor, inf * 0.85f)
+            val hx = h.x * d; val hy = h.y * d
+            glowPaint.color = if (h.hurtFlash > 0f) zombieColor else col
+            glowPaint.alpha = (55 + 120 * h.hurtFlash).toInt().coerceAtMost(255)
+            c.drawCircle(hx, hy, 10 * d, glowPaint)
             corePaint.color = col
-            c.drawCircle(h.x * d, h.y * d, World.HUMAN_R * d, corePaint)
+            c.drawCircle(hx, hy, World.HUMAN_R * d, corePaint)
+            if (inf > 0.01f) {
+                infRect.set(hx - 8 * d, hy - 8 * d, hx + 8 * d, hy + 8 * d)
+                c.drawArc(infRect, -90f, 360f * inf, false, infPaint)
+            }
         }
 
         for (t in world.texts) {
             when {
                 t.text.startsWith("WAVE") -> { floatPaint.color = Color.parseColor("#FF3B3B"); floatPaint.textSize = 28 * d }
                 t.text.startsWith("Survivor Joined") -> { floatPaint.color = hunterColor; floatPaint.textSize = 17 * d }
+                t.text.endsWith("turned!") -> { floatPaint.color = Color.parseColor("#9CFF4D"); floatPaint.textSize = 15 * d }
+                t.text.startsWith("+") -> { floatPaint.color = Color.parseColor("#FFB13B"); floatPaint.textSize = 30 * d }
                 else -> { floatPaint.color = Color.WHITE; floatPaint.textSize = 12 * d }
             }
             floatPaint.alpha = (min(1f, t.life) * 255).toInt()
@@ -244,8 +274,9 @@ class GameView(context: Context) : View(context) {
             val alive = world.humans.count { it.role != Role.STRAY }
             c.drawText("WAVE ${world.wave}   ⏱ ${fmt(world.time)}", left, top, hud)
             c.drawText("☠ ${world.kills}   ● ${world.zombies.size}   👥 $alive", left, top + 20 * d, hudDim)
-            val charges = "☢".repeat(world.nukeCharges) + "·".repeat(World.MAX_NUKES - world.nukeCharges)
-            c.drawText("NUKES $charges", left, top + 38 * d, hudDim)
+            c.drawText(if (world.nukeReady) "☢ NUKE READY (double-tap)" else "☢ NUKE USED", left, top + 38 * d,
+                if (world.nukeReady) nukeReadyPaint else hudDim)
+            if (world.phase == Phase.RUNNING) c.drawText("SQUAD: ${world.tactic.label}", left, top + 56 * d, tacticPaint)
         }
         drawButton(c, btnPause, if (paused) "▶" else "❚❚")
         drawButton(c, btnSpeed, "${speed}x")
@@ -263,7 +294,7 @@ class GameView(context: Context) : View(context) {
         c.drawText("ZOMBIE DOTS", cx, cy - 40 * d, title)
         c.drawText("Tap anywhere to drop your survivor + hunter", cx, cy + 4 * d, center)
         c.drawText("Then watch them try to survive.", cx, cy + 28 * d, centerDim)
-        c.drawText("Tap = drop zombies   ·   Double-tap = nuke", cx, cy + 50 * d, centerDim)
+        c.drawText("Tap = drop zombies   ·   Double-tap = your one nuke", cx, cy + 50 * d, centerDim)
         if (best > 0f) c.drawText("Best survival: ${fmt(best)}", cx, cy + 82 * d, centerDim)
     }
 
@@ -273,9 +304,10 @@ class GameView(context: Context) : View(context) {
         val cy = height / 2f
         c.drawText("EVERYONE DIED", cx, cy - 50 * d, title)
         c.drawText("Survived ${fmt(world.time)}  ·  Wave ${world.wave}  ·  ${world.kills} kills", cx, cy, center)
+        c.drawText("${world.turned} turned", cx, cy + 46 * d, centerDim)
         val newBest = world.time >= best && best > 0f
         c.drawText(if (newBest) "New best!" else "Best: ${fmt(best)}", cx, cy + 26 * d, centerDim)
-        c.drawText("Tap to play again", cx, cy + 66 * d, center)
+        c.drawText("Tap to play again", cx, cy + 80 * d, center)
     }
 
     private fun drawPaused(c: Canvas) {

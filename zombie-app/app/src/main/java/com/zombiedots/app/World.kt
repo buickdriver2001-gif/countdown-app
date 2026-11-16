@@ -1,5 +1,6 @@
 package com.zombiedots.app
 
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
@@ -21,6 +22,7 @@ class Zombie(var x: Float, var y: Float, val speed: Float) {
     var entered = false
     var dead = false
     var wanderAngle = 0f
+    var attackCd = 0f
 }
 
 enum class Role { PLAYER, HUNTER, STRAY }
@@ -29,15 +31,28 @@ class Human(var x: Float, var y: Float, var role: Role) {
     var vx = 0f
     var vy = 0f
     var cooldown = 0f
-    var slotAngle = 0f
-    var wanderAngle = 0f
     var dead = false
+    /** 0 = healthy, 1 = turns into a zombie. */
+    var infection = 0f
+    var slot = 0
+    var anchorX = 0f
+    var anchorY = 0f
+    var hurtFlash = 0f
     val speed: Float
         get() = when (role) {
             Role.PLAYER -> 46f
-            Role.HUNTER -> 44f
+            Role.HUNTER -> 45f
             Role.STRAY -> 42f
-        }
+        } * (1f - infection * 0.25f) // sick dots slow down
+}
+
+/** What the squad is currently trying to do. */
+enum class Tactic(val label: String) {
+    SQUAD_UP("SQUADDING UP"),
+    HOLD("HOLDING THE LINE"),
+    ADVANCE("ADVANCING"),
+    RUN("RUNNING"),
+    SPLIT("SPLITTING UP")
 }
 
 class Tracer(val x1: Float, val y1: Float, val x2: Float, val y2: Float, var life: Float)
@@ -64,16 +79,20 @@ class World(private val rnd: Random = Random.Default) {
     var wave = 0
     var waveTimer = 0f
     var strayTimer = 0f
-    var nukeCharges = 2
-    var nukeTimer = 0f
-    var lost = 0
+    var nukeReady = true
+    var turned = 0
+
+    var tactic = Tactic.SQUAD_UP
+        private set
+    private var tacticTimer = 0f
+    private var facing = 0f
+    private var safeX = 0f
+    private var safeY = 0f
+    private var safeTimer = 0f
 
     companion object {
-        const val MAX_ZOMBIES = 700
-        const val NUKE_RADIUS = 150f
-        const val NUKE_RECHARGE = 30f
-        const val MAX_NUKES = 3
-        const val WAVE_TIME = 25f
+        const val MAX_ZOMBIES = 800
+        const val WAVE_TIME = 22f
         const val MAX_HUNTERS = 8
         const val ZOMBIE_R = 3.2f
         const val HUMAN_R = 4.5f
@@ -84,30 +103,32 @@ class World(private val rnd: Random = Random.Default) {
     fun reset() {
         zombies.clear(); humans.clear(); tracers.clear(); splats.clear(); nukes.clear(); texts.clear()
         phase = Phase.SETUP
-        time = 0f; kills = 0; wave = 0; waveTimer = 0f; strayTimer = 15f // first stray after ~15s
-        nukeCharges = 2; nukeTimer = 0f; lost = 0
+        time = 0f; kills = 0; wave = 0; waveTimer = 0f
+        strayTimer = 15f // first stray after ~15s
+        nukeReady = true; turned = 0
+        tactic = Tactic.SQUAD_UP; tacticTimer = 0f
     }
 
     /** Drops the survivor and one hunter at (x, y) and starts the outbreak. */
     fun start(x: Float, y: Float) {
         reset()
-        val cx = x.coerceIn(30f, width - 30f)
-        val cy = y.coerceIn(30f, height - 30f)
+        val cx = x.coerceIn(40f, width - 40f)
+        val cy = y.coerceIn(40f, height - 40f)
         humans.add(Human(cx, cy, Role.PLAYER))
-        // Start with a single hunter; more join as strays are found
         val a = rnd.nextFloat() * 6.283f
-        humans.add(Human(cx + cos(a) * 22f, cy + sin(a) * 22f, Role.HUNTER).also { it.slotAngle = a })
+        humans.add(Human(cx + cos(a) * 20f, cy + sin(a) * 20f, Role.HUNTER))
+        safeX = cx; safeY = cy
         phase = Phase.RUNNING
         spawnWave(first = true)
     }
 
     private fun spawnWave(first: Boolean = false) {
         wave++
-        val count = if (first) 30 else 25 + wave * 12
-        val edges = if (rnd.nextFloat() < 0.5f) 1 else 2
+        val count = if (first) 30 else 22 + wave * 11
+        val edges = 1 + rnd.nextInt(if (wave > 3) 3 else 2)
         val chosen = (0 until 4).shuffled(rnd).take(edges)
         repeat(count) { i ->
-            if (zombies.size >= MAX_ZOMBIES) return
+            if (zombies.size >= MAX_ZOMBIES) return@repeat
             val (x, y) = edgePoint(chosen[i % chosen.size])
             addZombie(x, y)
         }
@@ -115,7 +136,7 @@ class World(private val rnd: Random = Random.Default) {
     }
 
     private fun edgePoint(edge: Int): Pair<Float, Float> {
-        val m = 12f + rnd.nextFloat() * 30f
+        val m = 12f + rnd.nextFloat() * 40f
         return when (edge) {
             0 -> rnd.nextFloat() * width to -m
             1 -> width + m to rnd.nextFloat() * height
@@ -124,7 +145,7 @@ class World(private val rnd: Random = Random.Default) {
         }
     }
 
-    private fun zombieBaseSpeed() = min(26f + wave * 2.5f, 50f)
+    private fun zombieBaseSpeed() = min(25f + wave * 2.4f, 52f)
 
     private fun addZombie(x: Float, y: Float, inside: Boolean = false) {
         if (zombies.size >= MAX_ZOMBIES) return
@@ -132,6 +153,7 @@ class World(private val rnd: Random = Random.Default) {
         z.entered = inside
         z.wanderAngle = rnd.nextFloat() * 6.283f
         z.retarget = rnd.nextFloat() * 0.3f
+        z.attackCd = 0.5f
         zombies.add(z)
     }
 
@@ -147,18 +169,15 @@ class World(private val rnd: Random = Random.Default) {
         }
     }
 
-    /** Double-tap: nuke. Returns false if no charges are left. */
+    /** Double-tap: the one and only nuke. Wipes out every zombie on the map. */
     fun nuke(x: Float, y: Float): Boolean {
-        if (phase != Phase.RUNNING || nukeCharges <= 0) return false
-        nukeCharges--
+        if (phase != Phase.RUNNING || !nukeReady) return false
+        nukeReady = false
         nukes.add(Nuke(x, y, 0f))
         var n = 0
-        val r2 = NUKE_RADIUS * NUKE_RADIUS
-        for (z in zombies) {
-            val dx = z.x - x; val dy = z.y - y
-            if (dx * dx + dy * dy < r2) { killZombie(z, quiet = true); n++ }
-        }
-        if (n > 0) texts.add(FloatText(x, y - 20f, "+$n", 1.4f))
+        for (z in zombies) { if (!z.dead) { killZombie(z, quiet = true); n++ } }
+        waveTimer = 0f // a full breather before the next wave
+        texts.add(FloatText(width / 2f, height / 2f + 40f, "+$n", 2f))
         return true
     }
 
@@ -207,18 +226,14 @@ class World(private val rnd: Random = Random.Default) {
         waveTimer += dt
         if (waveTimer >= WAVE_TIME) { waveTimer = 0f; spawnWave() }
 
-        if (nukeCharges < MAX_NUKES) {
-            nukeTimer += dt
-            if (nukeTimer >= NUKE_RECHARGE) { nukeTimer = 0f; nukeCharges++ }
-        } else nukeTimer = 0f
-
         strayTimer += dt
         if (strayTimer >= 30f) { strayTimer = 0f; maybeSpawnStray() }
 
         buildGrid()
         updateZombies(dt)
+        thinkSquad(dt)
         updateHumans(dt)
-        infect()
+        attacks()
 
         zombies.removeAll { it.dead }
         humans.removeAll { it.dead }
@@ -229,17 +244,12 @@ class World(private val rnd: Random = Random.Default) {
     private fun maybeSpawnStray() {
         val hunters = humans.count { it.role == Role.HUNTER }
         if (hunters >= MAX_HUNTERS) return
-        // Pick the spot farthest from zombies out of a few tries
         var best: Pair<Float, Float>? = null
         var bestD = -1f
         repeat(12) {
-            val x = 20f + rnd.nextFloat() * (width - 40f)
-            val y = 20f + rnd.nextFloat() * (height - 40f)
-            var d = Float.MAX_VALUE
-            for (z in zombies) {
-                val dx = z.x - x; val dy = z.y - y
-                d = min(d, dx * dx + dy * dy)
-            }
+            val x = 25f + rnd.nextFloat() * (width - 50f)
+            val y = 25f + rnd.nextFloat() * (height - 50f)
+            val d = nearestZombieDist2(x, y)
             if (d > bestD) { bestD = d; best = x to y }
         }
         val (x, y) = best ?: return
@@ -247,7 +257,19 @@ class World(private val rnd: Random = Random.Default) {
         texts.add(FloatText(x, y - 14f, "survivor spotted", 1.6f))
     }
 
-    // Spatial grid so zombies can spread out without checking every pair
+    private fun nearestZombieDist2(x: Float, y: Float): Float {
+        var d = Float.MAX_VALUE
+        for (z in zombies) {
+            if (z.dead) continue
+            val dx = z.x - x; val dy = z.y - y
+            val dd = dx * dx + dy * dy
+            if (dd < d) d = dd
+        }
+        return d
+    }
+
+    // ------------------------------------------------------------------ spatial grid
+
     private val cell = 10f
     private var gridW = 1
     private var gridH = 1
@@ -273,10 +295,13 @@ class World(private val rnd: Random = Random.Default) {
         return cy * gridW + cx
     }
 
+    // ------------------------------------------------------------------ zombies
+
     private fun updateZombies(dt: Float) {
         val alive = humans.filter { !it.dead }
         for (i in zombies.indices) {
             val z = zombies[i]
+            z.attackCd -= dt
             z.retarget -= dt
             if (z.retarget <= 0f || z.target?.dead != false) {
                 z.retarget = 0.25f + rnd.nextFloat() * 0.2f
@@ -302,7 +327,6 @@ class World(private val rnd: Random = Random.Default) {
             val len = sqrt(dx * dx + dy * dy)
             if (len > 0.001f) { dx /= len; dy /= len }
 
-            // Separation from neighbours
             var sx = 0f
             var sy = 0f
             val gx = ((z.x / cell).toInt() + 1).coerceIn(0, gridW - 1)
@@ -344,32 +368,138 @@ class World(private val rnd: Random = Random.Default) {
         }
     }
 
+    // ------------------------------------------------------------------ squad brain
+
+    private fun thinkSquad(dt: Float) {
+        val lead = leader ?: return
+        val squad = humans.filter { it.role == Role.HUNTER && !it.dead && it !== lead }
+
+        // Where is the danger coming from?
+        var near = 0
+        var mid = 0
+        var tx = 0f
+        var ty = 0f
+        for (z in zombies) {
+            if (z.dead) continue
+            val dx = z.x - lead.x; val dy = z.y - lead.y
+            val d2 = dx * dx + dy * dy
+            if (d2 < 220f * 220f) {
+                mid++
+                val w = 1f / (sqrt(d2) + 20f)
+                tx += dx * w; ty += dy * w
+                if (d2 < 110f * 110f) near++
+            }
+        }
+        if (mid > 0) {
+            val target = atan2(ty, tx)
+            var diff = target - facing
+            while (diff > Math.PI) diff -= (2 * Math.PI).toFloat()
+            while (diff < -Math.PI) diff += (2 * Math.PI).toFloat()
+            facing += diff * min(1f, dt * 2f)
+        }
+
+        var spread = 0f
+        for (h in squad) {
+            val dx = h.x - lead.x; val dy = h.y - lead.y
+            spread += sqrt(dx * dx + dy * dy)
+        }
+        if (squad.isNotEmpty()) spread /= squad.size
+
+        val size = squad.size + 1
+        tacticTimer -= dt
+        val panic = near > 8 + 4 * size
+        if (panic && tactic != Tactic.RUN) setTactic(Tactic.RUN, lead, squad)
+        if (tacticTimer <= 0f) {
+            val next = when {
+                panic -> Tactic.RUN
+                squad.isNotEmpty() && spread > 85f && tactic != Tactic.SPLIT -> Tactic.SQUAD_UP
+                squad.size >= 2 && mid < 3 * size && rnd.nextFloat() < 0.35f -> Tactic.SPLIT
+                mid in 1..(4 * size) -> Tactic.ADVANCE
+                mid == 0 && squad.isNotEmpty() && spread > 40f -> Tactic.SQUAD_UP
+                else -> Tactic.HOLD
+            }
+            setTactic(next, lead, squad)
+        }
+
+        if (tactic == Tactic.RUN) {
+            safeTimer -= dt
+            if (safeTimer <= 0f) pickSafeSpot(lead)
+        }
+    }
+
+    private fun setTactic(t: Tactic, lead: Human, squad: List<Human>) {
+        tactic = t
+        tacticTimer = when (t) {
+            Tactic.RUN -> 2.5f
+            Tactic.SPLIT -> 5f + rnd.nextFloat() * 3f
+            else -> 2.5f + rnd.nextFloat() * 2f
+        }
+        squad.forEachIndexed { i, h -> h.slot = i }
+        if (t == Tactic.RUN) pickSafeSpot(lead)
+        if (t == Tactic.SPLIT && squad.isNotEmpty()) {
+            val base = rnd.nextFloat() * 6.283f
+            squad.forEachIndexed { i, h ->
+                val a = base + 6.283f * i / squad.size
+                h.anchorX = (lead.x + cos(a) * 95f).coerceIn(50f, max(50f, width - 50f))
+                h.anchorY = (lead.y + sin(a) * 95f).coerceIn(50f, max(50f, height - 50f))
+            }
+        }
+    }
+
+    /** Looks around for the open spot farthest from zombies and walls. */
+    private fun pickSafeSpot(lead: Human) {
+        safeTimer = 1.2f
+        var bestScore = -Float.MAX_VALUE
+        val maxX = max(45f, width - 45f)
+        val maxY = max(45f, height - 45f)
+        for (i in 0 until 18) {
+            val a = 6.283f * i / 18f
+            for (r in floatArrayOf(90f, 170f)) {
+                val x = (lead.x + cos(a) * r).coerceIn(45f, maxX)
+                val y = (lead.y + sin(a) * r).coerceIn(45f, maxY)
+                var score = sqrt(nearestZombieDist2(x, y))
+                // Don't run *through* the horde
+                val mx = (x + lead.x) / 2f; val my = (y + lead.y) / 2f
+                score += sqrt(nearestZombieDist2(mx, my)) * 0.8f
+                val wall = min(min(x, width - x), min(y, height - y))
+                score += min(wall, 120f) * 0.4f
+                if (score > bestScore) { bestScore = score; safeX = x; safeY = y }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ humans
+
     private fun updateHumans(dt: Float) {
         val lead = leader
-        val hunterList = humans.filter { it.role == Role.HUNTER && !it.dead }
+        val fx0 = cos(facing)
+        val fy0 = sin(facing)
+        val squadSize = humans.count { it.role == Role.HUNTER && !it.dead && it !== lead }
+
         for (h in humans) {
             if (h.dead) continue
-            val fleeR = when (h.role) { Role.PLAYER -> 150f; Role.HUNTER -> 75f; Role.STRAY -> 130f }
+            if (h.infection > 0f) h.infection += dt * 0.006f // the infection keeps spreading
+            h.hurtFlash = max(0f, h.hurtFlash - dt * 3f)
 
-            // Flee: push away from nearby zombies, harder the closer they are
-            var fx = 0f
-            var fy = 0f
-            var threat = 0f
+            // Emergency: dodge zombies that are right on top of us
+            var ex = 0f
+            var ey = 0f
+            val dodgeR = if (h.role == Role.STRAY) 90f else 38f
+            var nearest2 = Float.MAX_VALUE
             for (z in zombies) {
                 val dx = h.x - z.x; val dy = h.y - z.y
-                if (dx > fleeR || dx < -fleeR || dy > fleeR || dy < -fleeR) continue
+                if (abs(dx) > dodgeR * 2f || abs(dy) > dodgeR * 2f) continue
                 val d2 = dx * dx + dy * dy
-                if (d2 >= fleeR * fleeR || d2 < 0.0001f) continue
+                if (d2 < nearest2) nearest2 = d2
+                if (d2 >= dodgeR * dodgeR || d2 < 0.0001f) continue
                 val d = sqrt(d2)
-                val w = (1f - d / fleeR)
-                val ww = w * w
-                fx += dx / d * ww
-                fy += dy / d * ww
-                threat += ww
+                val w = 1f - d / dodgeR
+                ex += dx / d * w * w
+                ey += dy / d * w * w
             }
 
-            // Walls and corners are deadly: steer away from them
-            val m = 60f
+            // Walls and corners are deadly
+            val m = 55f
             var wx = 0f
             var wy = 0f
             if (h.x < m) wx += (m - h.x) / m
@@ -377,64 +507,73 @@ class World(private val rnd: Random = Random.Default) {
             if (h.y < m) wy += (m - h.y) / m
             if (h.y > height - m) wy -= (h.y - (height - m)) / m
 
-            h.wanderAngle += (rnd.nextFloat() - 0.5f) * 3f * dt
-            var ax: Float
-            var ay: Float
-            when (h.role) {
-                Role.PLAYER -> {
-                    // Drift back toward the middle when things are calm
-                    val cx = (width / 2f - h.x) / width
-                    val cy = (height / 2f - h.y) / height
-                    var gx = 0f; var gy = 0f
-                    if (hunterList.isNotEmpty()) {
-                        for (o in hunterList) { gx += o.x; gy += o.y }
-                        gx = (gx / hunterList.size - h.x) * 0.004f
-                        gy = (gy / hunterList.size - h.y) * 0.004f
+            // Where this dot wants to be right now
+            var goalX = h.x
+            var goalY = h.y
+            var urgency = 0.5f
+            if (h.role == Role.STRAY) {
+                if (lead != null) {
+                    goalX = lead.x; goalY = lead.y; urgency = 1f
+                    val dx = lead.x - h.x; val dy = lead.y - h.y
+                    if (dx * dx + dy * dy < 26f * 26f) {
+                        h.role = Role.HUNTER
+                        h.slot = squadSize
+                        texts.add(FloatText(h.x, h.y - 14f, "Survivor Joined!", 2.0f))
                     }
-                    ax = fx * 2.2f + wx * 2.6f + cx * 0.6f + gx + cos(h.wanderAngle) * 0.15f
-                    ay = fy * 2.2f + wy * 2.6f + cy * 0.6f + gy + sin(h.wanderAngle) * 0.15f
                 }
-                Role.HUNTER -> {
-                    var tx = 0f; var ty = 0f
-                    if (lead != null && lead !== h) {
-                        h.slotAngle += dt * 0.4f
-                        val sx = lead.x + cos(h.slotAngle) * 28f
-                        val sy = lead.y + sin(h.slotAngle) * 28f
-                        tx = (sx - h.x) / 40f; ty = (sy - h.y) / 40f
-                        val tl = sqrt(tx * tx + ty * ty)
-                        if (tl > 1.5f) { tx = tx / tl * 1.5f; ty = ty / tl * 1.5f }
-                    } else {
-                        tx = (width / 2f - h.x) / width; ty = (height / 2f - h.y) / height
+            } else if (h === lead) {
+                when (tactic) {
+                    Tactic.RUN -> { goalX = safeX; goalY = safeY; urgency = 1f }
+                    Tactic.ADVANCE -> {
+                        if (nearest2 > 75f * 75f) { goalX = h.x + fx0 * 30f; goalY = h.y + fy0 * 30f; urgency = 0.45f }
+                        else { goalX = h.x - fx0 * 30f; goalY = h.y - fy0 * 30f; urgency = 0.6f }
                     }
-                    ax = fx * 1.8f + wx * 2.4f + tx + cos(h.wanderAngle) * 0.1f
-                    ay = fy * 1.8f + wy * 2.4f + ty + sin(h.wanderAngle) * 0.1f
+                    Tactic.HOLD -> if (nearest2 < 55f * 55f) { goalX = h.x - fx0 * 30f; goalY = h.y - fy0 * 30f; urgency = 0.7f }
+                    Tactic.SQUAD_UP -> { goalX = h.x - fx0 * 10f; goalY = h.y - fy0 * 10f; urgency = 0.3f }
+                    Tactic.SPLIT -> { goalX = width / 2f; goalY = height / 2f; urgency = 0.25f }
                 }
-                Role.STRAY -> {
-                    var tx = 0f; var ty = 0f
-                    if (lead != null) {
-                        tx = lead.x - h.x; ty = lead.y - h.y
-                        val tl = sqrt(tx * tx + ty * ty)
-                        if (tl < 26f) {
-                            h.role = Role.HUNTER
-                            h.slotAngle = atan2(-ty, -tx)
-                            texts.add(FloatText(h.x, h.y - 14f, "Survivor Joined!", 2.0f))
-                        }
-                        if (tl > 0.01f) { tx /= tl; ty /= tl }
+            } else if (lead != null) {
+                val n = max(1, squadSize)
+                // Spread across an arc facing the danger (fixed slots, no spinning)
+                val spreadAngle = if (n == 1) 0f else (-1f + 2f * h.slot.coerceAtMost(n - 1) / (n - 1)) * 1.1f
+                val a = facing + spreadAngle
+                when (tactic) {
+                    Tactic.SQUAD_UP -> {
+                        val ra = facing + 6.283f * h.slot / n
+                        goalX = lead.x + cos(ra) * 16f; goalY = lead.y + sin(ra) * 16f; urgency = 0.9f
                     }
-                    ax = fx * 2.4f + wx * 2.4f + tx
-                    ay = fy * 2.4f + wy * 2.4f + ty
+                    Tactic.HOLD -> { goalX = lead.x + cos(a) * 26f; goalY = lead.y + sin(a) * 26f; urgency = 0.7f }
+                    Tactic.ADVANCE -> { goalX = lead.x + cos(a) * 55f; goalY = lead.y + sin(a) * 55f; urgency = 0.8f }
+                    Tactic.RUN -> {
+                        val side = if (h.slot % 2 == 0) 1f else -1f
+                        val lat = (h.slot / 2 + 1) * 10f * side
+                        goalX = lead.x - fx0 * 14f - fy0 * lat
+                        goalY = lead.y - fy0 * 14f + fx0 * lat
+                        urgency = 1f
+                    }
+                    Tactic.SPLIT -> { goalX = h.anchorX; goalY = h.anchorY; urgency = 0.75f }
                 }
             }
 
+            var gx = goalX - h.x
+            var gy = goalY - h.y
+            val gl = sqrt(gx * gx + gy * gy)
+            if (gl > 0.01f) {
+                val arrive = min(1f, gl / 25f)
+                gx = gx / gl * arrive; gy = gy / gl * arrive
+            }
+            val dodgeW = if (h.role == Role.STRAY) 2.2f else 3f
+            val ax = gx * urgency + ex * dodgeW + wx * 2.2f
+            val ay = gy * urgency + ey * dodgeW + wy * 2.2f
             val al = sqrt(ax * ax + ay * ay)
-            val spd = h.speed * (if (threat > 0.05f || h.role == Role.STRAY) 1f else 0.55f)
-            val wantX = if (al > 0.001f) ax / al * spd * min(1f, al * 2f) else 0f
-            val wantY = if (al > 0.001f) ay / al * spd * min(1f, al * 2f) else 0f
+            val spd = h.speed * min(1f, al)
+            val wantX = if (al > 0.001f) ax / al * spd else 0f
+            val wantY = if (al > 0.001f) ay / al * spd else 0f
             val k = min(1f, dt * 7f)
             h.vx += (wantX - h.vx) * k
             h.vy += (wantY - h.vy) * k
-            h.x = (h.x + h.vx * dt).coerceIn(3f, width - 3f)
-            h.y = (h.y + h.vy * dt).coerceIn(3f, height - 3f)
+            h.x = (h.x + h.vx * dt).coerceIn(3f, max(3f, width - 3f))
+            h.y = (h.y + h.vy * dt).coerceIn(3f, max(3f, height - 3f))
 
             shoot(h, dt)
         }
@@ -444,7 +583,7 @@ class World(private val rnd: Random = Random.Default) {
         if (h.role == Role.STRAY) return
         h.cooldown -= dt
         if (h.cooldown > 0f) return
-        val range = if (h.role == Role.HUNTER) 120f else 85f
+        val range = if (h.role == Role.HUNTER) 115f else 80f
         var best: Zombie? = null
         var bd = range * range
         for (z in zombies) {
@@ -454,9 +593,11 @@ class World(private val rnd: Random = Random.Default) {
             if (d < bd) { bd = d; best = z }
         }
         val z = best ?: return
-        h.cooldown = if (h.role == Role.HUNTER) 0.45f + rnd.nextFloat() * 0.3f else 0.9f + rnd.nextFloat() * 0.4f
-        val hit = rnd.nextFloat() < (if (h.role == Role.HUNTER) 0.8f else 0.6f)
-        if (hit) {
+        val running = tactic == Tactic.RUN
+        h.cooldown = (if (h.role == Role.HUNTER) 0.5f + rnd.nextFloat() * 0.3f else 1f + rnd.nextFloat() * 0.4f) *
+            (if (running) 1.6f else 1f)
+        val hitChance = (if (h.role == Role.HUNTER) 0.75f else 0.55f) * (if (running) 0.6f else 1f)
+        if (rnd.nextFloat() < hitChance) {
             tracers.add(Tracer(h.x, h.y, z.x, z.y, 0.12f))
             killZombie(z)
         } else {
@@ -465,25 +606,45 @@ class World(private val rnd: Random = Random.Default) {
         }
     }
 
-    /** Any zombie touching a human turns them. */
-    private fun infect() {
-        val reach = ZOMBIE_R + HUMAN_R
+    /** Zombies bite; every bite adds infection. Fully infected dots turn. */
+    private fun attacks() {
+        val reach = ZOMBIE_R + HUMAN_R + 1f
         val r2 = reach * reach
         for (h in humans) {
             if (h.dead) continue
             for (z in zombies) {
-                if (z.dead) continue
-                val dx = z.x - h.x; val dy = z.y - h.y
-                if (dx * dx + dy * dy < r2) {
-                    h.dead = true
-                    lost++
-                    if (h.role != Role.STRAY) {
-                        texts.add(FloatText(h.x, h.y - 12f, if (h.role == Role.PLAYER) "survivor down!" else "hunter down", 1.6f))
-                    }
-                    addZombie(h.x, h.y, inside = true)
-                    break
+                if (z.dead || z.attackCd > 0f) continue
+                val dx = h.x - z.x; val dy = h.y - z.y
+                val d2 = dx * dx + dy * dy
+                if (d2 >= r2) continue
+                z.attackCd = 1.1f
+                h.infection += when (h.role) {
+                    Role.PLAYER -> 0.12f + rnd.nextFloat() * 0.06f
+                    Role.HUNTER -> 0.14f + rnd.nextFloat() * 0.08f
+                    Role.STRAY -> 0.45f
                 }
+                h.hurtFlash = 1f
+                val d = sqrt(d2).coerceAtLeast(0.5f)
+                h.vx += dx / d * 70f
+                h.vy += dy / d * 70f
+                val fight = when (h.role) { Role.HUNTER -> 0.35f; Role.PLAYER -> 0.2f; Role.STRAY -> 0.05f }
+                if (rnd.nextFloat() < fight) killZombie(z)
+            }
+            if (h.infection >= 1f) {
+                h.dead = true
+                turned++
+                texts.add(FloatText(h.x, h.y - 12f, when (h.role) {
+                    Role.PLAYER -> "survivor turned!"
+                    Role.HUNTER -> "hunter turned!"
+                    Role.STRAY -> "turned"
+                }, 1.8f))
+                // Added after the loop finishes to avoid changing the list mid-scan
+                pendingTurns.add(h.x to h.y)
             }
         }
+        for ((x, y) in pendingTurns) addZombie(x, y, inside = true)
+        pendingTurns.clear()
     }
+
+    private val pendingTurns = ArrayList<Pair<Float, Float>>()
 }
