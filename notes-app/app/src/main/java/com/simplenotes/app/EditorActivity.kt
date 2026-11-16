@@ -40,24 +40,24 @@ class EditorActivity : Activity() {
 
         private val TEXT_COLORS = listOf(
             "Default" to null,
-            "Red" to Color.parseColor("#E53935"),
-            "Orange" to Color.parseColor("#F57C00"),
-            "Gold" to Color.parseColor("#C99400"),
-            "Green" to Color.parseColor("#43A047"),
-            "Teal" to Color.parseColor("#00897B"),
-            "Blue" to Color.parseColor("#1E88E5"),
-            "Purple" to Color.parseColor("#8E24AA"),
-            "Pink" to Color.parseColor("#D81B60"),
-            "Gray" to Color.parseColor("#757575"),
+            "Red" to Color.parseColor("#FF6B6B"),
+            "Orange" to Color.parseColor("#FFA94D"),
+            "Gold" to Color.parseColor("#FFD43B"),
+            "Green" to Color.parseColor("#69DB7C"),
+            "Teal" to Color.parseColor("#38D9A9"),
+            "Blue" to Color.parseColor("#4DABF7"),
+            "Purple" to Color.parseColor("#B197FC"),
+            "Pink" to Color.parseColor("#F783AC"),
+            "Gray" to Color.parseColor("#ADB5BD"),
         )
         private val HIGHLIGHTS = listOf(
             "None" to null,
-            "Yellow" to Color.parseColor("#FFF176"),
-            "Green" to Color.parseColor("#C5E1A5"),
-            "Blue" to Color.parseColor("#B3E5FC"),
-            "Pink" to Color.parseColor("#F8BBD0"),
-            "Orange" to Color.parseColor("#FFCC80"),
-            "Purple" to Color.parseColor("#E1BEE7"),
+            "Yellow" to Color.parseColor("#7A6400"),
+            "Green" to Color.parseColor("#2E6B30"),
+            "Blue" to Color.parseColor("#1C5A80"),
+            "Pink" to Color.parseColor("#8A2F55"),
+            "Orange" to Color.parseColor("#8A4A12"),
+            "Purple" to Color.parseColor("#5E3480"),
         )
         private val SIZES = listOf(
             "Small" to 0.85f,
@@ -196,7 +196,7 @@ class EditorActivity : Activity() {
                     label.setSpan(ForegroundColorSpan(color), 2, label.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
             } else {
-                label.setSpan(ForegroundColorSpan(Color.parseColor("#BBBBBB")), 2, 3, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                label.setSpan(ForegroundColorSpan(Color.parseColor("#888888")), 2, 3, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
             label as CharSequence
         }.toTypedArray()
