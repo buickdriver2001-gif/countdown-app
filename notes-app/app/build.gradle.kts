@@ -15,9 +15,22 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        create("shared") {
+            storeFile = file("../../signing.keystore")
+            storePassword = "synthnotes2026"
+            keyAlias = "apps"
+            keyPassword = "synthnotes2026"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("shared")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("shared")
         }
     }
 
