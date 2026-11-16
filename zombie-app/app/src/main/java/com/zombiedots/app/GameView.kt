@@ -220,8 +220,11 @@ class GameView(context: Context) : View(context) {
         }
 
         for (t in world.texts) {
-            floatPaint.color = if (t.text.startsWith("WAVE")) Color.parseColor("#FF3B3B") else Color.WHITE
-            floatPaint.textSize = (if (t.text.startsWith("WAVE")) 28 else 12) * d
+            when {
+                t.text.startsWith("WAVE") -> { floatPaint.color = Color.parseColor("#FF3B3B"); floatPaint.textSize = 28 * d }
+                t.text.startsWith("Survivor Joined") -> { floatPaint.color = hunterColor; floatPaint.textSize = 17 * d }
+                else -> { floatPaint.color = Color.WHITE; floatPaint.textSize = 12 * d }
+            }
             floatPaint.alpha = (min(1f, t.life) * 255).toInt()
             c.drawText(t.text, t.x * d, t.y * d, floatPaint)
         }
@@ -258,7 +261,7 @@ class GameView(context: Context) : View(context) {
         val cx = width / 2f
         val cy = height / 2f
         c.drawText("ZOMBIE DOTS", cx, cy - 40 * d, title)
-        c.drawText("Tap anywhere to drop your survivors", cx, cy + 4 * d, center)
+        c.drawText("Tap anywhere to drop your survivor + hunter", cx, cy + 4 * d, center)
         c.drawText("Then watch them try to survive.", cx, cy + 28 * d, centerDim)
         c.drawText("Tap = drop zombies   ·   Double-tap = nuke", cx, cy + 50 * d, centerDim)
         if (best > 0f) c.drawText("Best survival: ${fmt(best)}", cx, cy + 82 * d, centerDim)

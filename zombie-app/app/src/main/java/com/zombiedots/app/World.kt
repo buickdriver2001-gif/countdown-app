@@ -84,20 +84,19 @@ class World(private val rnd: Random = Random.Default) {
     fun reset() {
         zombies.clear(); humans.clear(); tracers.clear(); splats.clear(); nukes.clear(); texts.clear()
         phase = Phase.SETUP
-        time = 0f; kills = 0; wave = 0; waveTimer = 0f; strayTimer = 0f
+        time = 0f; kills = 0; wave = 0; waveTimer = 0f; strayTimer = 15f // first stray after ~15s
         nukeCharges = 2; nukeTimer = 0f; lost = 0
     }
 
-    /** Drops the survivor and four hunters at (x, y) and starts the outbreak. */
+    /** Drops the survivor and one hunter at (x, y) and starts the outbreak. */
     fun start(x: Float, y: Float) {
         reset()
         val cx = x.coerceIn(30f, width - 30f)
         val cy = y.coerceIn(30f, height - 30f)
         humans.add(Human(cx, cy, Role.PLAYER))
-        for (i in 0 until 4) {
-            val a = (i * 90f + 45f) * (Math.PI.toFloat() / 180f)
-            humans.add(Human(cx + cos(a) * 22f, cy + sin(a) * 22f, Role.HUNTER).also { it.slotAngle = a })
-        }
+        // Start with a single hunter; more join as strays are found
+        val a = rnd.nextFloat() * 6.283f
+        humans.add(Human(cx + cos(a) * 22f, cy + sin(a) * 22f, Role.HUNTER).also { it.slotAngle = a })
         phase = Phase.RUNNING
         spawnWave(first = true)
     }
@@ -214,7 +213,7 @@ class World(private val rnd: Random = Random.Default) {
         } else nukeTimer = 0f
 
         strayTimer += dt
-        if (strayTimer >= 40f) { strayTimer = 0f; maybeSpawnStray() }
+        if (strayTimer >= 30f) { strayTimer = 0f; maybeSpawnStray() }
 
         buildGrid()
         updateZombies(dt)
@@ -245,7 +244,7 @@ class World(private val rnd: Random = Random.Default) {
         }
         val (x, y) = best ?: return
         humans.add(Human(x, y, Role.STRAY))
-        texts.add(FloatText(x, y - 14f, "survivor!", 1.6f))
+        texts.add(FloatText(x, y - 14f, "survivor spotted", 1.6f))
     }
 
     // Spatial grid so zombies can spread out without checking every pair
@@ -418,7 +417,7 @@ class World(private val rnd: Random = Random.Default) {
                         if (tl < 26f) {
                             h.role = Role.HUNTER
                             h.slotAngle = atan2(-ty, -tx)
-                            texts.add(FloatText(h.x, h.y - 12f, "joined", 1.2f))
+                            texts.add(FloatText(h.x, h.y - 14f, "Survivor Joined!", 2.0f))
                         }
                         if (tl > 0.01f) { tx /= tl; ty /= tl }
                     }
