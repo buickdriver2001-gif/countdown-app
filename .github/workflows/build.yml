@@ -4,6 +4,7 @@ on:
     paths-ignore:
       - 'notes-app/**'
       - 'synth-app/**'
+      - 'zombie-app/**'
       - '.github/workflows/**'
       - '*.md'
   workflow_dispatch:
