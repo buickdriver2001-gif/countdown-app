@@ -52,6 +52,11 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (App.crashFile(this).exists()) {
+            startActivity(Intent(this, CrashActivity::class.java))
+            finish()
+            return
+        }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (Build.VERSION.SDK_INT >= 30) {
             window.insetsController?.hide(WindowInsets.Type.statusBars())
@@ -63,12 +68,17 @@ class MainActivity : Activity() {
         engine = SynthEngine(this)
         engine.onError = { error ->
             App.saveCrash(this, "sound engine", error)
-            runOnUiThread { showCrashReport() }
+            runOnUiThread {
+                startActivity(Intent(this, CrashActivity::class.java))
+                finish()
+            }
         }
         setContentView(buildUi())
         applyPreset(0)
-        showCrashReport()
+        ready = true
     }
+
+    private var ready = false
 
     /** If the app crashed last time, show what went wrong so it can be fixed. */
     private fun showCrashReport() {
@@ -98,11 +108,12 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
-        engine.start()
+        if (ready) engine.start()
     }
 
     override fun onStop() {
         super.onStop()
+        if (!ready) return
         keyboard.releaseAll()
         if (recorder != null) stopRecording()
         engine.stop()

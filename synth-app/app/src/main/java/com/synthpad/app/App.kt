@@ -12,7 +12,17 @@ class App : Application() {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             saveCrash(this, "thread ${thread.name}", error)
-            previous?.uncaughtException(thread, error)
+            try {
+                // Open the error screen (in its own process) instead of "keeps stopping"
+                startActivity(
+                    android.content.Intent(this, CrashActivity::class.java)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                )
+                android.os.Process.killProcess(android.os.Process.myPid())
+                System.exit(10)
+            } catch (_: Throwable) {
+                previous?.uncaughtException(thread, error)
+            }
         }
     }
 
