@@ -3,6 +3,7 @@ on:
   push:
     paths-ignore:
       - 'notes-app/**'
+      - 'synth-app/**'
       - '.github/workflows/**'
       - '*.md'
   workflow_dispatch:
