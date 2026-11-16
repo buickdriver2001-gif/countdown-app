@@ -4,11 +4,19 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.app.Dialog
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.text.Editable
 import android.text.InputType
+import android.text.SpannableString
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.TextWatcher
+import android.text.style.BackgroundColorSpan
+import android.text.style.ForegroundColorSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -16,7 +24,9 @@ import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
+import com.simplenotes.app.RichText.Kind
 
 /**
  * Note editor. The note is a column of text boxes and pictures. Adding a picture
@@ -27,6 +37,34 @@ class EditorActivity : Activity() {
     companion object {
         const val EXTRA_ID = "id"
         private const val REQ_PICK = 1
+
+        private val TEXT_COLORS = listOf(
+            "Default" to null,
+            "Red" to Color.parseColor("#E53935"),
+            "Orange" to Color.parseColor("#F57C00"),
+            "Gold" to Color.parseColor("#C99400"),
+            "Green" to Color.parseColor("#43A047"),
+            "Teal" to Color.parseColor("#00897B"),
+            "Blue" to Color.parseColor("#1E88E5"),
+            "Purple" to Color.parseColor("#8E24AA"),
+            "Pink" to Color.parseColor("#D81B60"),
+            "Gray" to Color.parseColor("#757575"),
+        )
+        private val HIGHLIGHTS = listOf(
+            "None" to null,
+            "Yellow" to Color.parseColor("#FFF176"),
+            "Green" to Color.parseColor("#C5E1A5"),
+            "Blue" to Color.parseColor("#B3E5FC"),
+            "Pink" to Color.parseColor("#F8BBD0"),
+            "Orange" to Color.parseColor("#FFCC80"),
+            "Purple" to Color.parseColor("#E1BEE7"),
+        )
+        private val SIZES = listOf(
+            "Small" to 0.85f,
+            "Normal" to null,
+            "Large" to 1.3f,
+            "Heading" to 1.7f,
+        )
     }
 
     private lateinit var titleInput: EditText
@@ -34,7 +72,6 @@ class EditorActivity : Activity() {
 
     private lateinit var noteId: String
     private var originalContent: String = ""
-    private var originalUpdated: Long = 0L
     private var deleted = false
 
     /** Every picture this note has used while open, so removed ones can be cleaned up. */
@@ -42,6 +79,18 @@ class EditorActivity : Activity() {
 
     private var insertTarget: EditText? = null
     private var insertCursor = 0
+
+    // Formatting
+    private var activeText: RichEditText? = null
+    private val pending = HashSet<Kind>()
+    private var pendingColor: Int? = null
+    private var pendingHighlight: Int? = null
+    private var pendingSize: Float? = null
+    private var applying = false
+    private lateinit var fmtButtons: Map<Kind, TextView>
+    private lateinit var colorButton: TextView
+    private lateinit var highlightButton: TextView
+    private lateinit var sizeButton: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,11 +102,11 @@ class EditorActivity : Activity() {
         findViewById<View>(R.id.back_button).setOnClickListener { finish() }
         findViewById<View>(R.id.delete_button).setOnClickListener { confirmDelete() }
         findViewById<View>(R.id.add_image_button).setOnClickListener { pickImages() }
+        setupToolbar()
 
         val existing = intent.getStringExtra(EXTRA_ID)?.let { NoteStore.load(this, it) }
         if (existing != null) {
             noteId = existing.id
-            originalUpdated = existing.updated
             originalContent = existing.contentJson()
             titleInput.setText(existing.title)
             buildBlocks(existing.blocks)
@@ -68,6 +117,7 @@ class EditorActivity : Activity() {
             buildBlocks(emptyList())
             titleInput.requestFocus()
         }
+        updateToolbar()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -80,9 +130,149 @@ class EditorActivity : Activity() {
         if (!deleted) save()
     }
 
+    // ---------- formatting toolbar ----------
+
+    private fun setupToolbar() {
+        fmtButtons = mapOf(
+            Kind.BOLD to findViewById(R.id.fmt_bold),
+            Kind.ITALIC to findViewById(R.id.fmt_italic),
+            Kind.UNDERLINE to findViewById(R.id.fmt_underline),
+            Kind.STRIKE to findViewById(R.id.fmt_strike),
+        )
+        colorButton = findViewById(R.id.fmt_color)
+        highlightButton = findViewById(R.id.fmt_highlight)
+        sizeButton = findViewById(R.id.fmt_size)
+
+        // Show each button's own style on its letter
+        findViewById<TextView>(R.id.fmt_underline).let {
+            it.paintFlags = it.paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
+        }
+        findViewById<TextView>(R.id.fmt_strike).let {
+            it.paintFlags = it.paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG
+        }
+
+        for ((kind, button) in fmtButtons) button.setOnClickListener { toggle(kind) }
+        colorButton.setOnClickListener { pickColor() }
+        highlightButton.setOnClickListener { pickHighlight() }
+        sizeButton.setOnClickListener { pickSize() }
+    }
+
+    /** The text box being edited, or null (with a hint) if the cursor isn't in the note body. */
+    private fun target(): RichEditText? {
+        val et = activeText
+        if (et == null || et.parent !== blocks) {
+            Toast.makeText(this, "Tap into your note text first", Toast.LENGTH_SHORT).show()
+            return null
+        }
+        return et
+    }
+
+    private fun selection(et: EditText): Pair<Int, Int> {
+        val a = et.selectionStart.coerceAtLeast(0)
+        val b = et.selectionEnd.coerceAtLeast(0)
+        return minOf(a, b) to maxOf(a, b)
+    }
+
+    private fun toggle(kind: Kind) {
+        val et = target() ?: return
+        val (s, e) = selection(et)
+        if (s < e) {
+            val text = et.text
+            if (RichText.has(text, s, e, kind)) RichText.remove(text, s, e, kind) else RichText.add(text, s, e, kind)
+        } else {
+            if (!pending.remove(kind)) pending.add(kind)
+        }
+        updateToolbar()
+    }
+
+    private fun swatchList(items: List<Pair<String, Int?>>, highlight: Boolean): Array<CharSequence> =
+        items.map { (name, color) ->
+            val label = SpannableString("  ●   $name  ")
+            if (color != null) {
+                if (highlight) {
+                    label.setSpan(ForegroundColorSpan(color), 2, 3, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    label.setSpan(BackgroundColorSpan(color), 6, label.length - 2, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                } else {
+                    label.setSpan(ForegroundColorSpan(color), 2, label.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            } else {
+                label.setSpan(ForegroundColorSpan(Color.parseColor("#BBBBBB")), 2, 3, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            label as CharSequence
+        }.toTypedArray()
+
+    private fun pickColor() {
+        val et = target() ?: return
+        AlertDialog.Builder(this)
+            .setTitle("Text color")
+            .setItems(swatchList(TEXT_COLORS, false)) { _, which ->
+                applyValue(et, Kind.COLOR, TEXT_COLORS[which].second?.toDouble()) { pendingColor = it?.toInt() }
+            }
+            .show()
+    }
+
+    private fun pickHighlight() {
+        val et = target() ?: return
+        AlertDialog.Builder(this)
+            .setTitle("Highlight")
+            .setItems(swatchList(HIGHLIGHTS, true)) { _, which ->
+                applyValue(et, Kind.HIGHLIGHT, HIGHLIGHTS[which].second?.toDouble()) { pendingHighlight = it?.toInt() }
+            }
+            .show()
+    }
+
+    private fun pickSize() {
+        val et = target() ?: return
+        val labels = SIZES.map { (name, size) ->
+            val s = SpannableString(name)
+            if (size != null) s.setSpan(android.text.style.RelativeSizeSpan(size), 0, s.length, 0)
+            s as CharSequence
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Text size")
+            .setItems(labels) { _, which ->
+                applyValue(et, Kind.SIZE, SIZES[which].second?.toDouble()) { pendingSize = it?.toFloat() }
+            }
+            .show()
+    }
+
+    /** Applies a color/highlight/size to the selection, or sets it for what you type next. */
+    private fun applyValue(et: RichEditText, kind: Kind, value: Double?, setPending: (Double?) -> Unit) {
+        val (s, e) = selection(et)
+        if (s < e) {
+            if (value == null) RichText.remove(et.text, s, e, kind) else RichText.add(et.text, s, e, kind, value)
+        } else {
+            setPending(value)
+        }
+        et.requestFocus()
+        updateToolbar()
+    }
+
+    private fun updateToolbar() {
+        val et = activeText?.takeIf { it.parent === blocks }
+        val sel = et?.let { selection(it) }
+        for ((kind, button) in fmtButtons) {
+            val on = if (et != null && sel != null && sel.first < sel.second) {
+                RichText.has(et.text, sel.first, sel.second, kind)
+            } else kind in pending
+            button.isSelected = on
+        }
+        colorButton.setTextColor(pendingColor ?: getColor(R.color.text_primary))
+        colorButton.isSelected = pendingColor != null
+        highlightButton.isSelected = pendingHighlight != null
+        sizeButton.isSelected = pendingSize != null
+    }
+
     // ---------- building the note ----------
 
+    private fun styled(b: Block): SpannableStringBuilder {
+        val ssb = SpannableStringBuilder(b.value)
+        RichText.apply(ssb, b.styles)
+        return ssb
+    }
+
     private fun buildBlocks(list: List<Block>) {
+        applying = true
         blocks.removeAllViews()
         for (b in list) {
             if (b.type == Block.IMAGE) {
@@ -93,23 +283,25 @@ class EditorActivity : Activity() {
             } else {
                 val last = blocks.getChildAt(blocks.childCount - 1)
                 if (last is EditText) {
-                    last.append(if (last.text.isEmpty()) b.value else "\n" + b.value)
+                    if (last.text.isNotEmpty()) last.text.append("\n")
+                    last.text.append(styled(b))
                 } else {
-                    blocks.addView(textBlock(b.value))
+                    blocks.addView(textBlock(styled(b)))
                 }
             }
         }
         if (blocks.childCount == 0 || blocks.getChildAt(blocks.childCount - 1) !is EditText) {
             blocks.addView(textBlock(""))
         }
+        applying = false
         refreshHints()
     }
 
     private fun dp(v: Int): Int =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
 
-    private fun textBlock(text: String): EditText {
-        val et = EditText(this)
+    private fun textBlock(text: CharSequence): RichEditText {
+        val et = RichEditText(this)
         et.layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         )
@@ -123,7 +315,39 @@ class EditorActivity : Activity() {
         et.setLineSpacing(dp(3).toFloat(), 1f)
         et.setTextColor(getColor(R.color.text_primary))
         et.setHintTextColor(getColor(R.color.text_muted))
-        et.setText(text)
+        val wasApplying = applying
+        applying = true
+        et.setText(text, android.widget.TextView.BufferType.EDITABLE)
+        applying = wasApplying
+
+        et.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                activeText = et
+                updateToolbar()
+            }
+        }
+        et.onSelection = { if (et === activeText) updateToolbar() }
+        et.addTextChangedListener(object : TextWatcher {
+            private var start = 0
+            private var count = 0
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                this.start = start
+                this.count = count
+            }
+            override fun afterTextChanged(ed: Editable) {
+                if (applying || count <= 0 || et !== activeText) return
+                val s = start
+                val e = (start + count).coerceAtMost(ed.length)
+                if (s >= e) return
+                applying = true
+                for (k in pending) RichText.add(ed, s, e, k)
+                pendingColor?.let { RichText.add(ed, s, e, Kind.COLOR, it.toDouble()) }
+                pendingHighlight?.let { RichText.add(ed, s, e, Kind.HIGHLIGHT, it.toDouble()) }
+                pendingSize?.let { RichText.add(ed, s, e, Kind.SIZE, it.toDouble()) }
+                applying = false
+            }
+        })
         return et
     }
 
@@ -225,11 +449,17 @@ class EditorActivity : Activity() {
             target = blocks.getChildAt(blocks.childCount - 1) as EditText
             insertCursor = target.text.length
         }
-        val text = target.text.toString()
-        val cut = insertCursor.coerceIn(0, text.length)
-        val before = text.substring(0, cut).trimEnd('\n')
-        val after = text.substring(cut).trimStart('\n')
-        target.setText(before)
+        val ed = target.text
+        val cut = insertCursor.coerceIn(0, ed.length)
+        var beforeEnd = cut
+        while (beforeEnd > 0 && ed[beforeEnd - 1] == '\n') beforeEnd--
+        var afterStart = cut
+        while (afterStart < ed.length && ed[afterStart] == '\n') afterStart++
+        val before = SpannableStringBuilder(ed.subSequence(0, beforeEnd))
+        val after = SpannableStringBuilder(ed.subSequence(afterStart, ed.length))
+        applying = true
+        target.setText(before, android.widget.TextView.BufferType.EDITABLE)
+        applying = false
 
         var pos = blocks.indexOfChild(target) + 1
         names.forEachIndexed { i, name ->
@@ -270,11 +500,13 @@ class EditorActivity : Activity() {
         val next = blocks.getChildAt(idx + 1) as? EditText
         blocks.removeView(iv)
         if (prev != null && next != null) {
-            val merged = listOf(prev.text.toString(), next.text.toString())
-                .filter { it.isNotEmpty() }
-                .joinToString("\n")
+            val merged = SpannableStringBuilder(prev.text)
+            if (merged.isNotEmpty() && next.text.isNotEmpty()) merged.append("\n")
+            merged.append(next.text)
             blocks.removeView(next)
-            prev.setText(merged)
+            applying = true
+            prev.setText(merged, android.widget.TextView.BufferType.EDITABLE)
+            applying = false
         }
         refreshHints()
         save()
@@ -287,8 +519,12 @@ class EditorActivity : Activity() {
         for (i in 0 until blocks.childCount) {
             when (val v = blocks.getChildAt(i)) {
                 is EditText -> {
-                    val t = v.text.toString()
-                    if (t.isNotBlank()) list.add(Block(Block.TEXT, t.trimEnd()))
+                    val t = v.text
+                    if (t.isNotBlank()) {
+                        var end = t.length
+                        while (end > 0 && t[end - 1].isWhitespace()) end--
+                        list.add(Block(Block.TEXT, t.substring(0, end), RichText.toJson(t, end)))
+                    }
                 }
                 is ImageView -> list.add(Block(Block.IMAGE, v.tag as String))
             }
@@ -311,7 +547,6 @@ class EditorActivity : Activity() {
         if (content == originalContent) return
         NoteStore.save(this, note)
         originalContent = content
-        originalUpdated = note.updated
     }
 
     private fun confirmDelete() {

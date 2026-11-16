@@ -64,6 +64,74 @@
             android:src="@drawable/ic_delete" />
     </LinearLayout>
 
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="6dp">
+
+            <TextView
+                android:id="@+id/fmt_bold"
+                style="@style/FmtButton"
+                android:text="B"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/fmt_italic"
+                style="@style/FmtButton"
+                android:text="I"
+                android:textStyle="italic" />
+
+            <TextView
+                android:id="@+id/fmt_underline"
+                style="@style/FmtButton"
+                android:text="U" />
+
+            <TextView
+                android:id="@+id/fmt_strike"
+                style="@style/FmtButton"
+                android:text="S" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="24dp"
+                android:layout_gravity="center_vertical"
+                android:layout_marginStart="6dp"
+                android:layout_marginEnd="6dp"
+                android:background="@color/divider" />
+
+            <TextView
+                android:id="@+id/fmt_color"
+                style="@style/FmtButton"
+                android:text="A"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/fmt_highlight"
+                style="@style/FmtButton"
+                android:text="ab"
+                android:background="@drawable/fmt_highlight_bg" />
+
+            <TextView
+                android:id="@+id/fmt_size"
+                style="@style/FmtButton"
+                android:text="Aa" />
+
+        </LinearLayout>
+    </HorizontalScrollView>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
+
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"

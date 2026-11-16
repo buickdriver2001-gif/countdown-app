@@ -7,7 +7,7 @@ import java.io.File
 import java.util.UUID
 
 /** One piece of a note: either a run of text or a picture. */
-data class Block(val type: String, val value: String) {
+data class Block(val type: String, val value: String, val styles: String = "") {
     companion object {
         const val TEXT = "text"
         const val IMAGE = "image"
@@ -34,9 +34,15 @@ data class Note(
     /** JSON of the content only (no timestamp), used to tell if anything changed. */
     fun contentJson(): String {
         val arr = JSONArray()
-        for (b in blocks) arr.put(JSONObject().put("type", b.type).put("value", b.value))
+        for (b in blocks) arr.put(blockJson(b))
         return JSONObject().put("title", title).put("blocks", arr).toString()
     }
+}
+
+fun blockJson(b: Block): JSONObject {
+    val o = JSONObject().put("type", b.type).put("value", b.value)
+    if (b.styles.isNotEmpty()) o.put("styles", b.styles)
+    return o
 }
 
 /** Keeps each note as a small JSON file inside the app's private storage. */
@@ -57,7 +63,7 @@ object NoteStore {
 
     fun save(ctx: Context, note: Note) {
         val arr = JSONArray()
-        for (b in note.blocks) arr.put(JSONObject().put("type", b.type).put("value", b.value))
+        for (b in note.blocks) arr.put(blockJson(b))
         val json = JSONObject()
             .put("id", note.id)
             .put("updated", note.updated)
@@ -83,7 +89,7 @@ object NoteStore {
         val arr = o.optJSONArray("blocks") ?: JSONArray()
         val blocks = (0 until arr.length()).map {
             val b = arr.getJSONObject(it)
-            Block(b.getString("type"), b.optString("value", ""))
+            Block(b.getString("type"), b.optString("value", ""), b.optString("styles", ""))
         }
         Note(o.getString("id"), o.optLong("updated"), o.optString("title", ""), blocks)
     } catch (e: Exception) {
