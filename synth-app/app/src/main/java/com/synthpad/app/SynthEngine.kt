@@ -45,6 +45,9 @@ class SynthEngine(context: Context) {
 
     @Volatile var recorder: Recorder? = null
 
+    /** Called (on the audio thread) if the sound engine hits an error. */
+    @Volatile var onError: ((Throwable) -> Unit)? = null
+
     fun noteOn(note: Int) { events.add(note or 0x1000) }
     fun noteOff(note: Int) { events.add(note) }
     fun allNotesOff() { events.add(-1) }
@@ -52,7 +55,14 @@ class SynthEngine(context: Context) {
     fun start() {
         if (running) return
         running = true
-        thread = Thread({ audioLoop() }, "synth-audio").also { it.start() }
+        thread = Thread({
+            try {
+                audioLoop()
+            } catch (t: Throwable) {
+                running = false
+                onError?.invoke(t)
+            }
+        }, "synth-audio").also { it.start() }
     }
 
     fun stop() {
@@ -67,12 +77,32 @@ class SynthEngine(context: Context) {
     private val block = 192
 
     private fun audioLoop() {
-        Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+        try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+        } catch (e: Exception) {
+            try { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) } catch (_: Exception) {}
+        }
         val minBuf = AudioTrack.getMinBufferSize(
             sampleRate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_FLOAT
         )
-        val track = try {
-            AudioTrack.Builder()
+        val track = buildTrack(minBuf, true) ?: buildTrack(minBuf, false) ?: run {
+            running = false
+            throw IllegalStateException("This phone wouldn't open an audio output")
+        }
+
+        val out = FloatArray(block * 2)
+        track.play()
+        while (running) {
+            render(out, block)
+            track.write(out, 0, out.size, AudioTrack.WRITE_BLOCKING)
+        }
+        try { track.pause(); track.flush() } catch (_: Exception) {}
+        track.release()
+    }
+
+    private fun buildTrack(minBuf: Int, lowLatency: Boolean): AudioTrack? {
+        return try {
+            val builder = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -86,24 +116,14 @@ class SynthEngine(context: Context) {
                         .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                         .build()
                 )
-                .setBufferSizeInBytes(max(minBuf, block * 2 * 4 * 2))
-                .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                .setBufferSizeInBytes(max(minBuf, block * 2 * 4 * 4))
                 .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
+            if (lowLatency) builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+            val t = builder.build()
+            if (t.state != AudioTrack.STATE_INITIALIZED) { t.release(); null } else t
         } catch (e: Exception) {
-            running = false
-            return
+            null
         }
-
-        val out = FloatArray(block * 2)
-        track.play()
-        while (running) {
-            render(out, block)
-            track.write(out, 0, out.size, AudioTrack.WRITE_BLOCKING)
-        }
-        track.pause()
-        track.flush()
-        track.release()
     }
 
     // ------------------------------------------------------------------ voices

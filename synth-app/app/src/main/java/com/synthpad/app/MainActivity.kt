@@ -61,8 +61,39 @@ class MainActivity : Activity() {
         }
 
         engine = SynthEngine(this)
+        engine.onError = { error ->
+            App.saveCrash(this, "sound engine", error)
+            runOnUiThread { showCrashReport() }
+        }
         setContentView(buildUi())
         applyPreset(0)
+        showCrashReport()
+    }
+
+    /** If the app crashed last time, show what went wrong so it can be fixed. */
+    private fun showCrashReport() {
+        val file = App.crashFile(this)
+        if (!file.exists() || isFinishing) return
+        val report = file.readText()
+        file.delete()
+        val text = TextView(this).apply {
+            this.text = report.lines().take(25).joinToString("\n")
+            setTextIsSelectable(true)
+            textSize = 11f
+            setTextColor(Theme.TEXT)
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("SynthPad hit an error")
+            .setMessage("Tap Copy and paste this to Claude so it can be fixed.")
+            .setView(android.widget.ScrollView(this).apply { addView(text) })
+            .setPositiveButton("Copy") { _, _ ->
+                val cm = getSystemService(android.content.ClipboardManager::class.java)
+                cm?.setPrimaryClip(android.content.ClipData.newPlainText("SynthPad error", report))
+                Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     override fun onStart() {

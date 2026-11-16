@@ -100,7 +100,11 @@ object WavStore {
             put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/" + FOLDER)
             put(MediaStore.Audio.Media.IS_PENDING, 1)
         }
-        val uri = cr.insert(collection, values) ?: return false
+        val uri = try {
+            cr.insert(collection, values)
+        } catch (e: Exception) {
+            null
+        } ?: run { raw.delete(); return false }
         return try {
             cr.openOutputStream(uri)?.use { out ->
                 writeHeader(out, raw.length(), sampleRate)
