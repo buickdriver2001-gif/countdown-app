@@ -41,6 +41,8 @@ class MainActivity : Activity(), GameView.Listener {
     private lateinit var menuBtn: TextView
     private lateinit var nukeBtn: NukeButtonView
     private lateinit var planeBtn: TextView
+    private lateinit var healthBtn: TextView
+    private lateinit var cureBtn: TextView
     private lateinit var aimBanner: TextView
 
     // Menus
@@ -262,12 +264,16 @@ class MainActivity : Activity(), GameView.Listener {
         })
         nukeBtn.vibrate = game.vibrate
         planeBtn = actionButton(Color.parseColor("#3DA5FF")) { onPlanePressed() }
-        bar.addView(nukeBtn, LinearLayout.LayoutParams(0, dp(52f), 1f).apply { marginEnd = dp(5f) })
-        bar.addView(planeBtn, LinearLayout.LayoutParams(0, dp(52f), 1f).apply { marginStart = dp(5f) })
+        healthBtn = actionButton(Color.parseColor("#4BE36B")) { onHealthPressed() }
+        cureBtn = actionButton(Color.parseColor("#E36BD0")) { onCurePressed() }
+        bar.addView(nukeBtn, LinearLayout.LayoutParams(0, dp(52f), 1.45f).apply { marginEnd = dp(4f) })
+        bar.addView(planeBtn, LinearLayout.LayoutParams(0, dp(52f), 1f).apply { marginStart = dp(2f); marginEnd = dp(2f) })
+        bar.addView(healthBtn, LinearLayout.LayoutParams(0, dp(52f), 1f).apply { marginStart = dp(2f); marginEnd = dp(2f) })
+        bar.addView(cureBtn, LinearLayout.LayoutParams(0, dp(52f), 1f).apply { marginStart = dp(4f) })
         return bar
     }
 
-    private fun actionButton(color: Int, onClick: () -> Unit) = text("", 13f, light = false).apply {
+    private fun actionButton(color: Int, onClick: () -> Unit) = text("", 11.5f, light = false).apply {
         gravity = Gravity.CENTER
         background = pressable(XmbBackground.tinted(d, color, 14f))
         isClickable = true
@@ -305,6 +311,10 @@ class MainActivity : Activity(), GameView.Listener {
             nukeBtn.used = false
             planeBtn.text = "✈ PLANE"
             planeBtn.alpha = 0.4f
+            healthBtn.text = "❤ HEALTH"
+            healthBtn.alpha = 0.4f
+            cureBtn.text = "💊 CURE"
+            cureBtn.alpha = 0.4f
             planeBtn.contentDescription = "Plane. Place your team first."
             aimBanner.visibility = View.GONE
             game.planeAimRequested = false
@@ -326,10 +336,23 @@ class MainActivity : Activity(), GameView.Listener {
         nukeBtn.used = !w.nukeReady
 
         planeBtn.text = when {
-            !w.airstrikeReady -> "✈ PLANE\nBack in ${w.airstrikeCooldown.toInt() + 1}s"
-            game.planeAimRequested -> "✈ PLANE\nNow drag a line!"
+            !w.airstrikeReady -> "✈ PLANE\n${w.airstrikeCooldown.toInt() + 1}s"
+            game.planeAimRequested -> "✈ PLANE\ndrag a line!"
             else -> "✈ PLANE\nReady"
         }
+        healthBtn.text = when {
+            w.healthLevel >= World.MAX_HEALTH_LEVEL -> "❤ HEALTH\nMAX"
+            !w.healthReady -> "❤ Lv ${w.healthLevel}\n${w.healthCooldown.toInt() + 1}s"
+            else -> "❤ HEALTH\n+1 · Lv ${w.healthLevel}"
+        }
+        healthBtn.alpha = if (w.healthReady) 1f else 0.45f
+        healthBtn.contentDescription = if (w.healthReady) "Health upgrade ready. Level ${w.healthLevel}. Tap to make your survivors tougher."
+            else "Health level ${w.healthLevel}. Next upgrade in ${w.healthCooldown.toInt() + 1} seconds."
+        val sick = w.humans.count { it.infection > 0.01f }
+        cureBtn.text = if (w.cureReady) "💊 CURE\nReady" else "💊 CURE\n${w.cureCooldown.toInt() + 1}s"
+        cureBtn.alpha = if (w.cureReady) 1f else 0.45f
+        cureBtn.contentDescription = if (w.cureReady) "Cure ready. $sick survivors are infected. Tap to cure everyone."
+            else "Cure comes back in ${w.cureCooldown.toInt() + 1} seconds."
         planeBtn.alpha = if (w.airstrikeReady) 1f else 0.4f
         planeBtn.contentDescription = planeBtn.text.toString().replace("\n", ". ")
         aimBanner.visibility = if (game.planeAimRequested && w.airstrikeReady) View.VISIBLE else View.GONE
@@ -342,6 +365,25 @@ class MainActivity : Activity(), GameView.Listener {
         prefs.edit().putFloat("speed", next.first).apply()
         if (::speedRow.isInitialized) updateSpeedRow()
         onAnnounce("Game speed: ${speedNames[next.first]}")
+        updateHud()
+    }
+
+    private fun onHealthPressed() {
+        val w = game.world
+        if (w.phase != Phase.RUNNING) { onAnnounce("Tap the map to put your team down first."); return }
+        when {
+            w.healthLevel >= World.MAX_HEALTH_LEVEL -> onAnnounce("Health is already at the top level.")
+            !w.healthReady -> onAnnounce("Next health upgrade in ${w.healthCooldown.toInt() + 1} seconds.")
+            w.upgradeHealth() -> onAnnounce("Survivors are tougher! Health level ${w.healthLevel}.")
+        }
+        updateHud()
+    }
+
+    private fun onCurePressed() {
+        val w = game.world
+        if (w.phase != Phase.RUNNING) { onAnnounce("Tap the map to put your team down first."); return }
+        if (!w.cureReady) { onAnnounce("The cure comes back in ${w.cureCooldown.toInt() + 1} seconds."); return }
+        if (w.cure()) onAnnounce("Everyone is cured!")
         updateHud()
     }
 
@@ -424,10 +466,13 @@ class MainActivity : Activity(), GameView.Listener {
             dot(game.zombieColor, "Red = normal zombie"),
             dot(game.runnerColor, "Orange = fast runner"),
             dot(game.fatColor, "Big dark red = fat zombie. Slow, but takes lots of hits."),
-            dot(Color.parseColor("#C9D1DC"), "Steel ring = armored zombie. Shoot off the armor first!")
+            dot(Color.parseColor("#C9D1DC"), "Steel ring = armored zombie. Shoot off the armor first!"),
+            dot(Color.parseColor("#7A1018"), "HUGE circle = BEHEMOTH! Super slow, but has a giant health bar. From round 10 they wear armor.")
         ))
         col.addView(card("🧟  Clear every zombie to finish a round. Each round brings more zombies, and they get tougher."))
         col.addView(card("✈  PLANE: press PLANE, then drag your finger across the map. A plane flies that way and drops bombs. It comes back after 20 seconds."))
+        col.addView(card("❤  HEALTH: makes all your survivors a little tougher, so bites infect them less. Use it again when the timer runs out (up to level 10)."))
+        col.addView(card("💊  CURE: removes the green infection rings from everyone. Comes back after 45 seconds."))
         col.addView(card("⏩  The 1x button at the top changes the game speed. ❚❚ pauses."))
         col.addView(card("🏆  How long can your team survive?"))
         col.addView(menuRow("✔   Got it!", highlight = true) { show(returnTo) })

@@ -71,15 +71,15 @@ class NukeButtonView(context: Context, private val listener: Listener) : View(co
     private val lidEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.4f * d }
     private val hinge = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#9AA3B2") }
     private val title = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE; textSize = 14 * d; typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+        color = Color.WHITE; textSize = 12.5f * d; typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
         setShadowLayer(4f, 0f, 1f, Color.BLACK)
     }
     private val sub = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#FFE2C8"); textSize = 11.5f * d; typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+        color = Color.parseColor("#FFE2C8"); textSize = 10.5f * d; typeface = Typeface.create("sans-serif", Typeface.NORMAL)
         setShadowLayer(4f, 0f, 1f, Color.BLACK)
     }
     private val big = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE; textSize = 26 * d; typeface = Typeface.create("sans-serif-black", Typeface.NORMAL)
+        color = Color.WHITE; textSize = 22 * d; typeface = Typeface.create("sans-serif-black", Typeface.NORMAL)
         setShadowLayer(6f, 0f, 1f, Color.RED)
     }
     private val rect = RectF()
@@ -224,9 +224,9 @@ class NukeButtonView(context: Context, private val listener: Listener) : View(co
         c.restore()
 
         // The big red button (with metal base)
-        val bx = 32 * d
+        val bx = 26 * d
         val by = h / 2f - 1 * d
-        val br = min(15 * d, h * 0.3f)
+        val br = min(13 * d, h * 0.27f)
         c.drawCircle(bx, by, br + 4 * d, baseRing)
         val pressed = state == State.HOLDING
         val open = lid > 0.5f
@@ -265,16 +265,16 @@ class NukeButtonView(context: Context, private val listener: Listener) : View(co
         c.drawRect(lx1 + 4 * d, ly1 - 4 * d, lx2 - 4 * d, ly1 - 1.5f * d, hinge)
 
         // Labels
-        val tx = lx2 + 12 * d
+        val tx = lx2 + 8 * d
         when {
-            used -> { c.drawText("☢ NUKE", tx, h / 2f - 2 * d, title); c.drawText("Used up", tx, h / 2f + 14 * d, sub) }
+            used -> { c.drawText("☢ NUKE", tx, h / 2f - 2 * d, title); c.drawText("used up", tx, h / 2f + 13 * d, sub) }
             !available -> { c.drawText("☢ NUKE", tx, h / 2f + 5 * d, title) }
             state == State.HOLDING -> {
                 c.drawText("$lastCount", tx, h / 2f + 9 * d, big)
-                c.drawText("Keep holding…", tx + 26 * d, h / 2f + 5 * d, sub)
+                c.drawText("hold…", tx + 20 * d, h / 2f + 5 * d, sub)
             }
-            state == State.OPEN -> { c.drawText("HOLD the red", tx, h / 2f - 2 * d, title); c.drawText("button to launch", tx, h / 2f + 14 * d, sub) }
-            else -> { c.drawText("☢ NUKE", tx, h / 2f - 2 * d, title); c.drawText("Tap to open case", tx, h / 2f + 14 * d, sub) }
+            state == State.OPEN -> { c.drawText("HOLD", tx, h / 2f - 2 * d, title); c.drawText("red button", tx, h / 2f + 13 * d, sub) }
+            else -> { c.drawText("☢ NUKE", tx, h / 2f - 2 * d, title); c.drawText("tap to open", tx, h / 2f + 13 * d, sub) }
         }
     }
 }

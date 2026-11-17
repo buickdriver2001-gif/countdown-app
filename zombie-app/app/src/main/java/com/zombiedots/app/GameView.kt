@@ -55,6 +55,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
     private var lastWave = 0
     private var lastTurned = 0
     private var lastTeam = 0
+    private var lastBehemoth = 0
 
     // ---------- paints
     private val bg = Color.parseColor("#0B0D10")
@@ -229,6 +230,11 @@ class GameView(context: Context, private val listener: Listener) : View(context)
             listener.onAnnounce("Wave ${world.wave} is coming!")
             buzz(HapticFeedbackConstants.KEYBOARD_TAP)
         }
+        if (world.behemothArrived != lastBehemoth) {
+            lastBehemoth = world.behemothArrived
+            listener.onAnnounce("Warning! A behemoth is coming!")
+            buzz(HapticFeedbackConstants.LONG_PRESS)
+        }
         if (world.turned != lastTurned) {
             lastTurned = world.turned
             listener.onAnnounce("Oh no! Someone turned into a zombie.")
@@ -285,7 +291,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         for (pass in 0..1) {
             var k = 0
             for (z in zs) {
-                if (z.type == ZType.FAT || z.type == ZType.ARMORED) continue
+                if (z.type == ZType.FAT || z.type == ZType.ARMORED || z.type == ZType.BEHEMOTH) continue
                 if (z.runner != (pass == 1)) continue
                 points[k++] = z.x * d
                 points[k++] = z.y * d
@@ -313,6 +319,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
                         c.drawCircle(zx, zy, r + 2.2f * d, armorPaint)
                     }
                 }
+                ZType.BEHEMOTH -> drawBehemoth(c, z, zx, zy)
                 else -> {}
             }
         }
@@ -341,8 +348,11 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         for (t in world.texts) {
             when {
                 t.text.startsWith("WAVE") -> { floatPaint.color = zombieColor; floatPaint.textSize = 18 * d }
+                t.text.startsWith("⚠") -> { floatPaint.color = Color.parseColor("#FF5A4A"); floatPaint.textSize = 17 * d }
                 t.text.startsWith("ROUND") -> { floatPaint.color = Color.parseColor("#9CFF4D"); floatPaint.textSize = 15 * d }
                 t.text.endsWith("zombies") -> { floatPaint.color = Color.parseColor("#FFB0A0"); floatPaint.textSize = 12 * d }
+                t.text == "+HP" -> { floatPaint.color = Color.parseColor("#4BE36B"); floatPaint.textSize = 12 * d }
+                t.text == "cured!" -> { floatPaint.color = Color.parseColor("#F08BE0"); floatPaint.textSize = 12 * d }
                 t.text == "armor broke" -> { floatPaint.color = Color.parseColor("#C9D1DC"); floatPaint.textSize = 10 * d }
                 t.text.startsWith("Survivor Joined") -> { floatPaint.color = hunterColor; floatPaint.textSize = 14 * d }
                 t.text.endsWith("turned!") -> { floatPaint.color = Color.parseColor("#9CFF4D"); floatPaint.textSize = 13 * d }
@@ -394,6 +404,38 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         c.drawText("👆 Tap anywhere on the map", cx, cy + 30 * d, hintPaint)
         hintPaint.textSize = 16 * d
         c.drawText("to put your team down", cx, cy + 56 * d, hintPaint)
+    }
+
+    private val hpBack = Paint().apply { color = Color.parseColor("#AA000000") }
+    private val hpFill = Paint().apply { color = Color.parseColor("#FF3B3B") }
+    private val armorFill = Paint().apply { color = Color.parseColor("#C9D1DC") }
+    private val behemothPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val behemothRim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+
+    private fun drawBehemoth(c: Canvas, z: Zombie, zx: Float, zy: Float) {
+        val r = z.radius * d
+        val pulse = 0.5f + 0.5f * kotlin.math.sin(System.currentTimeMillis() / 400.0).toFloat()
+        // Menacing glow
+        behemothPaint.color = Color.argb((40 + 40 * pulse).toInt(), 255, 30, 30)
+        c.drawCircle(zx, zy, r + 8 * d, behemothPaint)
+        behemothPaint.color = Color.parseColor("#7A1018")
+        if (shapes) c.drawRect(zx - r, zy - r, zx + r, zy + r, behemothPaint) else c.drawCircle(zx, zy, r, behemothPaint)
+        behemothRim.strokeWidth = 2f * d
+        behemothRim.color = Color.argb(200, 255, 80, 70)
+        c.drawCircle(zx, zy, r * 0.75f, behemothRim)
+        if (z.armor > 0f) {
+            behemothRim.strokeWidth = 4f * d
+            behemothRim.color = Color.argb((120 + 135 * (z.armor / z.armorMax).coerceIn(0f, 1f)).toInt(), 201, 209, 220)
+            c.drawCircle(zx, zy, r + 3 * d, behemothRim)
+        }
+        // Health (and armor) bar
+        val bw = r * 2.2f
+        val top = zy - r - 12 * d
+        c.drawRect(zx - bw / 2, top, zx + bw / 2, top + 4 * d, hpBack)
+        c.drawRect(zx - bw / 2, top, zx - bw / 2 + bw * (z.hp / z.maxHp).coerceIn(0f, 1f), top + 4 * d, hpFill)
+        if (z.armorMax > 0f && z.armor > 0f) {
+            c.drawRect(zx - bw / 2, top - 5 * d, zx - bw / 2 + bw * (z.armor / z.armorMax), top - 2 * d, armorFill)
+        }
     }
 
     private fun blend(a: Int, b: Int, t: Float): Int {

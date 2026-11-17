@@ -14,13 +14,19 @@ import kotlin.random.Random
  * so it can be tested on its own.
  */
 
-enum class ZType { NORMAL, RUNNER, FAT, ARMORED }
+enum class ZType { NORMAL, RUNNER, FAT, ARMORED, BEHEMOTH }
 
 class Zombie(var x: Float, var y: Float, val speed: Float, val type: ZType = ZType.NORMAL, var hp: Float = 1f) {
     var armor = 0f
     var armorMax = 0f
+    var maxHp = hp
     val runner get() = type == ZType.RUNNER
-    val radius get() = when (type) { ZType.FAT -> 6f; ZType.ARMORED -> 3.8f; else -> 3.2f }
+    val radius get() = when (type) {
+        ZType.BEHEMOTH -> 16f
+        ZType.FAT -> 6f
+        ZType.ARMORED -> 3.8f
+        else -> 3.2f
+    }
     var vx = 0f
     var vy = 0f
     var target: Human? = null
@@ -104,6 +110,9 @@ class World(private val rnd: Random = Random.Default) {
         const val HUMAN_R = 4.5f
         const val NUKE_BREATHER = 8f
         const val ROUND_BREAK = 8f
+        const val HEALTH_COOLDOWN = 30f
+        const val CURE_COOLDOWN = 45f
+        const val MAX_HEALTH_LEVEL = 10
         const val ROUND_MAX = 90f
         const val AIRSTRIKE_COOLDOWN = 20f
         const val BOMB_RADIUS = 24f
@@ -122,11 +131,16 @@ class World(private val rnd: Random = Random.Default) {
             val rate = min(2.5f + wave * 0.35f, 7f) // zombies per second
             while (spawnTimer <= 0f && spawnQueue > 0) {
                 val (x, y) = edgePoint(waveEdges[spawnIndex++ % waveEdges.size])
-                addZombie(x, y)
+                if (spawnQueue <= behemothsPending) {
+                    // The boss arrives at the end of the round
+                    addBehemoth(x, y, armored = wave >= 10)
+                    behemothsPending--
+                } else addZombie(x, y)
                 spawnQueue--
                 spawnTimer += 1f / rate
             }
-        } else if (zombies.isEmpty()) {
+        } else if (zombies.none { it.type != ZType.BEHEMOTH }) {
+            // Behemoths don't hold up the round: they keep roaming into the next one
             if (intermission <= 0f) {
                 intermission = ROUND_BREAK
                 texts.add(FloatText(width / 2f, height / 2f, "ROUND $wave CLEARED!", 2.4f))
@@ -198,7 +212,10 @@ class World(private val rnd: Random = Random.Default) {
                 for (z in zombies) {
                     if (z.dead) continue
                     val ex = z.x - b.x; val ey = z.y - b.y
-                    if (ex * ex + ey * ey < r2) { killZombie(z, quiet = true); n++ }
+                    val reach = BOMB_RADIUS + z.radius
+                    if (ex * ex + ey * ey < reach * reach) {
+                        if (z.type == ZType.BEHEMOTH) hurt(z, 12f) else { killZombie(z, quiet = true); n++ }
+                    }
                 }
             }
         }
@@ -216,6 +233,7 @@ class World(private val rnd: Random = Random.Default) {
         nukeReady = true; turned = 0
         waveSize = 0; waveGrowth = 0; speedBase = 25f
         spawnQueue = 0; intermission = 0f; waveAge = 0f; spawnIndex = 0
+        healthLevel = 0; healthCooldown = 0f; cureCooldown = 0f; behemothsPending = 0
         tactic = Tactic.SQUAD_UP; tacticTimer = 0f
     }
 
@@ -270,6 +288,7 @@ class World(private val rnd: Random = Random.Default) {
 
     // Black Ops-style rounds: zombies trickle in; the next round starts once this one is cleared
     var spawnQueue = 0
+    private var behemothsPending = 0
     private var spawnTimer = 0f
     private var waveEdges = listOf(0)
     private var spawnIndex = 0
@@ -277,14 +296,19 @@ class World(private val rnd: Random = Random.Default) {
     private var waveAge = 0f
 
     /** Zombies still to come this round, including those on the map. */
-    val zombiesLeft get() = zombies.size + spawnQueue
+    val zombiesLeft get() = zombies.count { it.type != ZType.BEHEMOTH } + spawnQueue - behemothsPending
 
     private fun spawnWave(first: Boolean = false) {
         wave++
         growRound()
         val edges = 1 + rnd.nextInt(if (wave > 3) 3 else 2)
         waveEdges = (0 until 4).shuffled(rnd).take(edges)
-        spawnQueue = waveSize
+        behemothsPending = when {
+            wave >= 13 -> 2
+            wave >= 6 -> 1
+            else -> 0
+        }
+        spawnQueue = waveSize + behemothsPending
         spawnTimer = 0f
         waveAge = 0f
         intermission = 0f
@@ -338,8 +362,7 @@ class World(private val rnd: Random = Random.Default) {
         val roll = rnd.nextFloat()
         val base = zombieHp()
         val z = when {
-            roll < fatChance ->
-                Zombie(x, y, zombieBaseSpeed() * (0.5f + rnd.nextFloat() * 0.15f), ZType.FAT, base * 3.2f)
+            roll < fatChance -> Zombie(x, y, zombieBaseSpeed() * (0.5f + rnd.nextFloat() * 0.15f), ZType.FAT, base * 3.2f).also { it.maxHp = it.hp }
             roll < fatChance + armorChance ->
                 Zombie(x, y, zombieBaseSpeed() * (0.75f + rnd.nextFloat() * 0.2f), ZType.ARMORED, base).also {
                     it.armorMax = base * 2.2f; it.armor = it.armorMax
@@ -359,6 +382,53 @@ class World(private val rnd: Random = Random.Default) {
         z.attackCd = 0.5f
         zombies.add(z)
     }
+
+    /** Huge, painfully slow, with an enormous amount of health (and armor from round 10). */
+    private fun addBehemoth(x0: Float, y0: Float, armored: Boolean) {
+        // Start a bit further out so it lumbers in from off-screen
+        val x = if (x0 < 0f) x0 - 20f else if (x0 > width) x0 + 20f else x0
+        val y = if (y0 < 0f) y0 - 20f else if (y0 > height) y0 + 20f else y0
+        val base = zombieHp()
+        val z = Zombie(x, y, max(5f, zombieBaseSpeed() * 0.17f), ZType.BEHEMOTH, base * 80f)
+        z.maxHp = z.hp
+        if (armored) { z.armorMax = base * 50f; z.armor = z.armorMax }
+        z.retarget = 0f
+        z.attackCd = 1f
+        zombies.add(z)
+        texts.add(FloatText(width / 2f, height / 2f - 30f, if (armored) "⚠ ARMORED BEHEMOTH!" else "⚠ BEHEMOTH!", 2.6f))
+        behemothArrived++
+    }
+
+    // ------------------------------------------------------------------ support abilities
+
+    var healthLevel = 0
+    var healthCooldown = 0f
+    var cureCooldown = 0f
+    val healthReady get() = healthCooldown <= 0f && healthLevel < MAX_HEALTH_LEVEL
+    val cureReady get() = cureCooldown <= 0f
+    /** Each health level makes bites infect ~8% less. */
+    val biteResist get() = Math.pow(0.92, healthLevel.toDouble()).toFloat()
+
+    fun upgradeHealth(): Boolean {
+        if (phase != Phase.RUNNING || !healthReady) return false
+        healthLevel++
+        healthCooldown = HEALTH_COOLDOWN
+        for (h in humans) texts.add(FloatText(h.x, h.y - 12f, "+HP", 1.2f))
+        return true
+    }
+
+    fun cure(): Boolean {
+        if (phase != Phase.RUNNING || !cureReady) return false
+        cureCooldown = CURE_COOLDOWN
+        for (h in humans) {
+            if (h.infection > 0.01f) texts.add(FloatText(h.x, h.y - 12f, "cured!", 1.2f))
+            h.infection = 0f
+        }
+        return true
+    }
+
+    /** Counts behemoth arrivals (for announcements). */
+    var behemothArrived = 0
 
     // ------------------------------------------------------------------ player actions
 
@@ -430,6 +500,8 @@ class World(private val rnd: Random = Random.Default) {
         ageEffects(dt)
 
         updateRounds(dt)
+        if (healthCooldown > 0f) healthCooldown -= dt
+        if (cureCooldown > 0f) cureCooldown -= dt
 
         strayTimer += dt
         if (strayTimer >= 30f) { strayTimer = 0f; maybeSpawnStray() }
@@ -695,14 +767,19 @@ class World(private val rnd: Random = Random.Default) {
             var nearest2 = Float.MAX_VALUE
             for (z in zombies) {
                 val dx = h.x - z.x; val dy = h.y - z.y
-                if (abs(dx) > dodgeR * 2f || abs(dy) > dodgeR * 2f) continue
-                val d2 = dx * dx + dy * dy
+                val extra = z.radius - ZOMBIE_R // big zombies count as closer
+                val lim = (dodgeR + extra) * 2f
+                if (abs(dx) > lim || abs(dy) > lim) continue
+                val raw2 = dx * dx + dy * dy
+                if (raw2 < 0.0001f) continue
+                val raw = sqrt(raw2)
+                val d = max(0.5f, raw - extra)
+                val d2 = d * d
                 if (d2 < nearest2) nearest2 = d2
-                if (d2 >= dodgeR * dodgeR || d2 < 0.0001f) continue
-                val d = sqrt(d2)
+                if (d >= dodgeR) continue
                 val w = 1f - d / dodgeR
-                ex += dx / d * w * w
-                ey += dy / d * w * w
+                ex += dx / raw * w * w
+                ey += dy / raw * w * w
             }
 
             // Walls and corners are deadly
@@ -844,19 +921,20 @@ class World(private val rnd: Random = Random.Default) {
                 val d2 = dx * dx + dy * dy
                 val reach = z.radius + HUMAN_R + 1f
                 if (d2 >= reach * reach) continue
-                z.attackCd = 1.1f
-                val bite = if (z.type == ZType.FAT) 1.5f else 1f
-                h.infection += bite * when (h.role) {
+                z.attackCd = if (z.type == ZType.BEHEMOTH) 1.6f else 1.1f
+                val bite = when (z.type) { ZType.BEHEMOTH -> 3f; ZType.FAT -> 1.5f; else -> 1f }
+                h.infection += bite * biteResist * when (h.role) {
                     Role.PLAYER -> 0.12f + rnd.nextFloat() * 0.06f
                     Role.HUNTER -> 0.14f + rnd.nextFloat() * 0.08f
                     Role.STRAY -> 0.45f
                 }
                 h.hurtFlash = 1f
                 val d = sqrt(d2).coerceAtLeast(0.5f)
-                h.vx += dx / d * 70f
-                h.vy += dy / d * 70f
+                val knock = if (z.type == ZType.BEHEMOTH) 160f else 70f
+                h.vx += dx / d * knock
+                h.vy += dy / d * knock
                 val fight = when (h.role) { Role.HUNTER -> 0.35f; Role.PLAYER -> 0.2f; Role.STRAY -> 0.05f }
-                if (rnd.nextFloat() < fight) hurt(z, 1f)
+                if (z.type != ZType.BEHEMOTH && rnd.nextFloat() < fight) hurt(z, 1f)
             }
             if (h.infection >= 1f) {
                 h.dead = true
