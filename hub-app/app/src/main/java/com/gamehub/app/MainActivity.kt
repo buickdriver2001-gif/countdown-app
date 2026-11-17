@@ -35,11 +35,52 @@ class MainActivity : Activity() {
             try {
                 val info = packageManager.getApplicationInfo(pkg, 0)
                 val label = packageManager.getApplicationLabel(info).toString()
-                list.add(GameEntry(label, pkg, "On your phone", Color.rgb(170, 200, 255), -1, custom = true,
+                list.add(GameEntry(label, pkg, description(pkg, label), Color.rgb(170, 200, 255), -1, custom = true,
                     drawable = packageManager.getApplicationIcon(pkg)))
             } catch (_: Exception) { /* uninstalled since: skip it */ }
         }
         return list
+    }
+
+    /** A description the player wrote, or a built-in one for apps we know, or a plain fallback. */
+    private fun description(pkg: String, label: String): String {
+        prefs.getString("desc_$pkg", null)?.let { if (it.isNotBlank()) return it }
+        val l = label.lowercase()
+        return when {
+            "ellipse" in l -> "Space Flight Simulation"
+            "gta" in l || "grand theft auto" in l -> "Become a Dangerous Criminal"
+            else -> "On your phone"
+        }
+    }
+
+    private fun editDescription(g: GameEntry) {
+        val input = android.widget.EditText(this).apply {
+            setText(g.tagline)
+            setSelection(text.length)
+            setSingleLine()
+        }
+        val pad = (20 * resources.displayMetrics.density).toInt()
+        val box = android.widget.FrameLayout(this).apply { setPadding(pad, pad / 2, pad, 0); addView(input) }
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Description for ${g.name}")
+            .setView(box)
+            .setPositiveButton("Save") { _, _ ->
+                prefs.edit().putString("desc_${g.pkg}", input.text.toString().trim()).apply()
+                refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Hold an added app: change its description or take it off NEXUS. */
+    private fun appOptions(g: GameEntry) {
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle(g.name)
+            .setItems(arrayOf("Edit description", "Remove from NEXUS")) { _, which ->
+                if (which == 0) editDescription(g) else removeGame(g)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun refresh() {
@@ -94,7 +135,7 @@ class MainActivity : Activity() {
             finish()
             return
         }
-        hub = HubView(this, builtIn, { open(it) }, { pickGame() }, { removeGame(it) }, sfx)
+        hub = HubView(this, builtIn, { open(it) }, { pickGame() }, { appOptions(it) }, sfx)
         setContentView(hub)
         // Full screen: no status bar, no navigation buttons (swipe from an edge to peek at them)
         if (android.os.Build.VERSION.SDK_INT >= 28) window.attributes.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES

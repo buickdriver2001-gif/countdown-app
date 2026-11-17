@@ -386,7 +386,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.textAlign = Paint.Align.CENTER
         text.textSize = 11 * d
         text.color = Color.argb((110 * a).toInt(), 160, 185, 230)
-        c.drawText(if (games.any { it.custom }) "Tap to open  ·  hold an added app to remove it" else "Tap to open", w / 2, h - 28 * d, text)
+        c.drawText(if (games.any { it.custom }) "Tap to open  ·  hold an added app for options" else "Tap to open", w / 2, h - 28 * d, text)
     }
 
     private fun drawIcon(c: Canvas, g: GameEntry, r: RectF, a: Float) {
