@@ -19,7 +19,7 @@ class XmbBackground(context: Context, private val opacity: Float = 1f) : View(co
     private val d = resources.displayMetrics.density
     private val bgPaint = Paint()
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val ribbonLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
+    private val ribbonLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         if (w <= 0 || h <= 0) return
@@ -35,8 +35,14 @@ class XmbBackground(context: Context, private val opacity: Float = 1f) : View(co
         )
     }
 
-    // Ribbon points, reused every frame (no allocations while animating)
-    private var segs = FloatArray(0)
+    // Ribbon geometry, reused every frame (no allocations while animating)
+    private var xs = FloatArray(0)
+    private var ys = FloatArray(0)
+    private var stripUp = FloatArray(0)
+    private var stripDown = FloatArray(0)
+    private var stripColors = IntArray(0)
+    private val linePath = android.graphics.Path()
+    private val vertPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     override fun onDraw(canvas: Canvas) {
         val w = width.toFloat()
@@ -45,37 +51,55 @@ class XmbBackground(context: Context, private val opacity: Float = 1f) : View(co
         canvas.drawRect(0f, 0f, w, h, glowPaint)
 
         val t = SystemClock.uptimeMillis() / 1000f
-        val step = 6f * d
+        val step = 4f * d
         val n = (w / step).toInt() + 3
-        if (segs.size < n * 4) segs = FloatArray(n * 4)
+        if (xs.size < n) {
+            xs = FloatArray(n); ys = FloatArray(n)
+            stripUp = FloatArray(n * 4); stripDown = FloatArray(n * 4); stripColors = IntArray(n * 2)
+        }
 
-        // Several thin ribbons that weave over each other, like the PS3 home screen.
-        // Drawn as line segments, which the GPU handles directly (smooth 60 fps).
+        // Several thin ribbons weaving over each other, like the PS3 home screen.
+        // Each one is a single smooth stroke, so there are no bumps where pieces overlap.
         for (i in 0 until 6) {
             val phase = i * 0.9f
             val speed = 0.18f + i * 0.04f
             val amp = h * (0.05f + 0.025f * i)
             val baseY = h * (0.58f + 0.02f * i)
             val freq = (1.2f + i * 0.15f) * PI.toFloat() / w
-            var px = -step
-            var py = baseY + sin(px * freq + t * speed + phase) * amp +
-                sin(px * freq * 0.5f - t * speed * 0.7f + phase * 2f) * amp * 0.5f
-            var k = 0
             for (j in 0 until n) {
-                val x = px + step
-                val y = baseY + sin(x * freq + t * speed + phase) * amp +
+                val x = -step + j * step
+                xs[j] = x
+                ys[j] = baseY + sin(x * freq + t * speed + phase) * amp +
                     sin(x * freq * 0.5f - t * speed * 0.7f + phase * 2f) * amp * 0.5f
-                segs[k++] = px; segs[k++] = py; segs[k++] = x; segs[k++] = y
-                px = x; py = y
             }
-            if (i == 2 || i == 4) {
-                ribbonLine.strokeWidth = 16f * d
-                ribbonLine.color = Color.argb((20 * opacity).toInt(), 160, 200, 255)
-                canvas.drawLines(segs, 0, k, ribbonLine)
+
+            // Soft glow under the brightest ribbons: a seamless band that fades at its edges
+            if ((i == 2 || i == 4) && android.os.Build.VERSION.SDK_INT >= 29) {
+                val half = 9f * d
+                val glowA = (34 * opacity).toInt()
+                for (j in 0 until n) {
+                    val j0 = maxOf(0, j - 1); val j1 = minOf(n - 1, j + 1)
+                    var tx = xs[j1] - xs[j0]; var ty = ys[j1] - ys[j0]
+                    val len = kotlin.math.sqrt(tx * tx + ty * ty).coerceAtLeast(0.001f)
+                    tx /= len; ty /= len
+                    val nx = -ty * half; val ny = tx * half
+                    stripUp[j * 4] = xs[j]; stripUp[j * 4 + 1] = ys[j]
+                    stripUp[j * 4 + 2] = xs[j] + nx; stripUp[j * 4 + 3] = ys[j] + ny
+                    stripDown[j * 4] = xs[j]; stripDown[j * 4 + 1] = ys[j]
+                    stripDown[j * 4 + 2] = xs[j] - nx; stripDown[j * 4 + 3] = ys[j] - ny
+                    stripColors[j * 2] = Color.argb(glowA, 170, 205, 255)
+                    stripColors[j * 2 + 1] = Color.argb(0, 170, 205, 255)
+                }
+                canvas.drawVertices(Canvas.VertexMode.TRIANGLE_STRIP, n * 4, stripUp, 0, null, 0, stripColors, 0, null, 0, 0, vertPaint)
+                canvas.drawVertices(Canvas.VertexMode.TRIANGLE_STRIP, n * 4, stripDown, 0, null, 0, stripColors, 0, null, 0, 0, vertPaint)
             }
+
+            linePath.rewind()
+            linePath.moveTo(xs[0], ys[0])
+            for (j in 1 until n) linePath.lineTo(xs[j], ys[j])
             ribbonLine.strokeWidth = (if (i == 2) 2.2f else 1.1f) * d
-            ribbonLine.color = Color.argb(((if (i == 2) 150 else 70) * opacity).toInt(), 220, 235, 255)
-            canvas.drawLines(segs, 0, k, ribbonLine)
+            ribbonLine.color = Color.argb(((if (i == 2) 160 else 75) * opacity).toInt(), 220, 235, 255)
+            canvas.drawPath(linePath, ribbonLine)
         }
         if (isShown) postInvalidateOnAnimation()
     }
