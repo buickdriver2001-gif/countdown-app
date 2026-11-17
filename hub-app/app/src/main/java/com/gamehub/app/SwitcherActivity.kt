@@ -45,6 +45,13 @@ class SwitcherActivity : Activity() {
     }
 
     override fun onResume() { super.onResume(); view.load() }
+
+    /** Back: return to the app you were just using (not the system screen underneath). */
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        val last = Recents.list(this).firstOrNull()?.first
+        if (last != null && packageManager.getLaunchIntentForPackage(last) != null) openApp(last) else goNexus()
+    }
     override fun onDestroy() { super.onDestroy(); sfx.release() }
     override fun onPause() { super.onPause(); if (!isFinishing) finish() }
 

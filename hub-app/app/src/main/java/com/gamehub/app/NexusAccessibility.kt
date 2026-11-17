@@ -73,16 +73,14 @@ class NexusAccessibility : AccessibilityService() {
             cls.contains("Recents", ignoreCase = true) && !cls.contains("Launcher", ignoreCase = true)
         if (isRecents && takeOverRecents() && HomeMode.isOn(this) && HomeMode.isDefault(this)) {
             val now = SystemClock.uptimeMillis()
-            if (now - lastSwitcher > 1200) {
+            if (now - lastSwitcher > 800) {
                 lastSwitcher = now
-                // Close the system screen first so closing ours returns to where you were
-                performGlobalAction(GLOBAL_ACTION_BACK)
-                h.postDelayed({
-                    try {
-                        startActivity(Intent(this, SwitcherActivity::class.java)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_CLEAR_TOP))
-                    } catch (_: Exception) {}
-                }, 120)
+                // Cover the system screen straight away (no delay, no animation)
+                try {
+                    startActivity(Intent(this, SwitcherActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        .putExtra("fromSquare", true))
+                } catch (_: Exception) {}
             }
             return
         }

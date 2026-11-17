@@ -5,6 +5,6 @@
     android:accessibilityFlags="flagDefault"
     android:canRetrieveWindowContent="false"
     android:canTakeScreenshot="true"
-    android:notificationTimeout="100"
+    android:notificationTimeout="0"
     android:description="@string/a11y_description"
     android:summary="@string/a11y_summary" />

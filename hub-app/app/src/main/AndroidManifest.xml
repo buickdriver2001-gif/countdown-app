@@ -55,6 +55,7 @@
         <activity
             android:name=".SwitcherActivity"
             android:exported="false"
+            android:theme="@style/SwitcherTheme"
             android:excludeFromRecents="true"
             android:taskAffinity="com.gamehub.app.switcher"
             android:launchMode="singleTask"

@@ -8,4 +8,11 @@
         <item name="android:windowSplashScreenBackground">#02040E</item>
         <item name="android:windowSplashScreenIconBackgroundColor">#02040E</item>
     </style>
+    <!-- Open Apps: deep blue from the very first frame, no opening animation -->
+    <style name="SwitcherTheme" parent="AppTheme">
+        <item name="android:windowBackground">@drawable/switcher_bg</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowDisablePreview">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
 </resources>
