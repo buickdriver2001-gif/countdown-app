@@ -33,7 +33,7 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
     private val A_ATTACK = 0; private val A_HEAVY = 1; private val A_ROLL = 2; private val A_HEAL = 3; private val A_LOCK = 4; private val A_PAUSE = 5
     private val buttons = listOf(
         Btn("ATTACK", A_ATTACK), Btn("HEAVY", A_HEAVY), Btn("ROLL", A_ROLL),
-        Btn("HEAL", A_HEAL), Btn("LOCK", A_LOCK), Btn("❚❚", A_PAUSE)
+        Btn("HEAL", A_HEAL), Btn("LOCK", A_LOCK), Btn("", A_PAUSE)
     )
 
     // Pointer roles
@@ -198,30 +198,29 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
 
         // Health, stamina, flasks (top left)
         ghostHp = if (ghostHp > p.hp) ghostHp - dt * 40f else p.hp
-        val left = 24 * d; val top = 22 * d
-        val hpW = 250 * d
-        bar(c, left, top, hpW, 10 * d, p.hp / Player.MAX_HP, ghostHp / Player.MAX_HP, Color.rgb(176, 32, 32))
-        bar(c, left, top + 16 * d, 200 * d, 7 * d, (p.stamina / Player.MAX_STAMINA).coerceAtLeast(0f), 0f, Color.rgb(64, 160, 72))
-        // Flask
-        val fx = left + 8 * d; val fy = top + 44 * d
-        fill.color = Color.rgb(214, 140, 40)
-        fill.alpha = if (p.flasks > 0) 255 else 80
-        c.drawCircle(fx, fy + 4 * d, 7 * d, fill)
-        c.drawRect(fx - 2.5f * d, fy - 9 * d, fx + 2.5f * d, fy - 2 * d, fill)
-        fill.alpha = 255
-        text.textAlign = Paint.Align.LEFT; text.textSize = 14 * d; text.color = Color.WHITE
-        c.drawText("× ${p.flasks}", fx + 13 * d, fy + 9 * d, text)
-        text.textAlign = Paint.Align.CENTER
+        val left = 26 * d; val top = 22 * d
+        fancyBar(c, left, top, 250 * d, 12 * d, p.hp / Player.MAX_HP, ghostHp / Player.MAX_HP,
+            Color.rgb(120, 14, 14), Color.rgb(214, 46, 40), p.hp < Player.MAX_HP * 0.3f)
+        val st = (p.stamina / Player.MAX_STAMINA).coerceAtLeast(0f)
+        fancyBar(c, left, top + 20 * d, 200 * d, 8 * d, st, 0f,
+            Color.rgb(30, 96, 40), Color.rgb(96, 200, 90), p.stamina <= 0f)
+        drawFlask(c, left + 14 * d, top + 62 * d, p.flasks)
 
-        // Boss bar (bottom centre)
+        // Boss bar: bottom, between the move area and the buttons (never under them)
         if (b.state != BState.INTRO || b.t > 0.4f) {
             ghostBoss = if (ghostBoss > b.hp) ghostBoss - dt * 120f else b.hp
-            val bw = w * 0.52f
-            val bx = (w - bw) / 2; val bY = h - 40 * d
+            val bx = w * 0.17f
+            val bRight = min(w - 290 * d, w * 0.83f)
+            val bw = bRight - bx
+            val bY = h - 30 * d
             serif.textAlign = Paint.Align.LEFT; serif.textSize = 15 * d; serif.color = Color.rgb(225, 218, 200)
-            c.drawText(Boss.NAME, bx, bY - 8 * d, serif)
+            serif.setShadowLayer(4 * d, 0f, 0f, Color.BLACK)
+            c.drawText(Boss.NAME, bx, bY - 10 * d, serif)
+            serif.setShadowLayer(0f, 0f, 0f, 0)
             serif.textAlign = Paint.Align.CENTER
-            bar(c, bx, bY, bw, 8 * d, b.hp / Boss.MAX_HP, ghostBoss / Boss.MAX_HP, if (b.phase2) Color.rgb(214, 84, 24) else Color.rgb(150, 26, 26))
+            fancyBar(c, bx, bY, bw, 9 * d, b.hp / Boss.MAX_HP, ghostBoss / Boss.MAX_HP,
+                if (b.phase2) Color.rgb(140, 40, 8) else Color.rgb(100, 12, 12),
+                if (b.phase2) Color.rgb(240, 120, 40) else Color.rgb(190, 34, 30), false)
         }
 
         // Lock-on marker on the boss
@@ -240,34 +239,52 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         }
 
         if (!controls) return
-        // Joystick
+        // Joystick: a ring with direction chevrons and a thumb pad
         if (joyId != -1) {
-            fill.color = Color.argb(50, 255, 255, 255); c.drawCircle(joyCX, joyCY, 60 * d, fill)
-            fill.color = Color.argb(150, 255, 255, 255); c.drawCircle(joyX, joyY, 26 * d, fill)
+            fill.color = Color.argb(40, 255, 255, 255); c.drawCircle(joyCX, joyCY, 62 * d, fill)
+            stroke.color = Color.argb(110, 255, 255, 255); stroke.strokeWidth = 2f * d
+            c.drawCircle(joyCX, joyCY, 62 * d, stroke)
+            for (k in 0 until 4) chevron(c, joyCX, joyCY, 50 * d, k * 90f, Color.argb(120, 255, 255, 255))
+            fill.shader = RadialGradient(joyX, joyY - 6 * d, 30 * d, intArrayOf(Color.argb(230, 255, 255, 255), Color.argb(150, 190, 190, 200)), null, Shader.TileMode.CLAMP)
+            c.drawCircle(joyX, joyY, 27 * d, fill); fill.shader = null
         } else {
-            text.textSize = 12 * d; text.color = Color.argb(90, 255, 255, 255)
-            c.drawText("drag here to move", w * 0.17f, h - 30 * d, text)
+            stroke.color = Color.argb(60, 255, 255, 255); stroke.strokeWidth = 1.5f * d
+            c.drawCircle(w * 0.15f, h - 90 * d, 50 * d, stroke)
+            for (k in 0 until 4) chevron(c, w * 0.15f, h - 90 * d, 40 * d, k * 90f, Color.argb(60, 255, 255, 255))
         }
-        // Buttons
+        // Buttons with icons
         val nowMs = System.currentTimeMillis()
         for (bt in buttons) {
             val pressed = bt.pressedUntil > nowMs
-            val active = when (bt.action) {
-                A_LOCK -> g.locked
+            val usable = when (bt.action) {
                 A_HEAL -> p.flasks > 0
+                A_ATTACK, A_HEAVY, A_ROLL -> p.stamina > 0f
                 else -> true
             }
-            fill.color = when {
-                pressed -> Color.argb(170, 255, 230, 180)
-                bt.action == A_LOCK && active -> Color.argb(120, 220, 180, 90)
-                else -> Color.argb(if (active) 70 else 30, 20, 20, 24)
+            val on = bt.action == A_LOCK && g.locked
+            val r = bt.r * (if (pressed) 0.92f else 1f)
+            // Dark glass disc with a soft inner gradient
+            fill.shader = RadialGradient(bt.x, bt.y - r * 0.4f, r * 1.3f,
+                intArrayOf(Color.argb(if (pressed) 200 else 130, 70, 70, 80), Color.argb(if (pressed) 200 else 120, 10, 10, 14)), null, Shader.TileMode.CLAMP)
+            c.drawCircle(bt.x, bt.y, r, fill); fill.shader = null
+            // Outer ring: gold when active / pressed
+            stroke.strokeWidth = (if (bt.action == A_ATTACK) 2.5f else 2f) * d
+            stroke.color = when {
+                pressed -> Color.argb(255, 255, 220, 140)
+                on -> Color.argb(230, 230, 180, 90)
+                !usable -> Color.argb(70, 200, 200, 200)
+                else -> Color.argb(170, 220, 210, 190)
             }
-            c.drawCircle(bt.x, bt.y, bt.r, fill)
-            stroke.color = Color.argb(if (active) 170 else 70, 230, 220, 200); stroke.strokeWidth = 1.5f * d
-            c.drawCircle(bt.x, bt.y, bt.r, stroke)
-            text.textSize = (if (bt.action == A_ATTACK) 14f else if (bt.action == A_PAUSE) 12f else 11f) * d
-            text.color = if (active) Color.WHITE else Color.argb(110, 255, 255, 255)
-            c.drawText(bt.label, bt.x, bt.y + text.textSize * 0.36f, text)
+            c.drawCircle(bt.x, bt.y, r, stroke)
+            val ic = if (!usable) Color.argb(90, 255, 255, 255) else if (on || pressed) Color.rgb(255, 228, 160) else Color.WHITE
+            drawIcon(c, bt.action, bt.x, bt.y, r * 0.55f, ic)
+            if (bt.action == A_HEAL) {
+                // Flask count badge
+                fill.color = if (p.flasks > 0) Color.rgb(200, 120, 30) else Color.rgb(80, 80, 80)
+                c.drawCircle(bt.x + r * 0.72f, bt.y - r * 0.72f, 9 * d, fill)
+                text.textSize = 11 * d; text.color = Color.WHITE
+                c.drawText("${p.flasks}", bt.x + r * 0.72f, bt.y - r * 0.72f + 4 * d, text)
+            }
         }
         if (g.paused) {
             fill.color = Color.argb(170, 0, 0, 0); c.drawRect(0f, 0f, w, h, fill)
@@ -286,6 +303,150 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         c.drawRoundRect(r, 10 * d, 10 * d, stroke)
         text.textSize = 14 * d; text.color = Color.WHITE
         c.drawText(label, r.centerX(), r.centerY() + 5 * d, text)
+    }
+
+    private val iconPath = android.graphics.Path()
+    private val iconStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
+    private val iconFill = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    private fun chevron(c: Canvas, cx: Float, cy: Float, dist: Float, angleDeg: Float, color: Int) {
+        c.save(); c.rotate(angleDeg, cx, cy)
+        iconStroke.color = color; iconStroke.strokeWidth = 2f * d
+        iconPath.reset()
+        iconPath.moveTo(cx - 6 * d, cy - dist + 5 * d); iconPath.lineTo(cx, cy - dist); iconPath.lineTo(cx + 6 * d, cy - dist + 5 * d)
+        c.drawPath(iconPath, iconStroke)
+        c.restore()
+    }
+
+    /** Simple symbols: sword, heavy swing, dodge, flask, target, pause. */
+    private fun drawIcon(c: Canvas, action: Int, cx: Float, cy: Float, s: Float, color: Int) {
+        iconStroke.color = color; iconFill.color = color
+        iconStroke.strokeWidth = s * 0.14f
+        when (action) {
+            A_ATTACK -> sword(c, cx, cy, s, -45f)
+            A_HEAVY -> {
+                // A big two-handed blade with a swing arc behind it
+                sword(c, cx + s * 0.1f, cy + s * 0.05f, s * 1.05f, -45f, thick = true)
+                iconStroke.strokeWidth = s * 0.1f
+                rect.set(cx - s * 1.05f, cy - s * 1.05f, cx + s * 0.85f, cy + s * 0.85f)
+                c.drawArc(rect, 200f, 70f, false, iconStroke)
+                rect.set(cx - s * 0.85f, cy - s * 0.85f, cx + s * 0.65f, cy + s * 0.65f)
+                c.drawArc(rect, 210f, 50f, false, iconStroke)
+            }
+            A_ROLL -> {
+                // A curled arrow: dodge
+                rect.set(cx - s * 0.7f, cy - s * 0.7f, cx + s * 0.7f, cy + s * 0.7f)
+                iconStroke.strokeWidth = s * 0.16f
+                c.drawArc(rect, 140f, 260f, false, iconStroke)
+                val ax = cx + kotlin.math.cos(Math.toRadians(40.0)).toFloat() * s * 0.7f
+                val ay = cy + kotlin.math.sin(Math.toRadians(40.0)).toFloat() * s * 0.7f
+                iconPath.reset()
+                iconPath.moveTo(ax + s * 0.34f, ay - s * 0.1f); iconPath.lineTo(ax, ay); iconPath.lineTo(ax - s * 0.06f, ay - s * 0.38f)
+                c.drawPath(iconPath, iconStroke)
+                // Little speed lines
+                iconStroke.strokeWidth = s * 0.1f
+                c.drawLine(cx - s * 1.15f, cy + s * 0.1f, cx - s * 0.9f, cy + s * 0.1f, iconStroke)
+                c.drawLine(cx - s * 1.1f, cy + s * 0.4f, cx - s * 0.85f, cy + s * 0.4f, iconStroke)
+            }
+            A_HEAL -> {
+                // A round flask with a cork and liquid line
+                iconStroke.strokeWidth = s * 0.13f
+                c.drawCircle(cx, cy + s * 0.25f, s * 0.55f, iconStroke)
+                c.drawRect(cx - s * 0.18f, cy - s * 0.65f, cx + s * 0.18f, cy - s * 0.28f, iconStroke)
+                iconFill.alpha = Color.alpha(color)
+                c.drawRect(cx - s * 0.24f, cy - s * 0.85f, cx + s * 0.24f, cy - s * 0.65f, iconFill)
+                iconPath.reset(); iconPath.addCircle(cx, cy + s * 0.25f, s * 0.42f, android.graphics.Path.Direction.CW)
+                c.save(); c.clipPath(iconPath)
+                c.drawRect(cx - s, cy + s * 0.2f, cx + s, cy + s, iconFill)
+                c.restore()
+            }
+            A_LOCK -> {
+                // Target reticle
+                iconStroke.strokeWidth = s * 0.12f
+                c.drawCircle(cx, cy, s * 0.6f, iconStroke)
+                c.drawCircle(cx, cy, s * 0.12f, iconFill)
+                for (k in 0 until 4) {
+                    val a = Math.toRadians(k * 90.0)
+                    val ux = kotlin.math.cos(a).toFloat(); val uy = kotlin.math.sin(a).toFloat()
+                    c.drawLine(cx + ux * s * 0.35f, cy + uy * s * 0.35f, cx + ux * s * 0.95f, cy + uy * s * 0.95f, iconStroke)
+                }
+            }
+            A_PAUSE -> {
+                c.drawRect(cx - s * 0.45f, cy - s * 0.55f, cx - s * 0.12f, cy + s * 0.55f, iconFill)
+                c.drawRect(cx + s * 0.12f, cy - s * 0.55f, cx + s * 0.45f, cy + s * 0.55f, iconFill)
+            }
+        }
+    }
+
+    private fun sword(c: Canvas, cx: Float, cy: Float, s: Float, angle: Float, thick: Boolean = false) {
+        c.save(); c.rotate(angle, cx, cy)
+        val bw = s * (if (thick) 0.2f else 0.13f)
+        iconPath.reset()
+        iconPath.moveTo(cx, cy - s * 1.0f)
+        iconPath.lineTo(cx + bw, cy - s * 0.8f); iconPath.lineTo(cx + bw, cy + s * 0.35f)
+        iconPath.lineTo(cx - bw, cy + s * 0.35f); iconPath.lineTo(cx - bw, cy - s * 0.8f); iconPath.close()
+        c.drawPath(iconPath, iconFill)
+        c.drawRect(cx - s * 0.42f, cy + s * 0.35f, cx + s * 0.42f, cy + s * 0.48f, iconFill)   // guard
+        c.drawRect(cx - s * 0.07f, cy + s * 0.48f, cx + s * 0.07f, cy + s * 0.85f, iconFill)   // grip
+        c.drawCircle(cx, cy + s * 0.92f, s * 0.11f, iconFill)                                   // pommel
+        c.restore()
+    }
+
+    /** Health-style bar with a dark frame, gold end caps, a gradient fill and a shine line. */
+    private fun fancyBar(c: Canvas, x: Float, y: Float, w: Float, h: Float, frac: Float, ghost: Float, dark: Int, bright: Int, warn: Boolean) {
+        val f = frac.coerceIn(0f, 1f)
+        fill.color = Color.argb(190, 0, 0, 0)
+        rect.set(x - 3 * d, y - 3 * d, x + w + 3 * d, y + h + 3 * d)
+        c.drawRoundRect(rect, 2 * d, 2 * d, fill)
+        if (ghost > f) { fill.color = Color.argb(210, 235, 215, 160); c.drawRect(x, y, x + w * ghost.coerceIn(0f, 1f), y + h, fill) }
+        if (f > 0f) {
+            fill.shader = LinearGradient(0f, y, 0f, y + h, intArrayOf(bright, dark), null, Shader.TileMode.CLAMP)
+            c.drawRect(x, y, x + w * f, y + h, fill); fill.shader = null
+            fill.color = Color.argb(90, 255, 255, 255)
+            c.drawRect(x, y + h * 0.12f, x + w * f, y + h * 0.3f, fill)
+            if (warn) {
+                val pulse = (0.5f + 0.5f * kotlin.math.sin(System.currentTimeMillis() / 120.0)).toFloat()
+                fill.color = Color.argb((90 * pulse).toInt(), 255, 255, 255)
+                c.drawRect(x, y, x + w * f, y + h, fill)
+            }
+        }
+        stroke.color = Color.argb(200, 170, 140, 80); stroke.strokeWidth = 1.2f * d
+        c.drawRoundRect(rect, 2 * d, 2 * d, stroke)
+        // Gold diamond end caps
+        for (ex in floatArrayOf(x - 3 * d, x + w + 3 * d)) {
+            iconPath.reset()
+            val cy = y + h / 2; val r = h / 2 + 4 * d
+            iconPath.moveTo(ex, cy - r); iconPath.lineTo(ex + r * 0.6f, cy); iconPath.lineTo(ex, cy + r); iconPath.lineTo(ex - r * 0.6f, cy); iconPath.close()
+            fill.color = Color.rgb(150, 116, 50); c.drawPath(iconPath, fill)
+            stroke.color = Color.rgb(230, 196, 120); c.drawPath(iconPath, stroke)
+        }
+    }
+
+    /** A glowing glass flask with the number left. */
+    private fun drawFlask(c: Canvas, cx: Float, cy: Float, n: Int) {
+        val full = n > 0
+        if (full) {
+            fill.shader = RadialGradient(cx, cy, 22 * d, intArrayOf(Color.argb(120, 255, 150, 40), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+            c.drawCircle(cx, cy, 22 * d, fill); fill.shader = null
+        }
+        // Liquid
+        iconPath.reset(); iconPath.addCircle(cx, cy + 3 * d, 10 * d, android.graphics.Path.Direction.CW)
+        c.save(); c.clipPath(iconPath)
+        fill.shader = LinearGradient(0f, cy - 4 * d, 0f, cy + 13 * d, intArrayOf(if (full) Color.rgb(255, 196, 80) else Color.rgb(70, 60, 50), if (full) Color.rgb(200, 90, 20) else Color.rgb(40, 34, 30)), null, Shader.TileMode.CLAMP)
+        c.drawRect(cx - 12 * d, cy - 1 * d, cx + 12 * d, cy + 14 * d, fill); fill.shader = null
+        c.restore()
+        // Glass, neck and cork
+        stroke.color = Color.argb(220, 230, 225, 210); stroke.strokeWidth = 1.6f * d
+        c.drawCircle(cx, cy + 3 * d, 10 * d, stroke)
+        c.drawRect(cx - 3.5f * d, cy - 13 * d, cx + 3.5f * d, cy - 6 * d, stroke)
+        fill.color = Color.rgb(120, 84, 50); c.drawRect(cx - 4.5f * d, cy - 17 * d, cx + 4.5f * d, cy - 13 * d, fill)
+        fill.color = Color.argb(140, 255, 255, 255); c.drawCircle(cx - 4 * d, cy, 2.2f * d, fill)
+        text.textAlign = Paint.Align.LEFT; text.textSize = 16 * d
+        text.color = if (full) Color.rgb(255, 230, 190) else Color.GRAY
+        text.setShadowLayer(4 * d, 0f, 0f, Color.BLACK)
+        c.drawText("× $n", cx + 16 * d, cy + 9 * d, text)
+        text.setShadowLayer(0f, 0f, 0f, 0)
+        text.textAlign = Paint.Align.CENTER
     }
 
     private fun bar(c: Canvas, x: Float, y: Float, w: Float, h: Float, frac: Float, ghost: Float, color: Int) {

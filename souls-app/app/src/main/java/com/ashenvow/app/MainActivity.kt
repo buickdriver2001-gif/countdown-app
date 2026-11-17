@@ -36,6 +36,7 @@ class MainActivity : Activity() {
     }
 
     private fun hideBars() {
+        if (android.os.Build.VERSION.SDK_INT < 30) return
         try {
             window.insetsController?.let {
                 it.hide(WindowInsets.Type.systemBars())

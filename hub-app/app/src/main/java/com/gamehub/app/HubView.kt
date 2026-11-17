@@ -50,6 +50,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
     private var yaw = 0f
     private var t = 0f
+    /** Start-up animation clock (the hub appears when it finishes). */
+    private var bootT = 0f
+    var booting = true
+    private val BOOT_LEN = 5.2f
+    private class Spark(val a: Float, val r0: Float, val speed: Float, val size: Float)
+    private val bootSparks = List(140) { Spark(rnd.nextFloat() * 6.283f, 0.6f + rnd.nextFloat() * 0.8f, 0.6f + rnd.nextFloat() * 0.8f, 0.6f + rnd.nextFloat() * 1.6f) }
     private var lastNs = 0L
     private var selected = -1
     private var launchFlash = 0f
@@ -88,6 +94,13 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val now = System.nanoTime()
         val dt = if (lastNs == 0L) 0f else min(0.05f, (now - lastNs) / 1e9f)
         lastNs = now
+        if (booting) {
+            bootT += dt
+            drawBoot(c)
+            if (bootT >= BOOT_LEN) { booting = false; t = 0f }
+            postInvalidateOnAnimation()
+            return
+        }
         t += dt
         yaw += dt * 0.045f
         val w = width.toFloat(); val h = height.toFloat()
@@ -116,6 +129,97 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         // Fade in from black at start-up
         if (intro < 1f) { fill.color = Color.argb(((1f - intro) * 255).toInt(), 0, 0, 0); c.drawRect(0f, 0f, w, h, fill) }
         postInvalidateOnAnimation()
+    }
+
+    /**
+     * Start-up: sparks of light spiral in out of the dark, gather into a turning glass cube,
+     * a burst of light, then the name, then the hub fades up.
+     */
+    private fun drawBoot(c: Canvas) {
+        val w = width.toFloat(); val h = height.toFloat()
+        val bt = bootT
+        val cx0 = w / 2; val cy0 = h * 0.45f
+        c.drawColor(Color.BLACK)
+        val unit = min(w, h)
+        // 1) Sparks spiral inward
+        if (bt < 2.6f) {
+            for (sp in bootSparks) {
+                val k = ((bt * sp.speed) / 2.2f).coerceIn(0f, 1f)
+                val r = sp.r0 * unit * (1f - k * k)
+                val ang = sp.a + k * 3.5f
+                val a = (min(1f, bt / 0.6f) * (1f - k * 0.3f) * 230).toInt()
+                fill.color = Color.argb(a, 150, 195, 255)
+                c.drawCircle(cx0 + cos(ang) * r, cy0 + sin(ang) * r * 0.75f, sp.size * d, fill)
+            }
+        }
+        // 2) The glass cube forms and turns
+        if (bt in 1.6f..4.2f) {
+            val k = ((bt - 1.6f) / 0.9f).coerceIn(0f, 1f)
+            val fade = 1f - ((bt - 3.6f) / 0.6f).coerceIn(0f, 1f)
+            val size = unit * 0.12f * (0.4f + 0.6f * k)
+            fill.shader = RadialGradient(cx0, cy0, size * 3f, intArrayOf(Color.argb((120 * k * fade).toInt(), 70, 130, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+            c.drawCircle(cx0, cy0, size * 3f, fill); fill.shader = null
+            bootCube(c, cx0, cy0, size, bt * 1.4f, (k * fade))
+            // Light rays
+            line.strokeWidth = 1.5f * d
+            for (i in 0 until 12) {
+                val a = i / 12f * 6.283f + bt * 0.4f
+                line.color = Color.argb((60 * k * fade).toInt(), 160, 200, 255)
+                c.drawLine(cx0 + cos(a) * size * 1.4f, cy0 + sin(a) * size * 1.4f, cx0 + cos(a) * size * (3f + 2f * k), cy0 + sin(a) * size * (3f + 2f * k), line)
+            }
+        }
+        // 3) A burst of light
+        if (bt in 3.3f..4.3f) {
+            val k = (bt - 3.3f) / 1f
+            val a = (sin(k * Math.PI).toFloat() * 255).toInt().coerceIn(0, 255)
+            fill.shader = RadialGradient(cx0, cy0, unit * (0.2f + k * 1.2f), intArrayOf(Color.argb(a, 230, 240, 255), Color.argb(a / 3, 120, 170, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+            c.drawRect(0f, 0f, w, h, fill); fill.shader = null
+        }
+        // 4) The name
+        if (bt > 3.7f) {
+            val k = ((bt - 3.7f) / 0.8f).coerceIn(0f, 1f)
+            val out = ((bt - 4.6f) / 0.6f).coerceIn(0f, 1f)
+            val a = (255 * k * (1f - out)).toInt()
+            text.textAlign = Paint.Align.CENTER
+            text.textSize = 36 * d
+            text.letterSpacing = 0.9f - 0.55f * k
+            text.setShadowLayer(18 * d, 0f, 0f, Color.argb(a, 80, 150, 255))
+            text.color = Color.argb(a, 240, 246, 255)
+            c.drawText("GAME HUB", cx0, cy0 + 12 * d, text)
+            text.setShadowLayer(0f, 0f, 0f, 0)
+            text.letterSpacing = 0.15f
+        }
+        text.textAlign = Paint.Align.CENTER; text.textSize = 11 * d
+        text.color = Color.argb(70, 200, 210, 230)
+        c.drawText("tap to skip", w / 2, h - 30 * d, text)
+    }
+
+    private val bx = FloatArray(8); private val by = FloatArray(8)
+
+    private fun bootCube(c: Canvas, cx0: Float, cy0: Float, s: Float, ang: Float, alpha: Float) {
+        val ca = cos(ang); val sa = sin(ang); val cb = cos(0.5f); val sb = sin(0.5f)
+        var i = 0
+        for (yy in 0..1) for (zz in 0..1) for (xx in 0..1) {
+            val x = (xx * 2 - 1).toFloat(); val y = (yy * 2 - 1).toFloat(); val z = (zz * 2 - 1).toFloat()
+            val x1 = x * ca + z * sa; val z1 = -x * sa + z * ca
+            val y2 = y * cb - z1 * sb; val z2 = y * sb + z1 * cb
+            val persp = 3.2f / (3.2f + z2)
+            bx[i] = cx0 + x1 * s * persp; by[i] = cy0 - y2 * s * persp
+            i++
+        }
+        val faces = arrayOf(intArrayOf(0, 1, 3, 2), intArrayOf(4, 5, 7, 6), intArrayOf(0, 1, 5, 4), intArrayOf(2, 3, 7, 6), intArrayOf(0, 2, 6, 4), intArrayOf(1, 3, 7, 5))
+        for (f in faces) {
+            path.reset(); path.moveTo(bx[f[0]], by[f[0]])
+            for (j in 1..3) path.lineTo(bx[f[j]], by[f[j]])
+            path.close()
+            fill.color = Color.argb((40 * alpha).toInt(), 90, 150, 255)
+            c.drawPath(path, fill)
+        }
+        line.strokeWidth = 1.8f * d
+        line.color = Color.argb((230 * alpha).toInt(), 170, 210, 255)
+        val edges = intArrayOf(0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7)
+        var e = 0
+        while (e < edges.size) { c.drawLine(bx[edges[e]], by[edges[e]], bx[edges[e + 1]], by[edges[e + 1]], line); e += 2 }
     }
 
     private val order = ArrayList<Int>()
@@ -336,6 +440,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                if (booting) { booting = false; t = 0f; return true }
                 downRow = rows.indexOfFirst { it.contains(e.x, e.y) }
                 longFired = false
                 if (downRow in games.indices) { selected = downRow; postDelayed(longPress, 600) }

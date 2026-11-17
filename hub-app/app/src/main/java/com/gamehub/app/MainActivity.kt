@@ -94,12 +94,32 @@ class MainActivity : Activity() {
         }
         hub = HubView(this, builtIn, { open(it) }, { pickGame() }, { removeGame(it) })
         setContentView(hub)
+        // Full screen: no status bar, no navigation buttons (swipe from an edge to peek at them)
+        if (android.os.Build.VERSION.SDK_INT >= 28) window.attributes.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        window.decorView.post { hideBars() }
         if (savedInstanceState == null) Thread { playChime() }.start()
+    }
+
+    private fun hideBars() {
+        if (android.os.Build.VERSION.SDK_INT < 30) return
+        try {
+            window.setDecorFitsSystemWindows(false)
+            window.insetsController?.let {
+                it.hide(android.view.WindowInsets.Type.systemBars())
+                it.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } catch (_: Exception) {}
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideBars()
     }
 
     override fun onResume() {
         super.onResume()
         if (::hub.isInitialized) { refresh(); hub.resumed() }
+        hideBars()
     }
 
     private fun open(g: GameEntry) {

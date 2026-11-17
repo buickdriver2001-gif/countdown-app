@@ -30,6 +30,22 @@ class Pose {
     var kneel = 0f         // 0..1 drops to one knee
     var armRYaw = 0f; var armRPitch = 0f; var elbowR = 0f; var wristR = -90f
     var armLYaw = 0f; var armLPitch = 0f; var elbowL = 0f
+    /** Moves this pose part of the way toward [o] (k = 0..1): removes pops between moves. */
+    fun blendToward(o: Pose, k: Float) {
+        fun l(a: Float, b: Float) = a + (b - a) * k
+        var dp = (o.rootPitch - rootPitch) % 360f
+        if (dp > 180f) dp -= 360f
+        if (dp < -180f) dp += 360f
+        rootPitch += dp * k
+        rootRoll = l(rootRoll, o.rootRoll); lift = l(lift, o.lift); lean = l(lean, o.lean); twist = l(twist, o.twist)
+        sway = l(sway, o.sway); headPitch = l(headPitch, o.headPitch)
+        legL = l(legL, o.legL); legR = l(legR, o.legR); kneeL = l(kneeL, o.kneeL); kneeR = l(kneeR, o.kneeR); kneel = l(kneel, o.kneel)
+        armRYaw = l(armRYaw, o.armRYaw); armRPitch = l(armRPitch, o.armRPitch); elbowR = l(elbowR, o.elbowR); wristR = l(wristR, o.wristR)
+        armLYaw = l(armLYaw, o.armLYaw); armLPitch = l(armLPitch, o.armLPitch); elbowL = l(elbowL, o.elbowL)
+    }
+
+    fun copyFrom(o: Pose) { blendToward(o, 1f); rootPitch = o.rootPitch }
+
     fun reset() {
         rootPitch = 0f; rootRoll = 0f; lift = 0f; lean = 0f; twist = 0f; sway = 0f; headPitch = 0f
         legL = 0f; legR = 0f; kneeL = 5f; kneeR = 5f; kneel = 0f
@@ -75,6 +91,12 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
 
     private var pts: FloatBuffer = ByteBuffer.allocateDirect(7 * 4 * 1200).order(ByteOrder.nativeOrder()).asFloatBuffer()
     private val pose = Pose()
+    private val shownPlayer = Pose()
+    private val shownBoss = Pose()
+    private var poseInit = false
+    private var frameDt = 0f
+    private var texId = 0
+    private var uTex = 0; private var uMat = 0; private var uLocal = 0; private var uTexScale = 0; private var uSpec = 0; private var uTexK = 0
 
     // ------------------------------------------------------------------ setup
 
@@ -86,6 +108,22 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         uLight = GLES20.glGetUniformLocation(prog, "uLight"); uCam = GLES20.glGetUniformLocation(prog, "uCam")
         uFog = GLES20.glGetUniformLocation(prog, "uFog"); uAlpha = GLES20.glGetUniformLocation(prog, "uAlpha")
         uPL = GLES20.glGetUniformLocation(prog, "uPL"); uPC = GLES20.glGetUniformLocation(prog, "uPC")
+        uTex = GLES20.glGetUniformLocation(prog, "uTex"); uMat = GLES20.glGetUniformLocation(prog, "uMat")
+        uLocal = GLES20.glGetUniformLocation(prog, "uLocal"); uTexScale = GLES20.glGetUniformLocation(prog, "uTexScale")
+        uSpec = GLES20.glGetUniformLocation(prog, "uSpec"); uTexK = GLES20.glGetUniformLocation(prog, "uTexK")
+        // Stone / metal / cloth textures, made in code
+        val ids = IntArray(1); GLES20.glGenTextures(1, ids, 0); texId = ids[0]
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId)
+        val bmp = android.graphics.Bitmap.createBitmap(TextureGen.build(), TextureGen.SIZE, TextureGen.SIZE, android.graphics.Bitmap.Config.ARGB_8888)
+        android.opengl.GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0)
+        bmp.recycle()
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR_MIPMAP_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_REPEAT)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_REPEAT)
+        GLES20.glGenerateMipmap(GLES20.GL_TEXTURE_2D)
+        poseInit = false
+        curMat = -1; curLocal = false
         pProg = link(PVS, PFS)
         pPos = GLES20.glGetAttribLocation(pProg, "aPos"); pCol = GLES20.glGetAttribLocation(pProg, "aCol")
         pMVP = GLES20.glGetUniformLocation(pProg, "uMVP"); pSize = GLES20.glGetUniformLocation(pProg, "uSize")
@@ -336,6 +374,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         val now = System.nanoTime()
         val dt = if (lastNs == 0L) 0f else ((now - lastNs) / 1e9f)
         lastNs = now
+        frameDt = kotlin.math.min(dt, 0.1f)
         game.update(dt)
 
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
@@ -355,6 +394,11 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         } else lockVisible = false
 
         GLES20.glUseProgram(prog)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId)
+        GLES20.glUniform1i(uTex, 0)
+        GLES20.glUniform1f(uTexK, 0.3f)
+        setMat(M_STONE, local = false)
         GLES20.glUniform3f(uLight, lightDir[0], lightDir[1], lightDir[2])
         GLES20.glUniform3f(uCam, g.camX, g.camY, g.camZ)
         GLES20.glUniform3f(uFog, fog[0], fog[1], fog[2])
@@ -379,6 +423,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         sp = 0
         Matrix.setIdentityM(stack, 0)
         drawMesh(arena, 1f, 1f, 1f)
+        setMat(M_NONE, local = false)
 
         // Blob shadows under the fighters
         GLES20.glEnable(GLES20.GL_BLEND)
@@ -398,6 +443,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
 
         drawKnight(g.player)
         drawBoss(g)
+        setMat(M_NONE, local = false)
         drawEffects(g)
         drawParticles(g)
     }
@@ -421,6 +467,16 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
 
     private var emitR = 0f; private var emitG = 0f; private var emitB = 0f
 
+    private var curMat = -1; private var curLocal = false
+
+    /** Picks the surface: stone, metal, cloth, or plain (effects). */
+    private fun setMat(mat: Int, local: Boolean, spec: Float = -1f) {
+        val sp = if (spec >= 0f) spec else when (mat) { M_STONE -> 0.12f; M_METAL -> 1.0f; M_CLOTH -> 0.05f; else -> 0f }
+        if (mat != curMat) { GLES20.glUniform1f(uMat, mat.toFloat()); curMat = mat }
+        if (local != curLocal) { GLES20.glUniform1f(uLocal, if (local) 1f else 0f); curLocal = local }
+        GLES20.glUniform1f(uSpec, sp)
+    }
+
     private fun drawMesh(m: Mesh, r: Float, g: Float, b: Float) {
         Matrix.multiplyMM(mvp, 0, vp, 0, stack, sp * 16)
         GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0)
@@ -431,9 +487,21 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
     }
 
     /** A box part: centred at (x, y, z) in the current frame, size sx·sy·sz. */
-    private fun part(x: Float, y: Float, z: Float, sx: Float, sy: Float, sz: Float, c: FloatArray) {
+    private fun part(x: Float, y: Float, z: Float, sx: Float, sy: Float, sz: Float, c: FloatArray, mat: Int = M_METAL, spec: Float = -1f) {
+        setMat(mat, local = true, spec = spec)
+        GLES20.glUniform3f(uTexScale, sx * texDensity, sy * texDensity, sz * texDensity)
         push(); tr(x, y, z); scl(sx, sy, sz); drawMesh(cube, c[0], c[1], c[2]); pop()
     }
+
+    /** Glowing bit (runes, gems, eyes): emissive colour on top of the material. */
+    private fun glowPart(x: Float, y: Float, z: Float, sx: Float, sy: Float, sz: Float, er: Float, eg: Float, eb: Float) {
+        val sr = emitR; val sg = emitG; val sb = emitB
+        emitR = sr + er; emitG = sg + eg; emitB = sb + eb
+        part(x, y, z, sx, sy, sz, cBlack, M_NONE)
+        emitR = sr; emitG = sg; emitB = sb
+    }
+
+    private var texDensity = 2.4f
 
     // ------------------------------------------------------------------ characters
 
@@ -563,7 +631,11 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
 
     private fun drawKnight(p: Player) {
         knightPose(p)
-        val q = pose
+        // Blend toward the new pose so nothing snaps (rolls and deaths follow exactly)
+        if (!poseInit) shownPlayer.copyFrom(pose)
+        else shownPlayer.blendToward(pose, 1f - kotlin.math.exp(-frameDt * 24f))
+        if (p.state == PState.ROLL) shownPlayer.rootPitch = pose.rootPitch
+        val q = shownPlayer
         val flash = p.hurtFlash
         emitR = flash * 0.6f; emitG = flash * 0.1f; emitB = flash * 0.1f
         sp = 0; Matrix.setIdentityM(stack, 0)
@@ -578,11 +650,24 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         emitR = 0f; emitG = 0f; emitB = 0f
     }
 
+    // Colours (made once: no garbage every frame)
+    private val cBlack = rgb(0x000000)
+    private val kArmor = steel; private val kArmorDk = steelDark; private val kCape = cloth
+    private val bArmor = rgb(0x3A3D44); private val bArmorDk = rgb(0x22252B); private val bCape = rgb(0x2B1D18)
+    private val cBelt = rgb(0x3A2E26); private val cMail = rgb(0x6A707A); private val cBossMail = rgb(0x2E3036)
+    private val cBossCrest = rgb(0x55331C); private val cHorn = rgb(0x1A1A1E); private val cCrown = rgb(0x2A2A30)
+    private val cVisor = rgb(0x0A0A0C); private val cGauntlet = rgb(0x2A2622); private val cShield = rgb(0x5A4128)
+    private val cShieldRim = rgb(0x7A7F88); private val cClaw = rgb(0x1E1E22); private val cIron = rgb(0x2B2B30)
+    private val cBossBlade = rgb(0x5F636B); private val cFuller = rgb(0x34373E); private val cChain = rgb(0x45474D)
+    private val cPommel = rgb(0x3A3A40)
+
     /** Shared body for the knight and the boss (the boss is a bigger, darker, broken knight). */
     private fun drawHumanoid(q: Pose, isBoss: Boolean) {
-        val armor = if (isBoss) rgb(0x3A3D44) else steel
-        val armorDk = if (isBoss) rgb(0x22252B) else steelDark
-        val cape = if (isBoss) rgb(0x2B1D18) else cloth
+        val armor = if (isBoss) bArmor else kArmor
+        val armorDk = if (isBoss) bArmorDk else kArmorDk
+        val cape = if (isBoss) bCape else kCape
+        val time = game.time
+        val wind = sin(time * 2.3f) * 4f + sin(time * 3.7f) * 2f
         // Hips are the pivot for rolling and falling
         tr(0f, 0.92f + q.lift - q.kneel * 0.42f, 0f)
         rot(q.rootPitch, 1f, 0f, 0f)
@@ -594,102 +679,190 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
             val right = side < 0
             val a = if (right) q.legR - q.kneel * 10f else q.legL + q.kneel * 80f
             rot(-a, 1f, 0f, 0f)
-            part(0f, -0.23f, 0f, 0.18f, 0.48f, 0.2f, armorDk)
+            part(0f, -0.23f, 0f, 0.18f, 0.48f, 0.2f, armorDk, M_CLOTH)               // padded thigh
+            part(0f, -0.2f, 0.07f, 0.16f, 0.36f, 0.06f, armor)                         // thigh plate
             push(); tr(0f, -0.47f, 0f)
-            part(0f, 0f, 0.05f, 0.15f, 0.12f, 0.1f, armor)                           // knee guard
+            part(0f, 0f, 0.06f, 0.16f, 0.13f, 0.1f, armor)                              // knee cop
+            part(0f, 0.02f, 0.11f, 0.06f, 0.06f, 0.03f, armorDk)
             val kneeA = (if (right) q.kneeR else q.kneeL) + q.kneel * (if (right) 85f else 80f)
             rot(kneeA, 1f, 0f, 0f)
-            part(0f, -0.2f, 0f, 0.16f, 0.42f, 0.18f, armor)
-            // Boot stays roughly level with the ground (toes point down a little when the foot lifts)
+            part(0f, -0.2f, 0f, 0.16f, 0.42f, 0.18f, armor)                             // greave
+            part(0f, -0.18f, 0.08f, 0.1f, 0.34f, 0.04f, armorDk)                        // shin ridge
+            // Boot stays roughly level with the ground
             push(); tr(0f, -0.41f, 0f)
             rot((a - kneeA) * 0.8f, 1f, 0f, 0f)
             part(0f, -0.02f, 0.05f, 0.17f, 0.09f, 0.28f, armorDk)
+            part(0f, -0.02f, 0.18f, 0.15f, 0.07f, 0.06f, armor)                         // toe cap
             pop()
             pop()
             pop()
         }
+        // Mail skirt hanging from the belt
+        part(0f, -0.1f, 0f, 0.44f, 0.24f, 0.3f, if (isBoss) cBossMail else cMail, M_CLOTH, 0.5f)
         // Upper body
         push()
         rot(q.lean, 1f, 0f, 0f)
         rot(q.twist, 0f, 1f, 0f)
         rot(q.sway, 0f, 0f, 1f)
-        part(0f, 0.08f, 0f, 0.42f, 0.2f, 0.26f, rgb(0x3A2E26))               // belt / tassets
-        part(0f, -0.04f, 0.1f, 0.34f, 0.18f, 0.06f, armorDk)                  // front tasset
-        part(0f, 0.4f, 0f, 0.5f, 0.48f, 0.3f, armor)                            // chest
-        part(0f, 0.42f, 0.16f, 0.36f, 0.3f, 0.04f, armorDk)                     // breastplate ridge
-        part(0f, 0.55f, 0.17f, 0.12f, 0.08f, 0.03f, if (isBoss) rgb(0x55331C) else gold) // crest
-        // Cape hanging behind, flowing back when moving
-        push(); tr(0f, 0.62f, -0.17f); rot(8f + q.lean * 0.4f + (if (isBoss) 4f else 0f) + kotlin.math.abs(q.legL) * 0.25f, 1f, 0f, 0f)
-        part(0f, -0.44f, 0f, 0.48f, 0.92f, 0.04f, cape)
-        if (isBoss) { part(0.12f, -0.95f, 0f, 0.14f, 0.18f, 0.04f, cape); part(-0.16f, -0.92f, 0f, 0.1f, 0.12f, 0.04f, cape) }
-        pop()
+        part(0f, 0.08f, 0f, 0.44f, 0.12f, 0.28f, cBelt, M_CLOTH)                       // belt
+        part(0f, 0.08f, 0.145f, 0.08f, 0.08f, 0.02f, if (isBoss) cIron else gold)       // buckle
+        part(0.17f, 0.02f, 0.12f, 0.08f, 0.1f, 0.06f, leather, M_CLOTH)                 // pouch
+        part(0f, -0.04f, 0.12f, 0.3f, 0.16f, 0.05f, armorDk)                            // front tasset
+        part(0f, 0.4f, 0f, 0.5f, 0.46f, 0.3f, armor)                                    // chest
+        part(0f, 0.43f, 0.16f, 0.38f, 0.32f, 0.04f, armorDk)                            // breastplate
+        part(0f, 0.43f, 0.18f, 0.04f, 0.3f, 0.02f, armor)                               // centre ridge
+        part(0f, 0.25f, 0.155f, 0.42f, 0.05f, 0.03f, armor)                             // lower lame
+        part(0f, 0.57f, 0.17f, 0.12f, 0.07f, 0.03f, if (isBoss) cBossCrest else gold)   // crest
+        part(0f, 0.42f, -0.16f, 0.4f, 0.36f, 0.03f, armorDk)                            // backplate
+        if (isBoss && game.boss.phase2) {
+            // Burning cracks across the chest
+            val gl = 0.8f + 0.3f * sin(time * 6f)
+            glowPart(0.06f, 0.46f, 0.185f, 0.02f, 0.22f, 0.01f, 1.4f * gl, 0.45f * gl, 0.08f)
+            glowPart(-0.08f, 0.38f, 0.185f, 0.14f, 0.02f, 0.01f, 1.4f * gl, 0.45f * gl, 0.08f)
+            glowPart(-0.03f, 0.52f, 0.185f, 0.02f, 0.12f, 0.01f, 1.4f * gl, 0.45f * gl, 0.08f)
+        }
+        // Cape: hinged strips that flow back when moving and stir in the wind
+        val capeSwing = 8f + q.lean * 0.4f + kotlin.math.abs(q.legL) * 0.3f
+        val strips = if (isBoss) 5 else 3
+        for (k in 0 until strips) {
+            val off = (k - (strips - 1) / 2f) * (0.48f / strips)
+            val len = if (isBoss) 0.75f + ((k * 37) % 5) * 0.08f else 0.9f
+            push(); tr(off, 0.62f, -0.18f)
+            rot(capeSwing + wind * (0.6f + k * 0.15f), 1f, 0f, 0f)
+            part(0f, -len * 0.25f, 0f, 0.48f / strips + 0.005f, len * 0.5f, 0.035f, cape, M_CLOTH)
+            push(); tr(0f, -len * 0.5f, 0f); rot(4f + wind * 0.8f + q.lean * 0.2f, 1f, 0f, 0f)
+            part(0f, -len * 0.25f, 0f, 0.48f / strips - 0.01f, len * 0.5f, 0.03f, cape, M_CLOTH)
+            pop(); pop()
+        }
         // Head / helm
         push(); tr(0f, 0.72f, 0f); rot(q.headPitch, 1f, 0f, 0f)
-        part(0f, 0.04f, 0f, 0.09f, 0.08f, 0.09f, armorDk)                       // neck
+        part(0f, 0.04f, 0f, 0.1f, 0.08f, 0.1f, if (isBoss) cBossMail else cMail, M_CLOTH, 0.5f) // mail collar
         part(0f, 0.15f, 0f, 0.27f, 0.3f, 0.29f, armor)
+        part(0f, 0.24f, 0.13f, 0.28f, 0.05f, 0.06f, armorDk)                           // brow
+        part(0.13f, 0.1f, 0.06f, 0.04f, 0.16f, 0.18f, armorDk)                          // cheek plates
+        part(-0.13f, 0.1f, 0.06f, 0.04f, 0.16f, 0.18f, armorDk)
         if (isBoss) {
-            // Horned crown and burning eyes
-            part(0.13f, 0.36f, 0.02f, 0.05f, 0.24f, 0.05f, rgb(0x1A1A1E))
-            part(-0.13f, 0.36f, 0.02f, 0.05f, 0.24f, 0.05f, rgb(0x1A1A1E))
-            part(0f, 0.33f, 0.02f, 0.24f, 0.05f, 0.24f, rgb(0x2A2A30))
+            // Spiked crown and burning eyes
+            part(0f, 0.33f, 0.02f, 0.26f, 0.05f, 0.26f, cCrown)
+            for (k in -2..2) part(k * 0.055f, 0.4f + (2 - kotlin.math.abs(k)) * 0.03f, 0.12f, 0.03f, 0.12f + (2 - kotlin.math.abs(k)) * 0.05f, 0.03f, cHorn)
+            push(); tr(0.15f, 0.32f, 0f); rot(-25f, 0f, 0f, 1f); part(0f, 0.12f, 0f, 0.05f, 0.26f, 0.05f, cHorn); pop()
+            push(); tr(-0.15f, 0.32f, 0f); rot(25f, 0f, 0f, 1f); part(0f, 0.12f, 0f, 0.05f, 0.26f, 0.05f, cHorn); pop()
             val e = eyeGlow
-            val sr = emitR; val sg = emitG; val sb = emitB
-            emitR = 0.6f + 1.4f * e; emitG = 0.12f + 0.25f * e; emitB = 0.05f
-            part(0.06f, 0.17f, 0.145f, 0.06f, 0.03f, 0.02f, rgb(0xFF5A2A))
-            part(-0.06f, 0.17f, 0.145f, 0.06f, 0.03f, 0.02f, rgb(0xFF5A2A))
-            emitR = sr; emitG = sg; emitB = sb
+            glowPart(0.06f, 0.17f, 0.146f, 0.06f, 0.03f, 0.02f, 0.6f + 1.6f * e, 0.12f + 0.3f * e, 0.05f)
+            glowPart(-0.06f, 0.17f, 0.146f, 0.06f, 0.03f, 0.02f, 0.6f + 1.6f * e, 0.12f + 0.3f * e, 0.05f)
         } else {
-            part(0f, 0.17f, 0.15f, 0.2f, 0.03f, 0.02f, rgb(0x0A0A0C))           // visor slit
-            part(0f, 0.1f, 0.15f, 0.03f, 0.12f, 0.02f, rgb(0x0A0A0C))
-            part(0f, 0.33f, -0.03f, 0.04f, 0.1f, 0.24f, cloth)                    // plume
+            part(0f, 0.17f, 0.15f, 0.2f, 0.03f, 0.02f, cVisor)                          // visor slit
+            part(0f, 0.09f, 0.15f, 0.03f, 0.1f, 0.02f, cVisor)
+            for (k in -1..1) part(k * 0.05f, 0.06f, 0.15f, 0.015f, 0.04f, 0.02f, cVisor) // breaths
+            part(0f, 0.32f, -0.02f, 0.03f, 0.05f, 0.26f, armor)                           // comb
+            part(0f, 0.36f, -0.06f, 0.04f, 0.12f, 0.22f, cloth, M_CLOTH)                  // plume
         }
         pop()
-        // Shoulders
-        part(-0.31f, 0.6f, 0f, 0.22f, 0.13f, 0.32f, armorDk)
-        part(0.31f, 0.6f, 0f, 0.22f, 0.13f, 0.32f, armorDk)
+        // Layered pauldrons
+        for (side in intArrayOf(-1, 1)) {
+            part(side * 0.31f, 0.62f, 0f, 0.22f, 0.12f, 0.32f, armorDk)
+            part(side * 0.34f, 0.55f, 0f, 0.2f, 0.07f, 0.3f, armor)
+            part(side * 0.36f, 0.49f, 0f, 0.17f, 0.06f, 0.27f, armorDk)
+            if (isBoss) {
+                push(); tr(side * 0.36f, 0.68f, 0.05f); rot(-side * 30f, 0f, 0f, 1f); part(0f, 0.09f, 0f, 0.04f, 0.2f, 0.04f, cHorn); pop()
+                push(); tr(side * 0.3f, 0.68f, -0.08f); rot(-side * 15f, 0f, 0f, 1f); part(0f, 0.07f, 0f, 0.035f, 0.15f, 0.035f, cHorn); pop()
+            }
+        }
         // Right arm + weapon (the character's right is local -X)
         push(); tr(-0.32f, 0.56f, 0f)
         rot(q.armRYaw, 0f, 1f, 0f); rot(q.armRPitch, 1f, 0f, 0f)
         part(0f, -0.12f, 0f, 0.13f, 0.25f, 0.14f, armor)
-        push(); tr(0f, -0.24f, 0f); rot(-q.elbowR, 1f, 0f, 0f)
-        part(0f, -0.1f, 0f, 0.12f, 0.22f, 0.13f, armorDk)
+        push(); tr(0f, -0.24f, 0f)
+        part(0f, 0f, 0.03f, 0.12f, 0.1f, 0.1f, armorDk)                                 // elbow cop
+        rot(-q.elbowR, 1f, 0f, 0f)
+        part(0f, -0.1f, 0f, 0.12f, 0.22f, 0.13f, armorDk)                               // vambrace
+        part(0f, -0.17f, 0f, 0.14f, 0.05f, 0.15f, armor)
         push(); tr(0f, -0.22f, 0f); rot(q.wristR, 1f, 0f, 0f)
-        part(0f, 0f, 0f, 0.13f, 0.11f, 0.13f, rgb(0x2A2622))                    // gauntlet
-        if (isBoss) {
-            // Huge cleaver-like greatsword
-            part(0f, -0.1f, 0f, 0.06f, 0.22f, 0.06f, leather)
-            part(0f, -0.24f, 0f, 0.44f, 0.06f, 0.1f, rgb(0x2B2B30))
-            val sr = emitR; val sg = emitG
-            if (game.boss.phase2) { emitR = sr + 0.5f; emitG = sg + 0.15f }
-            part(0f, -1.15f, 0.02f, 0.13f, 1.8f, 0.26f, rgb(0x5F636B))
-            part(0f, -1.15f, 0.15f, 0.04f, 1.7f, 0.02f, rgb(0x3A3D44))
-            emitR = sr; emitG = sg
-        } else {
-            part(0f, -0.08f, 0f, 0.04f, 0.18f, 0.04f, leather)                   // grip
-            part(0f, -0.2f, 0f, 0.3f, 0.04f, 0.06f, gold)                         // crossguard
-            part(0f, -0.72f, 0f, 0.025f, 0.98f, 0.08f, blade)                     // blade
-        }
+        part(0f, 0f, 0f, 0.13f, 0.11f, 0.13f, cGauntlet)                                 // gauntlet
+        if (isBoss) drawGreatsword() else drawKnightSword()
         pop(); pop(); pop()
-        // Left arm + shield (knight) / bare claw (boss)
+        // Left arm + shield (knight) / clawed hand (boss)
         push(); tr(0.32f, 0.56f, 0f)
         rot(q.armLYaw, 0f, 1f, 0f); rot(q.armLPitch, 1f, 0f, 0f)
         part(0f, -0.12f, 0f, 0.13f, 0.25f, 0.14f, armor)
-        push(); tr(0f, -0.24f, 0f); rot(-q.elbowL, 1f, 0f, 0f)
+        push(); tr(0f, -0.24f, 0f)
+        part(0f, 0f, 0.03f, 0.12f, 0.1f, 0.1f, armorDk)
+        rot(-q.elbowL, 1f, 0f, 0f)
         part(0f, -0.1f, 0f, 0.12f, 0.22f, 0.13f, armorDk)
         if (!isBoss) {
+            // Heater shield: wood face, iron rim and cross, gold boss
             push(); tr(0.09f, -0.12f, 0.02f)
-            part(0f, 0f, 0f, 0.05f, 0.56f, 0.44f, rgb(0x5A4128))
-            part(0.02f, 0f, 0f, 0.03f, 0.6f, 0.05f, rgb(0x7A7F88))
-            part(0.02f, 0f, 0f, 0.03f, 0.05f, 0.48f, rgb(0x7A7F88))
-            part(0.04f, 0f, 0f, 0.03f, 0.11f, 0.11f, gold)
+            part(0f, 0f, 0f, 0.05f, 0.56f, 0.44f, cShield, M_CLOTH, 0.1f)
+            part(0f, -0.33f, 0f, 0.05f, 0.12f, 0.24f, cShield, M_CLOTH, 0.1f)
+            part(0.02f, 0f, 0f, 0.03f, 0.6f, 0.05f, cShieldRim)
+            part(0.02f, 0f, 0f, 0.03f, 0.05f, 0.48f, cShieldRim)
+            part(0.02f, 0.27f, 0f, 0.03f, 0.04f, 0.46f, cShieldRim)
+            part(0.02f, 0f, 0.21f, 0.03f, 0.56f, 0.03f, cShieldRim)
+            part(0.02f, 0f, -0.21f, 0.03f, 0.56f, 0.03f, cShieldRim)
+            part(0.045f, 0f, 0f, 0.03f, 0.11f, 0.11f, gold)
             pop()
         } else {
-            part(0f, -0.26f, 0f, 0.16f, 0.13f, 0.16f, rgb(0x1E1E22))
-            part(0.04f, -0.36f, 0.04f, 0.03f, 0.1f, 0.03f, rgb(0x1E1E22))
-            part(-0.04f, -0.36f, 0.04f, 0.03f, 0.1f, 0.03f, rgb(0x1E1E22))
+            part(0f, -0.26f, 0f, 0.16f, 0.13f, 0.16f, cClaw)
+            for (k in -1..1) part(k * 0.05f, -0.37f, 0.05f, 0.03f, 0.12f, 0.03f, cClaw)
+            // Chains wrapped round the wrist, swinging
+            push(); tr(0f, -0.2f, 0f); rot(wind * 2f, 1f, 0f, 0f)
+            for (k in 0 until 4) part(0.09f, -0.04f - k * 0.06f, 0f, 0.025f, 0.05f, 0.04f, cChain)
+            pop()
         }
         pop(); pop()
         pop()
+    }
+
+    /** The knight's arming sword. */
+    private fun drawKnightSword() {
+        part(0f, 0.08f, 0f, 0.06f, 0.06f, 0.06f, gold)                                   // pommel
+        part(0f, -0.08f, 0f, 0.04f, 0.18f, 0.04f, leather, M_CLOTH)                       // grip
+        for (k in 0..2) part(0f, -0.02f - k * 0.055f, 0f, 0.046f, 0.012f, 0.046f, cIron)  // wraps
+        part(0f, -0.2f, 0f, 0.32f, 0.04f, 0.06f, gold)                                     // crossguard
+        part(0.17f, -0.18f, 0f, 0.04f, 0.06f, 0.06f, gold); part(-0.17f, -0.18f, 0f, 0.04f, 0.06f, 0.06f, gold)
+        part(0f, -0.72f, 0f, 0.025f, 0.98f, 0.08f, blade, M_METAL, 1.6f)                   // blade
+        part(0f, -0.62f, 0f, 0.03f, 0.7f, 0.02f, cFuller)                                  // fuller
+        push(); tr(0f, -1.21f, 0f); rot(45f, 1f, 0f, 0f); part(0f, 0f, 0f, 0.024f, 0.056f, 0.056f, blade, M_METAL, 1.6f); pop() // tip
+    }
+
+    /** The Warden's greatsword: horned guard, burning gem, serrated back, runes in the fuller. */
+    private fun drawGreatsword() {
+        val p2 = game.boss.phase2
+        val time = game.time
+        // Spiked pommel and wrapped grip
+        part(0f, 0.13f, 0f, 0.09f, 0.09f, 0.09f, cPommel)
+        for (k in 0 until 4) { push(); tr(0f, 0.13f, 0f); rot(k * 90f + 45f, 0f, 1f, 0f); rot(70f, 1f, 0f, 0f); part(0f, 0.06f, 0f, 0.025f, 0.08f, 0.025f, cHorn); pop() }
+        part(0f, -0.07f, 0f, 0.055f, 0.26f, 0.055f, leather, M_CLOTH)
+        for (k in 0..3) part(0f, 0.04f - k * 0.07f, 0f, 0.065f, 0.018f, 0.065f, cIron)
+        // Crossguard with horns curving toward the blade
+        part(0f, -0.23f, 0f, 0.17f, 0.1f, 0.15f, cIron)
+        part(0.17f, -0.23f, 0f, 0.22f, 0.05f, 0.09f, cIron); part(-0.17f, -0.23f, 0f, 0.22f, 0.05f, 0.09f, cIron)
+        for (side in intArrayOf(-1, 1)) {
+            push(); tr(side * 0.28f, -0.25f, 0f); rot(side * 35f, 0f, 0f, 1f); part(0f, -0.08f, 0f, 0.04f, 0.17f, 0.06f, cHorn); pop()
+            push(); tr(side * 0.27f, -0.2f, 0f); rot(-side * 30f, 0f, 0f, 1f); part(0f, 0.05f, 0f, 0.03f, 0.1f, 0.05f, cHorn); pop()
+        }
+        val gemPulse = 0.6f + 0.4f * sin(time * 3f)
+        glowPart(0f, -0.23f, 0.08f, 0.06f, 0.06f, 0.02f, (if (p2) 1.6f else 0.9f) * gemPulse, (if (p2) 0.5f else 0.12f) * gemPulse, 0.05f)
+        glowPart(0f, -0.23f, -0.08f, 0.06f, 0.06f, 0.02f, (if (p2) 1.6f else 0.9f) * gemPulse, (if (p2) 0.5f else 0.12f) * gemPulse, 0.05f)
+        // The blade: a thick slab, darker fuller on both faces
+        part(0f, -1.17f, 0.02f, 0.13f, 1.8f, 0.28f, cBossBlade, M_METAL, 1.3f)
+        part(0.066f, -1.05f, 0.02f, 0.012f, 1.45f, 0.08f, cFuller)
+        part(-0.066f, -1.05f, 0.02f, 0.012f, 1.45f, 0.08f, cFuller)
+        // Runes running down the fuller, flickering in sequence
+        for (k in 0 until 7) {
+            val y = -0.42f - k * 0.2f
+            val fl = (0.35f + 0.65f * kotlin.math.max(0f, sin(time * 4f - k * 0.9f))) * (if (p2) 1.5f else 0.7f)
+            glowPart(0.074f, y, 0.02f, 0.008f, 0.07f, 0.045f, fl, fl * (if (p2) 0.35f else 0.15f), fl * (if (p2) 0.05f else 0.1f))
+            glowPart(-0.074f, y, 0.02f, 0.008f, 0.07f, 0.045f, fl, fl * (if (p2) 0.35f else 0.15f), fl * (if (p2) 0.05f else 0.1f))
+        }
+        // Serrated back edge
+        for (k in 0 until 10) { push(); tr(0f, -0.45f - k * 0.15f, 0.165f); rot(45f, 1f, 0f, 0f); part(0f, 0f, 0f, 0.09f, 0.07f, 0.07f, cBossBlade, M_METAL, 1.1f); pop() }
+        // Cutting edge: a bright bevel (burns in phase two)
+        if (p2) glowPart(0f, -1.17f, -0.125f, 0.05f, 1.75f, 0.03f, 1.1f, 0.35f, 0.05f)
+        else part(0f, -1.17f, -0.125f, 0.05f, 1.75f, 0.03f, blade, M_METAL, 1.8f)
+        // A chipped, angled tip and a crack near the end
+        push(); tr(0f, -2.08f, 0.0f); rot(32f, 1f, 0f, 0f); part(0f, -0.08f, 0f, 0.12f, 0.26f, 0.17f, cBossBlade, M_METAL, 1.3f); pop()
+        part(0.067f, -1.75f, 0.06f, 0.006f, 0.014f, 0.16f, cBlack); part(-0.067f, -1.68f, -0.02f, 0.006f, 0.012f, 0.12f, cBlack)
     }
 
     private var eyeGlow = 0f
@@ -854,7 +1027,10 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         tr(b.x, b.y - sink, b.z)
         rot(deg(b.yaw), 0f, 1f, 0f)
         scl(2.7f, 2.7f, 2.7f)
-        drawHumanoid(pose, isBoss = true)
+        if (!poseInit) shownBoss.copyFrom(pose)
+        else shownBoss.blendToward(pose, 1f - kotlin.math.exp(-frameDt * 17f))
+        poseInit = true
+        drawHumanoid(shownBoss, isBoss = true)
         emitR = 0f; emitG = 0f; emitB = 0f
     }
 
@@ -961,19 +1137,29 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
     }
 
     companion object {
+        const val M_STONE = 0
+        const val M_METAL = 1
+        const val M_CLOTH = 2
+        const val M_NONE = 3
+
         const val VS = """
             uniform mat4 uMVP;
             uniform mat4 uModel;
+            uniform vec3 uTexScale;
             attribute vec3 aPos;
             attribute vec3 aNor;
             attribute vec3 aCol;
             varying vec3 vCol;
             varying vec3 vNor;
             varying vec3 vWorld;
+            varying vec3 vLocal;
+            varying vec3 vLNor;
             void main() {
                 vec4 w = uModel * vec4(aPos, 1.0);
                 vWorld = w.xyz;
                 vNor = (uModel * vec4(aNor, 0.0)).xyz;
+                vLocal = aPos * uTexScale;
+                vLNor = aNor;
                 vCol = aCol;
                 gl_Position = uMVP * vec4(aPos, 1.0);
             }
@@ -988,19 +1174,44 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
             uniform float uAlpha;
             uniform vec3 uPL[4];
             uniform vec3 uPC[4];
+            uniform sampler2D uTex;
+            uniform float uMat;
+            uniform float uLocal;
+            uniform float uSpec;
+            uniform float uTexK;
             varying vec3 vCol;
             varying vec3 vNor;
             varying vec3 vWorld;
+            varying vec3 vLocal;
+            varying vec3 vLNor;
             void main() {
                 vec3 n = normalize(vNor);
-                vec3 base = vCol * uTint;
+                float m = 0.75;
+                if (uMat < 2.5) {
+                    // Texture projected from three sides (no UVs needed)
+                    vec3 p = mix(vWorld * uTexK, vLocal, uLocal);
+                    vec3 an = abs(normalize(mix(vNor, vLNor, uLocal)));
+                    an = an / (an.x + an.y + an.z);
+                    vec4 tx = texture2D(uTex, p.yz) * an.x + texture2D(uTex, p.xz) * an.y + texture2D(uTex, p.xy) * an.z;
+                    m = uMat < 0.5 ? tx.r : (uMat < 1.5 ? tx.g : tx.b);
+                }
+                vec3 base = vCol * uTint * (0.45 + 0.75 * m);
+                vec3 V = normalize(uCam - vWorld);
                 float dif = max(dot(n, -uLight), 0.0);
+                float shin = uSpec * (0.3 + m);
+                vec3 H = normalize(V - uLight);
                 vec3 c = base * (vec3(0.16, 0.18, 0.25) + vec3(0.55, 0.6, 0.78) * dif);
+                c += vec3(0.45, 0.5, 0.65) * pow(max(dot(n, H), 0.0), 30.0) * shin * dif;
                 for (int i = 0; i < 4; i++) {
                     vec3 L = uPL[i] - vWorld;
                     float d = length(L);
-                    c += base * uPC[i] * max(dot(n, L / d), 0.0) / (1.0 + d * d * 0.06);
+                    vec3 l = L / d;
+                    float att = 1.0 / (1.0 + d * d * 0.06);
+                    c += base * uPC[i] * max(dot(n, l), 0.0) * att;
+                    c += uPC[i] * pow(max(dot(n, normalize(l + V)), 0.0), 24.0) * shin * 0.45 * att;
                 }
+                // Cool rim light so figures stand out from the dark
+                c += vec3(0.12, 0.16, 0.26) * pow(1.0 - max(dot(n, V), 0.0), 3.0) * uLocal;
                 c += uEmit;
                 float f = clamp((length(vWorld - uCam) - 14.0) / 40.0, 0.0, 1.0);
                 c = mix(c, uFog, f);
