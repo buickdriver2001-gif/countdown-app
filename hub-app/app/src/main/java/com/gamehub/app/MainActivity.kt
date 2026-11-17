@@ -83,8 +83,22 @@ class MainActivity : Activity() {
             .show()
     }
 
+    /** Saves a new position for an app (the order is kept by package name). */
+    private fun moveApp(from: Int, to: Int) {
+        val pkgs = hub.games.map { it.pkg }.toMutableList()
+        val p = pkgs.removeAt(from); pkgs.add(to, p)
+        prefs.edit().putString("order", pkgs.joinToString(",")).apply()
+        refresh()
+    }
+
     private fun refresh() {
-        val list = buildList()
+        val list = buildList().toMutableList()
+        val order = prefs.getString("order", "")!!.split(",").filter { it.isNotBlank() }
+        if (order.isNotEmpty()) {
+            // Saved order first; anything new goes at the end in its usual place
+            val natural = list.withIndex().associate { it.value.pkg to it.index }
+            list.sortBy { g -> order.indexOf(g.pkg).let { if (it < 0) 10_000 + (natural[g.pkg] ?: 0) else it } }
+        }
         for (g in list) g.installed = packageManager.getLaunchIntentForPackage(g.pkg) != null
         hub.games = list
     }
@@ -135,7 +149,7 @@ class MainActivity : Activity() {
             finish()
             return
         }
-        hub = HubView(this, builtIn, { open(it) }, { pickGame() }, { appOptions(it) }, sfx, { homeSettings() })
+        hub = HubView(this, builtIn, { open(it) }, { pickGame() }, { appOptions(it) }, sfx, { homeSettings() }, { from, to -> moveApp(from, to) })
         setContentView(hub)
         // Full screen: no status bar, no navigation buttons (swipe from an edge to peek at them)
         if (android.os.Build.VERSION.SDK_INT >= 28) window.attributes.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES

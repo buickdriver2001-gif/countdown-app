@@ -35,7 +35,7 @@ class GameEntry(val name: String, val pkg: String, val tagline: String, val acce
 @SuppressLint("ViewConstructor")
 class HubView(context: Context, var games: List<GameEntry>, private val onPick: (GameEntry) -> Unit,
               private val onAdd: () -> Unit, private val onRemove: (GameEntry) -> Unit, private val sfx: Sfx,
-              private val onSettings: () -> Unit) : View(context) {
+              private val onSettings: () -> Unit, private val onReorder: (Int, Int) -> Unit) : View(context) {
 
     private val d = resources.displayMetrics.density
     private val rnd = Random(3)
@@ -465,12 +465,24 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         var y = startY - scroll
         c.save()
         c.clipRect(0f, listTop - 6 * d, w, listBottom + 6 * d)
+        if (animY.size != games.size) animY = FloatArray(games.size) { Float.NaN }
+        // While an app is being moved, the others slide to make a gap where it will land
+        val target = if (moveIndex >= 0) moveTarget(startY, rowH + gap) else -1
+        val k = min(1f, dt * 16f)
         for ((i, g) in games.withIndex()) {
-            val r = RectF(left, y, right, y + rowH)
-            rows.add(r)
-            if (r.bottom > listTop - 10 * d && r.top < listBottom + 10 * d) drawRow(c, g, r, i == selected, a)
+            var slot = i
+            if (moveIndex >= 0 && i != moveIndex) {
+                if (i > moveIndex && i <= target) slot = i - 1
+                if (i < moveIndex && i >= target) slot = i + 1
+            }
+            val wantY = startY + slot * (rowH + gap) - scroll
+            animY[i] = if (animY[i].isNaN() || moveIndex < 0 && !settling) wantY else animY[i] + (wantY - animY[i]) * k
+            val r = RectF(left, animY[i], right, animY[i] + rowH)
+            rows.add(RectF(left, y, right, y + rowH))
+            if (i != moveIndex && r.bottom > listTop - 10 * d && r.top < listBottom + 10 * d) drawRow(c, g, r, i == selected && moveIndex < 0, a)
             y += rowH + gap
         }
+        if (settling) { settleT -= dt; if (settleT <= 0f) settling = false }
         val ar = RectF(left, y, right, y + addH)
         rows.add(ar)
         val addSel = selected == games.size
@@ -484,6 +496,20 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.color = Color.argb(((if (addSel) 255 else 190) * a).toInt(), 170, 205, 255)
         c.drawText(if (addSel) "TAP AGAIN TO ADD AN APP" else "+  ADD AN APP", ar.centerX(), ar.centerY() + 5 * d, text)
         c.restore()
+        // The app being moved floats above everything, a little bigger and glowing
+        if (moveIndex in games.indices) {
+            // Scroll when dragging near the top or bottom of the list
+            if (moveY < listTop + 50 * d) scroll = max(0f, scroll - dt * 600f * d / 2.6f)
+            if (moveY > listBottom - 50 * d) scroll = min(maxScroll, scroll + dt * 600f * d / 2.6f)
+            val top = moveY - moveGrab
+            val r = RectF(left, top, right, top + rowH)
+            c.save(); c.scale(1.04f, 1.04f, r.centerX(), r.centerY())
+            fill.shader = RadialGradient(r.centerX(), r.centerY(), r.width() * 0.7f, intArrayOf(Color.argb(90, 90, 150, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+            c.drawRect(r.left - 30 * d, r.top - 30 * d, r.right + 30 * d, r.bottom + 30 * d, fill); fill.shader = null
+            fill.color = Color.argb(200, 6, 12, 30); c.drawRoundRect(r, 6 * d, 6 * d, fill)
+            drawRow(c, games[moveIndex], r, true, a)
+            c.restore()
+        }
         // Soft fades where the list scrolls under the edges
         if (maxScroll > 0f) {
             fill.shader = LinearGradient(0f, listTop - 6 * d, 0f, listTop + 24 * d, intArrayOf(Color.rgb(4, 8, 24), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
@@ -500,8 +526,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.textAlign = Paint.Align.CENTER
         text.textSize = 10.5f * d; text.letterSpacing = 0.12f
         text.color = Color.argb((110 * a).toInt(), 160, 185, 230)
-        val hint = if (selected in games.indices) "TAP AGAIN TO OPEN" else "TAP TO SELECT"
-        c.drawText(if (games.any { it.custom }) "$hint  ·  HOLD AN ADDED APP FOR OPTIONS" else hint, w / 2, h - 26 * d, text)
+        val hint = when { moveIndex >= 0 -> "DRAG TO MOVE  ·  LET GO TO DROP"; selected in games.indices -> "TAP AGAIN TO OPEN"; else -> "TAP TO SELECT" }
+        c.drawText(if (moveIndex < 0) "$hint  ·  HOLD TO MOVE" else hint, w / 2, h - 26 * d, text)
     }
 
     private val gearRect = RectF()
@@ -514,6 +540,25 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             val a = k / 8f * 6.283f
             c.drawLine(cx + cos(a) * r * 0.62f, cy + sin(a) * r * 0.62f, cx + cos(a) * r, cy + sin(a) * r, line)
         }
+    }
+
+    // Moving apps (hold, then drag)
+    private var moveIndex = -1
+    private var moveY = 0f
+    private var moveGrab = 0f
+    private var movedWhileHeld = false
+    private var animY = FloatArray(0)
+    private var settling = false
+    private var settleT = 0f
+    private var lastTarget = -1
+
+    /** Which slot the dragged app would land in. */
+    private fun moveTarget(startY: Float, step: Float): Int {
+        val centre = moveY - moveGrab + (76 * d) / 2
+        val slot = ((centre + scroll - startY) / step).toInt()
+        val tgt = slot.coerceIn(0, games.size - 1)
+        if (tgt != lastTarget) { if (lastTarget >= 0) sfx.tick(); lastTarget = tgt }
+        return tgt
     }
 
     /** Thin L-shaped corner mark. */
@@ -629,13 +674,19 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private var downX = 0f; private var downY = 0f; private var lastY = 0f
     private var tracker: android.view.VelocityTracker? = null
     private val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+    /** Hold: the app lifts up and can be dragged to a new spot (or, if you let go without moving, options). */
     private val longPress = Runnable {
         val r = downRow
-        if (!dragging && r in games.indices && games[r].custom) {
+        if (!dragging && r in games.indices) {
             longFired = true
-            selected = r
+            moveIndex = r
+            moveY = lastY
+            moveGrab = lastY - (rows.getOrNull(r)?.top ?: lastY)
+            movedWhileHeld = false
+            lastTarget = r
+            selected = -1
             performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
-            onRemove(games[r])
+            sfx.tick()
         }
     }
 
@@ -658,6 +709,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 if (downRow in games.indices) postDelayed(longPress, 600)
             }
             MotionEvent.ACTION_MOVE -> {
+                if (moveIndex >= 0) {
+                    moveY = e.y
+                    if (kotlin.math.abs(e.y - downY) > slop) movedWhileHeld = true
+                    lastY = e.y
+                    return true
+                }
                 if (!dragging && (kotlin.math.abs(e.y - downY) > slop || kotlin.math.abs(e.x - downX) > slop)) {
                     dragging = true
                     removeCallbacks(longPress)
@@ -672,6 +729,23 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             }
             MotionEvent.ACTION_UP -> {
                 removeCallbacks(longPress)
+                if (moveIndex >= 0) {
+                    val from = moveIndex
+                    val to = lastTarget.coerceIn(0, games.size - 1)
+                    moveIndex = -1
+                    if (!movedWhileHeld) { if (games[from].custom) onRemove(games[from]) }
+                    else if (to != from) {
+                        // Keep the slide smooth: carry the animated positions over to the new order
+                        val list = animY.toMutableList(); val v = list.removeAt(from); list.add(to, moveY - moveGrab)
+                        animY = list.toFloatArray()
+                        settling = true; settleT = 0.4f
+                        onReorder(from, to)
+                        sfx.confirm()
+                    } else { settling = true; settleT = 0.4f; animY[from] = moveY - moveGrab }
+                    downRow = -1; dragging = false
+                    tracker?.recycle(); tracker = null
+                    return true
+                }
                 if (dragging) {
                     tracker?.computeCurrentVelocity(1000)
                     scrollVel = -(tracker?.yVelocity ?: 0f)
@@ -693,7 +767,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 downRow = -1
                 tracker?.recycle(); tracker = null
             }
-            MotionEvent.ACTION_CANCEL -> { removeCallbacks(longPress); dragging = false; downRow = -1; tracker?.recycle(); tracker = null }
+            MotionEvent.ACTION_CANCEL -> { removeCallbacks(longPress); moveIndex = -1; dragging = false; downRow = -1; tracker?.recycle(); tracker = null }
         }
         return true
     }
