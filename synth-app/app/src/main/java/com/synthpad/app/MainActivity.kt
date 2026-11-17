@@ -173,7 +173,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        top.addView(chip("⌂") { HubLink.open(this) }.apply { contentDescription = "Back to Game Hub" })
+        top.addView(chip("⌂") { HubLink.open(this) }.apply { contentDescription = "Back to NEXUS" })
         top.addView(TextView(this).apply {
             text = "SYNTHPAD"
             setTextColor(Theme.ACCENT)

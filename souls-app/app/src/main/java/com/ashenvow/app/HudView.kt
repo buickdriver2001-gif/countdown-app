@@ -56,7 +56,7 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
     private var lastFrame = 0L
 
     @Volatile var vibrate = true
-    /** Opens the Game Hub (set by the activity). */
+    /** Opens the NEXUS (set by the activity). */
     var onHub: () -> Unit = {}
     private val hubRect = RectF()
     private val pauseHubRect = RectF()
@@ -166,10 +166,10 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         phaseMsg = (phaseMsg - dt).coerceAtLeast(0f)
 
         when (g.screen) {
-            Screen.TITLE -> { drawTitle(c); hubButton(c, hubRect, "⌂  Game Hub") }
+            Screen.TITLE -> { drawTitle(c); hubButton(c, hubRect, "⌂  NEXUS") }
             Screen.FIGHT -> drawFight(c, dt)
-            Screen.DIED -> { drawFight(c, dt, controls = false); drawBanner(c, "YOU DIED", Color.rgb(170, 20, 20), "Tap to try again"); hubButton(c, hubRect, "⌂  Game Hub") }
-            Screen.WON -> { drawFight(c, dt, controls = false); drawBanner(c, "ENEMY FELLED", Color.rgb(222, 184, 92), "Tap to fight again"); hubButton(c, hubRect, "⌂  Game Hub") }
+            Screen.DIED -> { drawFight(c, dt, controls = false); drawBanner(c, "YOU DIED", Color.rgb(170, 20, 20), "Tap to try again"); hubButton(c, hubRect, "⌂  NEXUS") }
+            Screen.WON -> { drawFight(c, dt, controls = false); drawBanner(c, "ENEMY FELLED", Color.rgb(222, 184, 92), "Tap to fight again"); hubButton(c, hubRect, "⌂  NEXUS") }
         }
         postInvalidateOnAnimation()
     }
@@ -292,7 +292,7 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
             c.drawText("PAUSED", w / 2, h * 0.45f, serif)
             text.textSize = 15 * d; text.color = Color.LTGRAY
             c.drawText("Tap to keep fighting", w / 2, h * 0.45f + 34 * d, text)
-            hubButton(c, pauseHubRect, "⌂  Back to Game Hub")
+            hubButton(c, pauseHubRect, "⌂  Back to NEXUS")
         }
     }
 

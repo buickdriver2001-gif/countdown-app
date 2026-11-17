@@ -62,7 +62,7 @@ class MainActivity : Activity() {
         if (apps.isEmpty()) { Toast.makeText(this, "No other apps found", Toast.LENGTH_SHORT).show(); return }
         val labels = apps.map { (if (it.third) "🎮  " else "      ") + it.second }.toTypedArray()
         android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle("Add a game")
+            .setTitle("Add to NEXUS")
             .setItems(labels) { _, which ->
                 val pkg = apps[which].first
                 prefs.edit().putString("custom", (customPkgs() + pkg).joinToString(",")).apply()
@@ -76,7 +76,7 @@ class MainActivity : Activity() {
     private fun removeGame(g: GameEntry) {
         android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle("Remove ${g.name} from the hub?")
-            .setMessage("This only removes it from Game Hub. The app stays on your phone.")
+            .setMessage("This only removes it from NEXUS. The app stays on your phone.")
             .setPositiveButton("Remove") { _, _ ->
                 prefs.edit().putString("custom", customPkgs().filter { it != g.pkg }.joinToString(",")).apply()
                 refresh()

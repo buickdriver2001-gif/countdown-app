@@ -185,7 +185,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             text.letterSpacing = 0.9f - 0.55f * k
             text.setShadowLayer(18 * d, 0f, 0f, Color.argb(a, 80, 150, 255))
             text.color = Color.argb(a, 240, 246, 255)
-            c.drawText("GAME HUB", cx0, cy0 + 12 * d, text)
+            c.drawText("NEXUS", cx0, cy0 + 12 * d, text)
             text.setShadowLayer(0f, 0f, 0f, 0)
             text.letterSpacing = 0.15f
         }
@@ -306,11 +306,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.letterSpacing = 0.35f
         text.setShadowLayer(14 * d, 0f, 0f, Color.argb((255 * a).toInt(), 70, 140, 255))
         text.color = Color.argb((255 * a).toInt(), 235, 242, 255)
-        c.drawText("GAME HUB", w / 2, h * 0.14f, text)
+        c.drawText("NEXUS", w / 2, h * 0.14f, text)
         text.letterSpacing = 0.15f
         text.textSize = 12 * d
         text.color = Color.argb((170 * a).toInt(), 160, 190, 240)
-        c.drawText("SELECT A GAME", w / 2, h * 0.14f + 26 * d, text)
+        c.drawText("SELECT AN APP", w / 2, h * 0.14f + 26 * d, text)
         text.setShadowLayer(0f, 0f, 0f, 0)
         // Clock
         text.textAlign = Paint.Align.RIGHT
@@ -367,12 +367,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             text.textAlign = Paint.Align.CENTER
             text.textSize = 16 * d; text.letterSpacing = 0.1f
             text.color = Color.argb((200 * a).toInt(), 170, 205, 255)
-            c.drawText("+  Add a game from your phone", r.centerX(), r.centerY() + 6 * d, text)
+            c.drawText("+  Add an app from your phone", r.centerX(), r.centerY() + 6 * d, text)
         }
         text.textAlign = Paint.Align.CENTER
         text.textSize = 11 * d
         text.color = Color.argb((110 * a).toInt(), 160, 185, 230)
-        c.drawText(if (games.any { it.custom }) "Tap a game to play  ·  hold an added game to remove it" else "Tap a game to play", w / 2, h - 28 * d, text)
+        c.drawText(if (games.any { it.custom }) "Tap to open  ·  hold an added app to remove it" else "Tap to open", w / 2, h - 28 * d, text)
     }
 
     private fun drawIcon(c: Canvas, g: GameEntry, r: RectF, a: Float) {

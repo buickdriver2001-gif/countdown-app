@@ -27,7 +27,7 @@ class CrashActivity : Activity() {
             setPadding((20 * d).toInt(), (20 * d).toInt(), (20 * d).toInt(), (12 * d).toInt())
         }
         root.addView(TextView(this).apply {
-            text = "Game Hub hit an error"
+            text = "NEXUS hit an error"
             textSize = 20f
             setTextColor(Color.parseColor("#FF3B3B"))
         })
@@ -54,7 +54,7 @@ class CrashActivity : Activity() {
             text = "Copy"
             setOnClickListener {
                 getSystemService(ClipboardManager::class.java)
-                    ?.setPrimaryClip(ClipData.newPlainText("Game Hub error", report))
+                    ?.setPrimaryClip(ClipData.newPlainText("NEXUS error", report))
                 Toast.makeText(this@CrashActivity, "Copied", Toast.LENGTH_SHORT).show()
             }
         })

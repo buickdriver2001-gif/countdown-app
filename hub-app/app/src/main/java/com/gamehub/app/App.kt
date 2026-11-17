@@ -32,7 +32,7 @@ class App : Application() {
         fun saveCrash(ctx: android.content.Context, where: String, error: Throwable) {
             try {
                 crashFile(ctx).writeText(
-                    "Game Hub error ($where)\nAndroid ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), " +
+                    "NEXUS error ($where)\nAndroid ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), " +
                         "${Build.MANUFACTURER} ${Build.MODEL}\n\n" + Log.getStackTraceString(error)
                 )
             } catch (_: Exception) {
