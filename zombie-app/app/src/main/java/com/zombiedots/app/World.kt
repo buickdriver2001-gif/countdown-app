@@ -227,12 +227,7 @@ class World(private val rnd: Random = Random.Default) {
 
     // ------------------------------------------------------------------ setup
 
-    /** Changes every new game so the city map is redrawn. */
-    var mapSeed = 1
-        private set
-
     fun reset() {
-        mapSeed++
         zombies.clear(); humans.clear(); tracers.clear(); splats.clear(); nukes.clear(); texts.clear()
         airstrikes.clear(); blasts.clear(); airstrikeCooldown = 0f
         phase = Phase.SETUP
