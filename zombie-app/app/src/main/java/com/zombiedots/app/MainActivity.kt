@@ -110,8 +110,8 @@ class MainActivity : Activity(), GameView.Listener {
         applyScale()
 
         updateHud()
-        if (!prefs.getBoolean("seenHelp", false)) {
-            prefs.edit().putBoolean("seenHelp", true).apply()
+        if (!prefs.getBoolean("seenTutorialV2", false)) {
+            prefs.edit().putBoolean("seenTutorialV2", true).apply()
             openTutorial(null)
         }
         handler.post(hudTick)
