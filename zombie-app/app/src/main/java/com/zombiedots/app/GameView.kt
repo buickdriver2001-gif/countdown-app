@@ -119,9 +119,45 @@ class GameView(context: Context, private val listener: Listener) : View(context)
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        world.width = w / d
-        world.height = h / d
+        if (!globeMode) {
+            world.width = w / d
+            world.height = h / d
+        }
     }
+
+    // ---------- globe mode
+
+    var globeMode = false
+        private set
+    private val globe = GlobeRenderer(world, d)
+    private var lastDragX = 0f
+    private var lastDragY = 0f
+
+    /** Switches between the flat map and the planet. Starts a fresh game. */
+    fun setGlobe(on: Boolean) {
+        globeMode = on
+        world.wrapX = on
+        if (on) {
+            world.width = GlobeRenderer.WORLD_W
+            world.height = GlobeRenderer.WORLD_H
+        } else if (width > 0) {
+            world.width = width / d
+            world.height = height / d
+        }
+        world.reset()
+        invalidate()
+    }
+
+    /** Screen point to world coordinates for the current mode (null if it misses the planet). */
+    private fun toWorld(px: Float, py: Float): Pair<Float, Float>? =
+        if (globeMode) globe.unproject(px, py) else (px / d) to (py / d)
+
+    private val pinch = android.view.ScaleGestureDetector(context, object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScale(det: android.view.ScaleGestureDetector): Boolean {
+            if (globeMode) globe.pinch(det.scaleFactor)
+            return true
+        }
+    })
 
     // ---------- actions from buttons
 
@@ -161,7 +197,10 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         override fun onDown(e: MotionEvent) = true
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            if (world.phase == Phase.SETUP && !paused) startAt(e.x, e.y)
+            if (world.phase == Phase.SETUP && !paused) {
+                val p = toWorld(e.x, e.y)
+                if (p != null) { world.start(p.first, p.second); paused = false }
+            }
             if (cureMode && world.phase == Phase.RUNNING && !paused) {
                 // Pick the survivor nearest the tap (generous so moving dots are easy to hit)
                 val tx = e.x / d; val ty = e.y / d
@@ -174,7 +213,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
 
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
             if (world.phase == Phase.RUNNING && !paused && tapAddsZombies && !planeAimRequested && !cureMode) {
-                world.dropZombies(e.x / d, e.y / d)
+                toWorld(e.x, e.y)?.let { world.dropZombies(it.first, it.second) }
             }
             return true
         }
@@ -186,6 +225,8 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = event.x; downY = event.y
+                lastDragX = event.x; lastDragY = event.y
+                if (globeMode) globe.lastTouch = System.currentTimeMillis()
                 aiming = false
                 multiTouch = false
             }
@@ -199,12 +240,21 @@ class GameView(context: Context, private val listener: Listener) : View(context)
                         aimSX = downX; aimSY = downY
                     }
                     if (aiming) { aimEX = event.x; aimEY = event.y }
+                } else if (globeMode && !multiTouch && !pinch.isInProgress) {
+                    // Spin the planet
+                    globe.drag(event.x - lastDragX, event.y - lastDragY)
                 }
+                lastDragX = event.x; lastDragY = event.y
             }
             MotionEvent.ACTION_UP -> {
                 if (aiming) {
                     aiming = false
-                    if (world.airstrike(aimSX / d, aimSY / d, aimEX / d, aimEY / d)) {
+                    val a = toWorld(aimSX, aimSY)
+                    val b = toWorld(aimEX, aimEY)
+                    // On the globe, aim the short way around
+                    val launched = a != null && b != null &&
+                        world.airstrike(a.first, a.second, a.first + world.wx(b.first - a.first), b.second)
+                    if (launched) {
                         planeAimRequested = false
                         buzz(Haptics.Kind.PLANE)
                         listener.onAirstrikeLaunched()
@@ -214,6 +264,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
             }
             MotionEvent.ACTION_CANCEL -> aiming = false
         }
+        if (globeMode) pinch.onTouchEvent(event)
         gestures.onTouchEvent(event)
         return true
     }
@@ -228,7 +279,10 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         if (flash > 0f) flash = max(0f, flash - dt * 2.2f)
 
         checkEvents()
-        drawWorld(canvas)
+        if (globeMode) {
+            globe.follow(dt)
+            drawGlobeWorld(canvas)
+        } else drawWorld(canvas)
         if (world.phase == Phase.SETUP) drawSetupHint(canvas)
         if (!covered) postInvalidateOnAnimation()
     }
@@ -361,20 +415,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         if (aiming) drawAim(c)
 
         for (t in world.texts) {
-            when {
-                t.text.startsWith("WAVE") -> { floatPaint.color = zombieColor; floatPaint.textSize = 18 * d }
-                t.text == "BEHEMOTH DOWN!" -> { floatPaint.color = Color.parseColor("#FFD27A"); floatPaint.textSize = 20 * d }
-                t.text.startsWith("⚠") -> { floatPaint.color = Color.parseColor("#FF5A4A"); floatPaint.textSize = 17 * d }
-                t.text.startsWith("ROUND") -> { floatPaint.color = Color.parseColor("#9CFF4D"); floatPaint.textSize = 15 * d }
-                t.text.endsWith("zombies") -> { floatPaint.color = Color.parseColor("#FFB0A0"); floatPaint.textSize = 12 * d }
-                t.text == "+1 HP" -> { floatPaint.color = Color.parseColor("#4BE36B"); floatPaint.textSize = 12 * d }
-                t.text == "cured!" -> { floatPaint.color = Color.parseColor("#F08BE0"); floatPaint.textSize = 12 * d }
-                t.text == "armor broke" -> { floatPaint.color = Color.parseColor("#C9D1DC"); floatPaint.textSize = 10 * d }
-                t.text.startsWith("Survivor Joined") -> { floatPaint.color = hunterColor; floatPaint.textSize = 14 * d }
-                t.text.endsWith("turned!") -> { floatPaint.color = Color.parseColor("#9CFF4D"); floatPaint.textSize = 13 * d }
-                t.text.startsWith("+") -> { floatPaint.color = Color.parseColor("#FFB13B"); floatPaint.textSize = 18 * d }
-                else -> { floatPaint.color = Color.WHITE; floatPaint.textSize = 12 * d }
-            }
+            styleFloatText(t)
             floatPaint.alpha = (min(1f, t.life) * 255).toInt()
             c.drawText(t.text, t.x * d, t.y * d, floatPaint)
         }
@@ -406,8 +447,160 @@ class GameView(context: Context, private val listener: Listener) : View(context)
     }
     private val hintRing = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
 
-    /** Before the game starts: a pulsing "tap here" hint right on the map. */
+    /** Colour and size for the floating labels. */
+    private fun styleFloatText(t: FloatText) {
+        when {
+            t.text.startsWith("WAVE") -> { floatPaint.color = zombieColor; floatPaint.textSize = 18 * d }
+            t.text == "BEHEMOTH DOWN!" -> { floatPaint.color = Color.parseColor("#FFD27A"); floatPaint.textSize = 20 * d }
+            t.text.startsWith("⚠") -> { floatPaint.color = Color.parseColor("#FF5A4A"); floatPaint.textSize = 17 * d }
+            t.text.startsWith("ROUND") -> { floatPaint.color = Color.parseColor("#9CFF4D"); floatPaint.textSize = 15 * d }
+            t.text.endsWith("zombies") -> { floatPaint.color = Color.parseColor("#FFB0A0"); floatPaint.textSize = 12 * d }
+            t.text == "+1 HP" -> { floatPaint.color = Color.parseColor("#4BE36B"); floatPaint.textSize = 12 * d }
+            t.text == "cured!" -> { floatPaint.color = Color.parseColor("#F08BE0"); floatPaint.textSize = 12 * d }
+            t.text == "armor broke" -> { floatPaint.color = Color.parseColor("#C9D1DC"); floatPaint.textSize = 10 * d }
+            t.text.startsWith("Survivor Joined") -> { floatPaint.color = hunterColor; floatPaint.textSize = 14 * d }
+            t.text.endsWith("turned!") -> { floatPaint.color = Color.parseColor("#9CFF4D"); floatPaint.textSize = 13 * d }
+            t.text.startsWith("+") -> { floatPaint.color = Color.parseColor("#FFB13B"); floatPaint.textSize = 18 * d }
+            else -> { floatPaint.color = Color.WHITE; floatPaint.textSize = 12 * d }
+        }
+        floatPaint.alpha = (min(1f, t.life) * 255).toInt()
+    }
+
+    // ---------------------------------------------------------------- globe drawing
+
+    private val gPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val gStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private var gPts = FloatArray(0)
+
+    /** Everything on the planet: scenery, splats, zombies, survivors, bullets, explosions, labels. */
+    private fun drawGlobeWorld(c: Canvas) {
+        val g = globe
+        g.drawPlanet(c, width, height)
+        val f = (g.scale / d).coerceIn(0.5f, 2.2f) // size factor that follows the zoom
+
+        for (sp in world.splats) {
+            if (!g.project(sp.x, sp.y)) continue
+            splatPaint.alpha = (min(1f, sp.life) * 200 * g.depth).toInt()
+            c.drawCircle(g.sx, g.sy, sp.size * d * f, splatPaint)
+        }
+
+        // Small zombies in batches, big ones one by one
+        val zs = world.zombies
+        if (gPts.size < zs.size * 2) gPts = FloatArray(zs.size * 4)
+        zombiePaint.strokeCap = if (shapes) Paint.Cap.SQUARE else Paint.Cap.ROUND
+        zombiePaint.strokeWidth = World.ZOMBIE_R * 2 * d * f
+        for (pass in 0..1) {
+            var k = 0
+            for (z in zs) {
+                if (z.type == ZType.FAT || z.type == ZType.ARMORED || z.type == ZType.BEHEMOTH) continue
+                if (z.runner != (pass == 1)) continue
+                if (!g.project(z.x, z.y)) continue
+                gPts[k++] = g.sx; gPts[k++] = g.sy
+            }
+            zombiePaint.color = if (pass == 1) runnerColor else zombieColor
+            if (k > 0) c.drawPoints(gPts, 0, k, zombiePaint)
+        }
+        for (z in zs) {
+            if (z.type != ZType.FAT && z.type != ZType.ARMORED && z.type != ZType.BEHEMOTH) continue
+            if (!g.project(z.x, z.y)) continue
+            val zx = g.sx; val zy = g.sy
+            when (z.type) {
+                ZType.BEHEMOTH -> drawBehemothAt(c, z, zx, zy, z.radius * g.scale)
+                ZType.FAT -> { bigZombie.color = fatColor; c.drawCircle(zx, zy, z.radius * d * f, bigZombie) }
+                else -> {
+                    bigZombie.color = zombieColor
+                    val r = z.radius * d * f
+                    c.drawCircle(zx, zy, r, bigZombie)
+                    if (z.armor > 0f) c.drawCircle(zx, zy, r + 2.2f * d * f, armorPaint)
+                }
+            }
+        }
+
+        // Bullets: a quick streak between the two ends when both are on the visible side
+        for (t in world.tracers) {
+            if (t.age > t.travel) continue
+            if (!g.project(t.x1, t.y1)) continue
+            val x1 = g.sx; val y1 = g.sy
+            val p = (t.age / t.travel).coerceIn(0f, 1f)
+            if (!g.project(t.x1 + world.wx(t.x2 - t.x1) * p, t.y1 + (t.y2 - t.y1) * p)) continue
+            bulletPaint.color = if (t.pellet) Color.parseColor("#FFE066") else if (t.tracerRound) Color.parseColor("#FFB15A") else Color.parseColor("#FFF1C2")
+            bulletPaint.strokeWidth = 1.4f * d
+            c.drawLine(x1 + (g.sx - x1) * 0.6f, y1 + (g.sy - y1) * 0.6f, g.sx, g.sy, bulletPaint)
+        }
+
+        for (h in world.humans) {
+            if (!g.project(h.x, h.y)) continue
+            drawGlobeHuman(c, h, g.sx, g.sy, f)
+        }
+
+        for (b in world.blasts) {
+            if (!g.project(b.x, b.y)) continue
+            val p = (b.age / 0.7f).coerceIn(0f, 1f)
+            blastPaint.style = Paint.Style.FILL
+            blastPaint.color = Color.argb(((1f - p) * 200).toInt(), 255, 140, 40)
+            c.drawCircle(g.sx, g.sy, World.BOMB_RADIUS * g.scale * (0.35f + 0.65f * sqrt(p)), blastPaint)
+        }
+        for (a in world.airstrikes) {
+            if (g.project(a.planeX, a.planeY)) {
+                gPaint.color = Color.parseColor("#D8DEE8")
+                c.drawCircle(g.sx, g.sy, 4f * d * f, gPaint)
+            }
+        }
+        for (n in world.nukes) {
+            if (n.age < 0.9f && g.project(n.x, n.y)) {
+                val p = n.age / 0.9f
+                gStroke.strokeWidth = 6 * d * (1f - p) + 1f
+                gStroke.color = Color.argb(((1f - p) * 255).toInt(), 255, 150, 40)
+                c.drawCircle(g.sx, g.sy, g.radius * 1.2f * p, gStroke)
+            }
+        }
+
+        g.drawShading(c)
+
+        if (aiming) drawAim(c)
+        for (t in world.texts) {
+            if (!g.project(t.x, t.y)) {
+                // Big announcements still show even if their spot is on the far side
+                if (!(t.text.startsWith("WAVE") || t.text.startsWith("ROUND") || t.text.startsWith("⚠") || t.text.startsWith("+"))) continue
+            }
+            val tx = if (g.depth > 0f) g.sx else width / 2f
+            val ty = if (g.depth > 0f) g.sy else height * 0.3f
+            styleFloatText(t)
+            c.drawText(t.text, tx, ty, floatPaint)
+        }
+        if (flash > 0f) c.drawColor(Color.argb((flash * 140).toInt(), 255, 240, 210))
+        if (nukeCountdown > 0) drawCountdown(c)
+    }
+
+    private fun drawGlobeHuman(c: Canvas, h: Human, hx: Float, hy: Float, f: Float) {
+        val base = when (h.role) { Role.PLAYER -> playerColor; Role.HUNTER -> hunterColor; Role.STRAY -> strayColor }
+        val inf = h.infection.coerceIn(0f, 1f)
+        val col = blend(base, zombieColor, inf * 0.85f)
+        glowPaint.color = if (h.hurtFlash > 0f) zombieColor else col
+        glowPaint.alpha = (55 + 120 * h.hurtFlash).toInt().coerceAtMost(255)
+        c.drawCircle(hx, hy, 10 * d * f, glowPaint)
+        corePaint.color = col
+        c.drawCircle(hx, hy, World.HUMAN_R * d * f, corePaint)
+        if (inf > 0.01f) {
+            infRect.set(hx - 8.5f * d * f, hy - 8.5f * d * f, hx + 8.5f * d * f, hy + 8.5f * d * f)
+            c.drawArc(infRect, -90f, 360f * inf, false, infPaint)
+        }
+        if (inf >= 0.75f) {
+            val pulse = 0.6f + 0.4f * kotlin.math.sin(System.currentTimeMillis() / 150.0).toFloat()
+            labelPaint.color = Color.argb((255 * pulse).toInt(), 255, 210, 60)
+            labelPaint.textSize = 14 * d
+            c.drawText("⚠", hx, hy - 12 * d * f, labelPaint)
+        }
+    }
+
     private fun drawSetupHint(c: Canvas) {
+        if (globeMode) {
+            hintPaint.textSize = 18 * d
+            c.drawText("👆 Tap the planet to drop your team", width / 2f, height - 46 * d, hintPaint)
+            hintPaint.textSize = 14 * d
+            c.drawText("Drag to spin  ·  pinch to zoom", width / 2f, height - 22 * d, hintPaint)
+            return
+        }
         val cx = width / 2f
         val cy = height / 2f
         val t = (System.currentTimeMillis() % 1600L) / 1600f
@@ -428,8 +621,9 @@ class GameView(context: Context, private val listener: Listener) : View(context)
     private val behemothPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val behemothRim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
 
-    private fun drawBehemoth(c: Canvas, z: Zombie, zx: Float, zy: Float) {
-        val r = z.radius * d
+    private fun drawBehemoth(c: Canvas, z: Zombie, zx: Float, zy: Float) = drawBehemothAt(c, z, zx, zy, z.radius * d)
+
+    private fun drawBehemothAt(c: Canvas, z: Zombie, zx: Float, zy: Float, r: Float) {
         val pulse = 0.5f + 0.5f * kotlin.math.sin(System.currentTimeMillis() / 400.0).toFloat()
         // Menacing glow
         behemothPaint.color = Color.argb((40 + 40 * pulse).toInt(), 255, 30, 30)

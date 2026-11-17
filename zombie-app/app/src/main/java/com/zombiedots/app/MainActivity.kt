@@ -80,6 +80,7 @@ class MainActivity : Activity(), GameView.Listener {
         game.tapAddsZombies = prefs.getBoolean("tapZombies", false)
         game.vibrate = prefs.getBoolean("vibrate", true)
         game.speed = prefs.getFloat("speed", 1f)
+        if (prefs.getBoolean("globe", false)) game.setGlobe(true)
         game.best = prefs.getFloat("best", 0f)
 
         val root = FrameLayout(this)
@@ -551,7 +552,8 @@ class MainActivity : Activity(), GameView.Listener {
         )
         tutorialPage("Last tips",
             card("⏩  The 1x button at the top changes the game speed. ❚❚ pauses the game."),
-            card("⚙  In Settings you can turn on bigger text and shapes (for colorblind players)."),
+            card("🌍  Try GLOBE MODE in Settings: the battle happens on a spinning planet. Drag to spin it, pinch to zoom, and it follows your team on its own."),
+            card("⚙  In Settings you can also turn on bigger text and shapes (for colorblind players)."),
             card("🏆  There's no last round. See how far your team can go!")
         )
 
@@ -634,6 +636,10 @@ class MainActivity : Activity(), GameView.Listener {
         })
         col.addView(toggle("Tapping the map adds more zombies (harder)", "tapZombies", game.tapAddsZombies) {
             game.tapAddsZombies = it
+        })
+        col.addView(toggle("🌍 Globe mode: play on a spinning planet (drag to spin, pinch to zoom). Starts a new game.", "globe", game.globeMode) {
+            game.setGlobe(it)
+            game.paused = false
         })
         col.addView(toggle("Vibration", "vibrate", game.vibrate) { game.vibrate = it; nukeBtn.vibrate = it })
         col.addView(menuRow("✔   Done", highlight = true) { show(returnTo) })
