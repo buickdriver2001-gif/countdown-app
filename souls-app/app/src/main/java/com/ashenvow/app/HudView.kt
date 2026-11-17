@@ -56,6 +56,10 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
     private var lastFrame = 0L
 
     @Volatile var vibrate = true
+    /** Opens the Game Hub (set by the activity). */
+    var onHub: () -> Unit = {}
+    private val hubRect = RectF()
+    private val pauseHubRect = RectF()
 
     private val vibrator: Vibrator? = try {
         if (Build.VERSION.SDK_INT >= 31) (context.getSystemService(VibratorManager::class.java))?.defaultVibrator
@@ -76,6 +80,8 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         place(buttons[A_HEAL], bx - 80 * d, by - 196 * d, 32 * d)
         place(buttons[A_LOCK], bx - 58 * d, by - 275 * d, 28 * d)
         place(buttons[A_PAUSE], bx - 36 * d, 34 * d, 22 * d)
+        hubRect.set(16 * d, 14 * d, 150 * d, 50 * d)
+        pauseHubRect.set(bx / 2 - 110 * d, by * 0.45f + 58 * d, bx / 2 + 110 * d, by * 0.45f + 102 * d)
     }
 
     // ------------------------------------------------------------------ touch
@@ -87,10 +93,14 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val x = e.getX(idx); val y = e.getY(idx); val id = e.getPointerId(idx)
                 if (game.screen != Screen.FIGHT) {
+                    if (hubRect.contains(x, y)) { onHub(); return true }
                     if (game.screen == Screen.TITLE || game.screenT > 1.5f) game.input.start.incrementAndGet()
                     return true
                 }
-                if (game.paused) { game.paused = false; return true }
+                if (game.paused) {
+                    if (pauseHubRect.contains(x, y)) onHub() else game.paused = false
+                    return true
+                }
                 val hit = buttons.firstOrNull { val dx = x - it.x; val dy = y - it.y; dx * dx + dy * dy < (it.r * 1.25f) * (it.r * 1.25f) }
                 if (hit != null) { press(hit); return true }
                 if (x < width * 0.45f && joyId == -1) {
@@ -156,10 +166,10 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         phaseMsg = (phaseMsg - dt).coerceAtLeast(0f)
 
         when (g.screen) {
-            Screen.TITLE -> drawTitle(c)
+            Screen.TITLE -> { drawTitle(c); hubButton(c, hubRect, "⌂  Game Hub") }
             Screen.FIGHT -> drawFight(c, dt)
-            Screen.DIED -> { drawFight(c, dt, controls = false); drawBanner(c, "YOU DIED", Color.rgb(170, 20, 20), "Tap to try again") }
-            Screen.WON -> { drawFight(c, dt, controls = false); drawBanner(c, "ENEMY FELLED", Color.rgb(222, 184, 92), "Tap to fight again") }
+            Screen.DIED -> { drawFight(c, dt, controls = false); drawBanner(c, "YOU DIED", Color.rgb(170, 20, 20), "Tap to try again"); hubButton(c, hubRect, "⌂  Game Hub") }
+            Screen.WON -> { drawFight(c, dt, controls = false); drawBanner(c, "ENEMY FELLED", Color.rgb(222, 184, 92), "Tap to fight again"); hubButton(c, hubRect, "⌂  Game Hub") }
         }
         postInvalidateOnAnimation()
     }
@@ -265,7 +275,17 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
             c.drawText("PAUSED", w / 2, h * 0.45f, serif)
             text.textSize = 15 * d; text.color = Color.LTGRAY
             c.drawText("Tap to keep fighting", w / 2, h * 0.45f + 34 * d, text)
+            hubButton(c, pauseHubRect, "⌂  Back to Game Hub")
         }
+    }
+
+    private fun hubButton(c: Canvas, r: RectF, label: String) {
+        fill.color = Color.argb(150, 20, 20, 24)
+        c.drawRoundRect(r, 10 * d, 10 * d, fill)
+        stroke.color = Color.argb(170, 230, 220, 200); stroke.strokeWidth = 1.5f * d
+        c.drawRoundRect(r, 10 * d, 10 * d, stroke)
+        text.textSize = 14 * d; text.color = Color.WHITE
+        c.drawText(label, r.centerX(), r.centerY() + 5 * d, text)
     }
 
     private fun bar(c: Canvas, x: Float, y: Float, w: Float, h: Float, frac: Float, ghost: Float, color: Int) {

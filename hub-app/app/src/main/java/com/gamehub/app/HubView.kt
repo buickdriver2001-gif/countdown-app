@@ -23,7 +23,8 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 /** One game in the hub. */
-class GameEntry(val name: String, val pkg: String, val tagline: String, val accent: Int, val icon: Int) {
+class GameEntry(val name: String, val pkg: String, val tagline: String, val accent: Int, val icon: Int,
+                val custom: Boolean = false, val drawable: android.graphics.drawable.Drawable? = null) {
     var installed = false
 }
 
@@ -32,7 +33,8 @@ class GameEntry(val name: String, val pkg: String, val tagline: String, val acce
  * drifting motes of light, and a simple glowing menu of games.
  */
 @SuppressLint("ViewConstructor")
-class HubView(context: Context, val games: List<GameEntry>, private val onPick: (GameEntry) -> Unit) : View(context) {
+class HubView(context: Context, var games: List<GameEntry>, private val onPick: (GameEntry) -> Unit,
+              private val onAdd: () -> Unit, private val onRemove: (GameEntry) -> Unit) : View(context) {
 
     private val d = resources.displayMetrics.density
     private val rnd = Random(3)
@@ -214,9 +216,13 @@ class HubView(context: Context, val games: List<GameEntry>, private val onPick: 
 
         // Game rows
         rows.clear()
-        val rowH = 84 * d; val gap = 16 * d
+        val count = games.size + 1
+        val top = h * 0.25f; val bottom = h - 56 * d
+        val gap = 12 * d
+        val rowH = min(84 * d, (bottom - top - gap * (count - 1)) / count).coerceAtLeast(52 * d)
         val left = 22 * d; val right = w - 22 * d
-        var y = h * 0.52f
+        val total = count * rowH + (count - 1) * gap
+        var y = max(top, top + (bottom - top - total) * 0.6f) - scrollY0
         for ((i, g) in games.withIndex()) {
             val r = RectF(left, y, right, y + rowH)
             rows.add(r)
@@ -245,10 +251,24 @@ class HubView(context: Context, val games: List<GameEntry>, private val onPick: 
             c.drawText(if (g.installed) g.tagline else "Not installed · tap to download", ic.right + 16 * d, y + rowH * 0.72f, text)
             y += rowH + gap
         }
+        // "+ Add a game" row
+        run {
+            val r = RectF(left, y, right, y + rowH * 0.8f)
+            rows.add(r)
+            line.strokeWidth = 1f * d
+            line.color = Color.argb((90 * a).toInt(), 140, 190, 255)
+            line.pathEffect = android.graphics.DashPathEffect(floatArrayOf(8 * d, 6 * d), 0f)
+            c.drawRoundRect(r, 10 * d, 10 * d, line)
+            line.pathEffect = null
+            text.textAlign = Paint.Align.CENTER
+            text.textSize = 16 * d; text.letterSpacing = 0.1f
+            text.color = Color.argb((200 * a).toInt(), 170, 205, 255)
+            c.drawText("+  Add a game from your phone", r.centerX(), r.centerY() + 6 * d, text)
+        }
         text.textAlign = Paint.Align.CENTER
         text.textSize = 11 * d
         text.color = Color.argb((110 * a).toInt(), 160, 185, 230)
-        c.drawText("Tap a game to play", w / 2, h - 28 * d, text)
+        c.drawText(if (games.any { it.custom }) "Tap a game to play  ·  hold an added game to remove it" else "Tap a game to play", w / 2, h - 28 * d, text)
     }
 
     private fun drawIcon(c: Canvas, g: GameEntry, r: RectF, a: Float) {
@@ -259,6 +279,13 @@ class HubView(context: Context, val games: List<GameEntry>, private val onPick: 
         c.drawRoundRect(r, 8 * d, 8 * d, line)
         val cxm = r.centerX(); val cym = r.centerY(); val u = r.width() / 10f
         val al = (255 * a).toInt()
+        if (g.drawable != null) {
+            val pad = 4 * d
+            g.drawable.setBounds((r.left + pad).toInt(), (r.top + pad).toInt(), (r.right - pad).toInt(), (r.bottom - pad).toInt())
+            g.drawable.alpha = al
+            g.drawable.draw(c)
+            return
+        }
         when (g.icon) {
             0 -> { // Zombie Dots: a gold leader, blue squad, red horde
                 fill.color = Color.argb(al, 255, 59, 59)
@@ -298,24 +325,35 @@ class HubView(context: Context, val games: List<GameEntry>, private val onPick: 
     // ------------------------------------------------------------------ touch
 
     private var downRow = -1
+    private var longFired = false
+    private val scrollY0 = 0f
+    private val longPress = Runnable {
+        val r = downRow
+        if (r in games.indices && games[r].custom) { longFired = true; performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); onRemove(games[r]) }
+    }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downRow = rows.indexOfFirst { it.contains(e.x, e.y) }
-                if (downRow >= 0) selected = downRow
+                longFired = false
+                if (downRow in games.indices) { selected = downRow; postDelayed(longPress, 600) }
             }
             MotionEvent.ACTION_UP -> {
+                removeCallbacks(longPress)
                 val r = rows.indexOfFirst { it.contains(e.x, e.y) }
-                if (r >= 0 && r == downRow && launchFlash <= 0f && t > 1.5f) {
-                    pending = games[r]
-                    launchFlash = 0.45f
+                if (!longFired && r >= 0 && r == downRow && launchFlash <= 0f && t > 1.5f) {
+                    if (r == games.size) onAdd()
+                    else {
+                        pending = games[r]
+                        launchFlash = 0.45f
+                    }
                     performClick()
                 }
                 downRow = -1
             }
-            MotionEvent.ACTION_CANCEL -> downRow = -1
+            MotionEvent.ACTION_CANCEL -> { removeCallbacks(longPress); downRow = -1 }
         }
         return true
     }

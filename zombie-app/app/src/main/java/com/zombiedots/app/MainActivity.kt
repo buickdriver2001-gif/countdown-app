@@ -458,6 +458,7 @@ class MainActivity : Activity(), GameView.Listener {
         updateSpeedRow()
         col.addView(menuRow("❓   How to play") { openTutorial(menuPanel) })
         col.addView(menuRow("⚙   Settings") { returnTo = menuPanel; show(settingsPanel) })
+        col.addView(menuRow("🏠   Back to Game Hub") { HubLink.open(this) })
         col.addView(menuRow("✕   Close menu") { closeMenu() })
         return frame
     }
@@ -671,6 +672,7 @@ class MainActivity : Activity(), GameView.Listener {
             (layoutParams as LinearLayout.LayoutParams).topMargin = dp(24f)
         })
         col.addView(menuRow("❓   How to play") { openTutorial(overPanel) })
+        col.addView(menuRow("🏠   Back to Game Hub") { HubLink.open(this) })
         return frame
     }
 

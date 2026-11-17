@@ -16,12 +16,74 @@ import kotlin.math.sin
 
 class MainActivity : Activity() {
 
-    private val games = listOf(
+    private val builtIn = listOf(
         GameEntry("Zombie Dots", "com.zombiedots.app", "Survive the endless horde", Color.rgb(255, 80, 80), 0),
         GameEntry("Ashen Vow", "com.ashenvow.app", "Defeat The Hollow Warden", Color.rgb(230, 150, 60), 1),
         GameEntry("SynthPad", "com.synthpad.app", "Make music with synths", Color.rgb(120, 220, 255), 2)
     )
     private lateinit var hub: HubView
+    private val prefs by lazy { getSharedPreferences("hub", MODE_PRIVATE) }
+
+    /** Games the player added from their phone, in the order they were added. */
+    private fun customPkgs(): List<String> = prefs.getString("custom", "")!!.split(",").filter { it.isNotBlank() }
+
+    private fun buildList(): List<GameEntry> {
+        val list = ArrayList(builtIn)
+        for (pkg in customPkgs()) {
+            try {
+                val info = packageManager.getApplicationInfo(pkg, 0)
+                val label = packageManager.getApplicationLabel(info).toString()
+                list.add(GameEntry(label, pkg, "On your phone", Color.rgb(170, 200, 255), -1, custom = true,
+                    drawable = packageManager.getApplicationIcon(pkg)))
+            } catch (_: Exception) { /* uninstalled since: skip it */ }
+        }
+        return list
+    }
+
+    private fun refresh() {
+        val list = buildList()
+        for (g in list) g.installed = packageManager.getLaunchIntentForPackage(g.pkg) != null
+        hub.games = list
+    }
+
+    /** Shows the apps on the phone (games first) so the player can add one to the hub. */
+    private fun pickGame() {
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val have = hub.games.map { it.pkg }.toSet() + packageName
+        val apps = packageManager.queryIntentActivities(launcher, 0)
+            .map { it.activityInfo.applicationInfo }
+            .distinctBy { it.packageName }
+            .filter { it.packageName !in have }
+            .map { info ->
+                val isGame = android.os.Build.VERSION.SDK_INT >= 26 && info.category == android.content.pm.ApplicationInfo.CATEGORY_GAME
+                Triple(info.packageName, packageManager.getApplicationLabel(info).toString(), isGame)
+            }
+            .sortedWith(compareBy({ !it.third }, { it.second.lowercase() }))
+        if (apps.isEmpty()) { Toast.makeText(this, "No other apps found", Toast.LENGTH_SHORT).show(); return }
+        val labels = apps.map { (if (it.third) "🎮  " else "      ") + it.second }.toTypedArray()
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Add a game")
+            .setItems(labels) { _, which ->
+                val pkg = apps[which].first
+                prefs.edit().putString("custom", (customPkgs() + pkg).joinToString(",")).apply()
+                refresh()
+                Toast.makeText(this, "${apps[which].second} added", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun removeGame(g: GameEntry) {
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Remove ${g.name} from the hub?")
+            .setMessage("This only removes it from Game Hub. The app stays on your phone.")
+            .setPositiveButton("Remove") { _, _ ->
+                prefs.edit().putString("custom", customPkgs().filter { it != g.pkg }.joinToString(",")).apply()
+                refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -30,15 +92,14 @@ class MainActivity : Activity() {
             finish()
             return
         }
-        hub = HubView(this, games) { open(it) }
+        hub = HubView(this, builtIn, { open(it) }, { pickGame() }, { removeGame(it) })
         setContentView(hub)
         if (savedInstanceState == null) Thread { playChime() }.start()
     }
 
     override fun onResume() {
         super.onResume()
-        for (g in games) g.installed = packageManager.getLaunchIntentForPackage(g.pkg) != null
-        if (::hub.isInitialized) hub.resumed()
+        if (::hub.isInitialized) { refresh(); hub.resumed() }
     }
 
     private fun open(g: GameEntry) {

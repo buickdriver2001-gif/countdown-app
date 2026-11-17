@@ -27,6 +27,7 @@ class MainActivity : Activity() {
             renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
         }
         val hud = HudView(this, game, renderer)
+        hud.onHub = { runOnUiThread { HubLink.open(this) } }
         val root = FrameLayout(this)
         root.addView(glView)
         root.addView(hud)
