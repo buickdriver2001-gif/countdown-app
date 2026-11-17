@@ -177,7 +177,8 @@ class GameView(context: Context, private val listener: Listener) : View(context)
             }
             MotionEvent.ACTION_POINTER_DOWN -> { multiTouch = true; aiming = false }
             MotionEvent.ACTION_MOVE -> {
-                if (!multiTouch && world.phase == Phase.RUNNING && !paused) {
+                // Swiping only aims the plane after the PLANE button was pressed
+                if (!multiTouch && planeAimRequested && world.phase == Phase.RUNNING && !paused) {
                     val dx = event.x - downX; val dy = event.y - downY
                     if (!aiming && dx * dx + dy * dy > (20 * d) * (20 * d)) {
                         aiming = true
