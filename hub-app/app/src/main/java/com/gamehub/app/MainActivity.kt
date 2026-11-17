@@ -65,15 +65,53 @@ class MainActivity : Activity() {
         ), input = g.tagline)
     }
 
-    /** Hold an added app (without moving it): change its description or take it off NEXUS. */
+    /** Hold an app (without moving it): tile size, and for added apps edit / remove. */
     private fun appOptions(g: GameEntry) {
-        NexusUi.panel(this, g.name, null, listOf(
+        val opts = ArrayList<NexusUi.Option>()
+        opts.add(NexusUi.Option("Tile size:  ${sizeName(g.tileW, g.tileH)}", primary = true) { chooseTileSize(g) })
+        opts.add(NexusUi.Option("Open") { open(g) })
+        if (!g.custom) {
+            NexusUi.panel(this, g.name, null, opts)
+            return
+        }
+        NexusUi.panel(this, g.name, null, opts + listOf(
             NexusUi.Option("Edit description") { editDescription(g) },
             NexusUi.Option("App info") {
                 try { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${g.pkg}"))) } catch (_: Exception) {}
             },
             NexusUi.Option("Remove from NEXUS", danger = true) { removeGame(g) }
         ))
+    }
+
+    private fun sizeName(w: Int, h: Int): String = when {
+        w >= hub.gridCols && h == 1 -> "Full row"
+        w == 1 && h == 1 -> "Small 1×1"
+        w == 2 && h == 1 -> "Wide 2×1"
+        w == 1 && h == 2 -> "Tall 1×2"
+        w == 2 && h == 2 -> "Large 2×2"
+        else -> "${w}×$h"
+    }
+
+    private fun chooseTileSize(g: GameEntry) {
+        val sizes = listOf(1 to 1, 2 to 1, 1 to 2, 2 to 2, 99 to 1)
+        NexusUi.panel(this, "Tile size", g.name, sizes.map { (w, h) ->
+            val cur = (if (w == 99) g.tileW >= hub.gridCols else g.tileW == w) && g.tileH == h
+            NexusUi.Option((if (cur) "✓  " else "     ") + (if (w == 99) "Full row" else sizeName(w, h)), primary = cur) {
+                prefs.edit().putString("tile_${g.pkg}", "${w}x$h").apply()
+                refresh()
+            }
+        })
+    }
+
+    private fun chooseGrid() {
+        val cur = prefs.getString("grid", "4x6")
+        val grids = listOf("3x5" to "3 × 5  (big tiles)", "4x6" to "4 × 6  (standard)", "4x8" to "4 × 8  (compact)")
+        NexusUi.panel(this, "Grid size", "Columns × rows that fit on one screen. More apps scroll.", grids.map { (k, label) ->
+            NexusUi.Option((if (k == cur) "✓  " else "     ") + label, primary = k == cur) {
+                prefs.edit().putString("grid", k).apply()
+                refresh()
+            }
+        })
     }
 
     /** Saves a new position for an app (the order is kept by package name). */
@@ -92,8 +130,15 @@ class MainActivity : Activity() {
             val natural = list.withIndex().associate { it.value.pkg to it.index }
             list.sortBy { g -> order.indexOf(g.pkg).let { if (it < 0) 10_000 + (natural[g.pkg] ?: 0) else it } }
         }
-        for (g in list) g.installed = packageManager.getLaunchIntentForPackage(g.pkg) != null
+        for (g in list) {
+            g.installed = packageManager.getLaunchIntentForPackage(g.pkg) != null
+            val t = prefs.getString("tile_${g.pkg}", "2x1")!!.split("x")
+            g.tileW = t.getOrNull(0)?.toIntOrNull() ?: 2; g.tileH = t.getOrNull(1)?.toIntOrNull() ?: 1
+        }
+        val grid = prefs.getString("grid", "4x6")!!.split("x")
+        hub.gridCols = grid.getOrNull(0)?.toIntOrNull() ?: 4; hub.gridRows = grid.getOrNull(1)?.toIntOrNull() ?: 6
         hub.games = list
+        hub.loadLiveShots()
     }
 
     /** Adds one or more apps from the drawer to the NEXUS list. */
@@ -272,6 +317,7 @@ class MainActivity : Activity() {
         val version = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Exception) { "" }
         NexusUi.panel(this, "NEXUS settings", "Version $version", listOf(
             NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
+            NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
             NexusUi.Option("Choose my normal home screen") { chooseNormalHome() },
             NexusUi.Option("Open apps (square button)") { openAppsSettings() },
             NexusUi.Option("Tutorial") { showTutorial() },

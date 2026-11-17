@@ -33,7 +33,7 @@ class TutorialView(private val a: Activity, private val sfx: Sfx, private val ac
         Page("01", "Welcome to NEXUS",
             "NEXUS is a new home screen for your phone: your favourite apps and games in one place, with a look of its own.\n\nThis quick guide takes about a minute."),
         Page("02", "Your apps",
-            "• Tap an app once to highlight it, then tap it again to open it.\n• Hold an app and drag it to move it.\n• Tap + ADD AN APP and tick as many apps as you like, then tap ADD.\n• Hold an app you added (without moving it) to edit its description or remove it."),
+            "• Tap an app once to highlight it, then tap it again to open it.\n• Hold an app and drag it to move it.\n• Hold an app without moving it to change its tile size (small, wide, tall, large or full row), or to edit or remove apps you added.\n• Tap the + ADD tile and tick as many apps as you like, then tap ADD.\n• Change the grid (3×5, 4×6, 4×8) in ⚙ → Grid size."),
         Page("03", "All apps",
             "Swipe up from the bottom of NEXUS, or tap ALL APPS, to see every app on your phone.\n\nSearch at the top. Games are listed first. Hold an app for more options."),
         Page("04", "Make NEXUS your home",
