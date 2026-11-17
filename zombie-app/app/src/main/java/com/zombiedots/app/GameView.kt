@@ -264,13 +264,18 @@ class GameView(context: Context, private val listener: Listener) : View(context)
 
     // ---------- drawing
 
+    private var cityBitmap: android.graphics.Bitmap? = null
+    private var citySeed = -1
+
     private fun drawWorld(c: Canvas) {
-        c.drawColor(bg)
-        val step = 40 * d
-        var x = 0f
-        while (x < width) { c.drawLine(x, 0f, x, height.toFloat(), gridPaint); x += step }
-        var y = 0f
-        while (y < height) { c.drawLine(0f, y, width.toFloat(), y, gridPaint); y += step }
+        // Random city map, redrawn for each new game
+        if (citySeed != world.mapSeed || cityBitmap?.width != width || cityBitmap?.height != height) {
+            cityBitmap?.recycle()
+            cityBitmap = if (width > 0 && height > 0) CityMap.render(width, height, d, world.mapSeed) else null
+            citySeed = world.mapSeed
+        }
+        val city = cityBitmap
+        if (city != null) c.drawBitmap(city, 0f, 0f, null) else c.drawColor(bg)
 
         for (s in world.splats) {
             splatPaint.alpha = (min(1f, s.life) * 200).toInt()

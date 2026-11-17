@@ -64,7 +64,9 @@ enum class Tactic(val label: String) {
     HOLD("Standing their ground"),
     ADVANCE("Attacking!"),
     RUN("Running away!"),
-    SPLIT("Spreading out")
+    SPLIT("Spreading out"),
+    HUNT("Hunting zombies"),
+    PATROL("Patrolling")
 }
 
 class Tracer(val x1: Float, val y1: Float, val x2: Float, val y2: Float, var life: Float)
@@ -111,6 +113,7 @@ class World(private val rnd: Random = Random.Default) {
         const val NUKE_BREATHER = 8f
         const val ROUND_BREAK = 8f
         const val HEALTH_COOLDOWN = 30f
+        const val STRAY_TIME = 18f
         const val CURE_COOLDOWN = 15f
         const val MAX_HEALTH_LEVEL = Int.MAX_VALUE
         const val ROUND_MAX = 90f
@@ -224,12 +227,17 @@ class World(private val rnd: Random = Random.Default) {
 
     // ------------------------------------------------------------------ setup
 
+    /** Changes every new game so the city map is redrawn. */
+    var mapSeed = 1
+        private set
+
     fun reset() {
+        mapSeed++
         zombies.clear(); humans.clear(); tracers.clear(); splats.clear(); nukes.clear(); texts.clear()
         airstrikes.clear(); blasts.clear(); airstrikeCooldown = 0f
         phase = Phase.SETUP
         time = 0f; kills = 0; wave = 0; waveTimer = 0f
-        strayTimer = 15f // first stray after ~15s
+        strayTimer = STRAY_TIME - 10f // first stray after ~10s
         nukeReady = true; turned = 0
         waveSize = 0; waveGrowth = 0; speedBase = 25f
         spawnQueue = 0; intermission = 0f; waveAge = 0f; spawnIndex = 0
@@ -515,7 +523,7 @@ class World(private val rnd: Random = Random.Default) {
         if (cureCooldown > 0f) cureCooldown -= dt
 
         strayTimer += dt
-        if (strayTimer >= 30f) { strayTimer = 0f; maybeSpawnStray() }
+        if (strayTimer >= STRAY_TIME) { strayTimer = 0f; maybeSpawnStray() }
 
         updateAirstrikes(dt)
         buildGrid()
@@ -680,7 +688,24 @@ class World(private val rnd: Random = Random.Default) {
                 if (d2 < 110f * 110f) near++
             }
         }
-        if (mid > 0) {
+        // Nearest zombie anywhere on the map: the squad goes looking for it when nothing is close
+        huntTarget = null
+        var hd = Float.MAX_VALUE
+        for (z in zombies) {
+            if (z.dead || !z.entered) continue
+            val dx = z.x - lead.x; val dy = z.y - lead.y
+            val dd = dx * dx + dy * dy
+            if (dd < hd) { hd = dd; huntTarget = z }
+        }
+        // A behemoth anywhere close counts as danger the squad must deal with
+        val bigOne = zombies.firstOrNull { it.type == ZType.BEHEMOTH && !it.dead &&
+            (it.x - lead.x) * (it.x - lead.x) + (it.y - lead.y) * (it.y - lead.y) < 300f * 300f }
+        if (mid == 0) {
+            val ht = bigOne ?: huntTarget
+            if (ht != null) { tx = ht.x - lead.x; ty = ht.y - lead.y }
+            else if (tactic == Tactic.PATROL) { tx = patrolX - lead.x; ty = patrolY - lead.y }
+        }
+        if (mid > 0 || tx != 0f || ty != 0f) {
             val target = atan2(ty, tx)
             var diff = target - facing
             while (diff > Math.PI) diff -= (2 * Math.PI).toFloat()
@@ -703,9 +728,10 @@ class World(private val rnd: Random = Random.Default) {
             val next = when {
                 panic -> Tactic.RUN
                 squad.isNotEmpty() && spread > 85f && tactic != Tactic.SPLIT -> Tactic.SQUAD_UP
-                squad.size >= 2 && mid < 3 * size && rnd.nextFloat() < 0.35f -> Tactic.SPLIT
+                mid == 0 && (huntTarget != null || bigOne != null) -> Tactic.HUNT
+                mid == 0 -> Tactic.PATROL
+                squad.size >= 2 && mid < 3 * size && rnd.nextFloat() < 0.3f -> Tactic.SPLIT
                 mid in 1..(4 * size) -> Tactic.ADVANCE
-                mid == 0 && squad.isNotEmpty() && spread > 40f -> Tactic.SQUAD_UP
                 else -> Tactic.HOLD
             }
             setTactic(next, lead, squad)
@@ -715,6 +741,28 @@ class World(private val rnd: Random = Random.Default) {
             safeTimer -= dt
             if (safeTimer <= 0f) pickSafeSpot(lead)
         }
+        if (tactic == Tactic.PATROL) {
+            patrolTimer -= dt
+            val pdx = patrolX - lead.x; val pdy = patrolY - lead.y
+            if (patrolTimer <= 0f || pdx * pdx + pdy * pdy < 20f * 20f) pickPatrolPoint()
+            // Zombies showed up: stop patrolling and go get them
+            if (huntTarget != null) tacticTimer = 0f
+        }
+        if (tactic == Tactic.HUNT && huntTarget == null && bigOne == null) tacticTimer = 0f
+        huntFocus = bigOne ?: huntTarget
+    }
+
+    private var huntTarget: Zombie? = null
+    /** What the squad is moving toward while hunting. */
+    private var huntFocus: Zombie? = null
+    private var patrolX = 0f
+    private var patrolY = 0f
+    private var patrolTimer = 0f
+
+    private fun pickPatrolPoint() {
+        patrolTimer = 6f + rnd.nextFloat() * 4f
+        patrolX = width * (0.2f + rnd.nextFloat() * 0.6f)
+        patrolY = height * (0.2f + rnd.nextFloat() * 0.6f)
     }
 
     private fun setTactic(t: Tactic, lead: Human, squad: List<Human>) {
@@ -726,6 +774,7 @@ class World(private val rnd: Random = Random.Default) {
         }
         squad.forEachIndexed { i, h -> h.slot = i }
         if (t == Tactic.RUN) pickSafeSpot(lead)
+        if (t == Tactic.PATROL) pickPatrolPoint()
         if (t == Tactic.SPLIT && squad.isNotEmpty()) {
             val base = rnd.nextFloat() * 6.283f
             squad.forEachIndexed { i, h ->
@@ -826,6 +875,19 @@ class World(private val rnd: Random = Random.Default) {
                     Tactic.HOLD -> if (nearest2 < 55f * 55f) { goalX = h.x - fx0 * 30f; goalY = h.y - fy0 * 30f; urgency = 0.7f }
                     Tactic.SQUAD_UP -> { goalX = h.x - fx0 * 10f; goalY = h.y - fy0 * 10f; urgency = 0.3f }
                     Tactic.SPLIT -> { goalX = width / 2f; goalY = height / 2f; urgency = 0.25f }
+                    Tactic.HUNT -> {
+                        val f = huntFocus
+                        if (f != null) {
+                            // Close in to shooting range, but stay out of reach (behemoths: keep well back)
+                            val keep = if (f.type == ZType.BEHEMOTH) 85f else 70f
+                            val dx = f.x - h.x; val dy = f.y - h.y
+                            val dist = sqrt(dx * dx + dy * dy).coerceAtLeast(0.01f)
+                            goalX = f.x - dx / dist * keep
+                            goalY = f.y - dy / dist * keep
+                            urgency = if (dist > keep + 20f) 0.8f else 0.6f
+                        }
+                    }
+                    Tactic.PATROL -> { goalX = patrolX; goalY = patrolY; urgency = 0.45f }
                 }
             } else if (lead != null) {
                 val n = max(1, squadSize)
@@ -847,6 +909,11 @@ class World(private val rnd: Random = Random.Default) {
                         urgency = 1f
                     }
                     Tactic.SPLIT -> { goalX = h.anchorX; goalY = h.anchorY; urgency = 0.75f }
+                    Tactic.HUNT -> { goalX = lead.x + cos(a) * 30f; goalY = lead.y + sin(a) * 30f; urgency = 0.85f }
+                    Tactic.PATROL -> {
+                        val ra = facing + 6.283f * h.slot / n
+                        goalX = lead.x + cos(ra) * 24f; goalY = lead.y + sin(ra) * 24f; urgency = 0.8f
+                    }
                 }
             }
 
