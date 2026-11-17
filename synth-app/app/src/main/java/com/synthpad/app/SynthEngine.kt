@@ -45,6 +45,13 @@ class SynthEngine(context: Context) {
 
     @Volatile var recorder: Recorder? = null
 
+    /** Metronome click on each beat (not recorded). */
+    @Volatile var metronome = false
+    private var beatPh = 0f
+    private var beatCount = 0
+    private var clickT = -1f
+    private var clickAccent = false
+
     /** Called (on the audio thread) if the sound engine hits an error. */
     @Volatile var onError: ((Throwable) -> Unit)? = null
 
@@ -620,6 +627,25 @@ class SynthEngine(context: Context) {
         }
 
         recorder?.write(out, frames)
+
+        // Metronome is added after recording, so it never ends up in saved songs
+        val beatInc = ParamMath.bpm / 60f / sr
+        for (i in 0 until frames) {
+            beatPh += beatInc
+            if (beatPh >= 1f) {
+                beatPh -= 1f
+                beatCount = (beatCount + 1) % 4
+                if (metronome) { clickT = 0f; clickAccent = beatCount == 0 }
+            }
+            if (clickT >= 0f) {
+                val env = exp(-clickT * 90f)
+                val c = sin(twoPi * (if (clickAccent) 2000f else 1400f) * clickT) * env * (if (clickAccent) 0.35f else 0.22f)
+                out[i * 2] += c
+                out[i * 2 + 1] += c
+                clickT += 1f / sr
+                if (clickT > 0.06f) clickT = -1f
+            }
+        }
     }
 
     private fun osc(wave: Int, p: Float, dt: Float): Float = when (wave) {

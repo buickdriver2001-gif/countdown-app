@@ -80,10 +80,29 @@ object ParamMath {
     fun decaySec(v: Float) = 0.01f * 500f.pow(v)
     fun releaseSec(v: Float) = 0.01f * 400f.pow(v)
     fun cutoffHz(v: Float) = 40f * 500f.pow(v)
-    fun lfoHz(v: Float) = 0.1f * 200f.pow(v)
-    fun gateHz(v: Float) = 0.5f * 32f.pow(v)
-    fun panHz(v: Float) = 0.05f * 200f.pow(v)
-    fun delaySec(v: Float) = 0.05f + v * 0.95f
+    // ---- Tempo: when synced, rate knobs snap to note lengths that follow the BPM
+    @Volatile var bpm = 120f
+    @Volatile var sync = true
+
+    class Division(val label: String, val wholes: Float) // length as a fraction of a whole note (4 beats)
+    val RATE_DIVS = listOf(
+        Division("2 bars", 2f), Division("1 bar", 1f), Division("1/2", 0.5f), Division("1/4", 0.25f),
+        Division("1/8", 0.125f), Division("1/8T", 1f / 12f), Division("1/16", 0.0625f), Division("1/16T", 1f / 24f),
+        Division("1/32", 1f / 32f)
+    )
+    val DELAY_DIVS = listOf(
+        Division("1/32", 1f / 32f), Division("1/16", 0.0625f), Division("1/16.", 0.09375f), Division("1/8T", 1f / 12f),
+        Division("1/8", 0.125f), Division("1/8.", 0.1875f), Division("1/4T", 1f / 6f), Division("1/4", 0.25f),
+        Division("1/4.", 0.375f), Division("1/2", 0.5f)
+    )
+    fun div(list: List<Division>, v: Float) = list[(v * (list.size - 1)).roundToInt().coerceIn(0, list.size - 1)]
+    fun divSec(d: Division) = 240f / bpm * d.wholes
+    private fun syncedHz(v: Float, list: List<Division> = RATE_DIVS) = 1f / divSec(div(list, v))
+
+    fun lfoHz(v: Float) = if (sync) syncedHz(v) else 0.1f * 200f.pow(v)
+    fun gateHz(v: Float) = if (sync) syncedHz(v) else 0.5f * 32f.pow(v)
+    fun panHz(v: Float) = if (sync) syncedHz(v) else 0.05f * 200f.pow(v)
+    fun delaySec(v: Float) = if (sync) divSec(div(DELAY_DIVS, v)).coerceAtMost(1.05f) else 0.05f + v * 0.95f
     fun octaves(v: Float) = (v * 4f).roundToInt() - 2
     fun glideSec(v: Float) = v * v * 0.6f
     fun filterType(v: Float) = (v * 2f).roundToInt().coerceIn(0, 2)
@@ -94,7 +113,9 @@ object ParamMath {
     fun eqDb(v: Float) = (v - 0.5f) * 24f
     val ARP_NAMES = arrayOf("Off", "Up", "Down", "Bounce", "Random")
     fun arpMode(v: Float) = (v * 4f).roundToInt().coerceIn(0, 4)
-    fun arpRate(v: Float) = 2f * 8f.pow(v) // steps per second: 2..16
+    val ARP_DIVS = listOf(Division("1/4", 0.25f), Division("1/8", 0.125f), Division("1/8T", 1f / 12f),
+        Division("1/16", 0.0625f), Division("1/16T", 1f / 24f), Division("1/32", 1f / 32f))
+    fun arpRate(v: Float) = if (sync) 1f / divSec(div(ARP_DIVS, v)) else 2f * 8f.pow(v) // steps per second
     fun arpOct(v: Float) = 1 + (v * 2f).roundToInt().coerceIn(0, 2)
 
     private fun pct(v: Float) = "${(v * 100).roundToInt()}%"
@@ -113,10 +134,10 @@ object ParamMath {
         P.DECAY -> time(decaySec(v))
         P.RELEASE -> time(releaseSec(v))
         P.CUTOFF -> hz(cutoffHz(v))
-        P.LFO_RATE -> hz(lfoHz(v))
-        P.GATE_RATE -> hz(gateHz(v))
-        P.APAN_RATE -> hz(panHz(v))
-        P.DELAY_TIME -> time(delaySec(v))
+        P.LFO_RATE -> if (sync) div(RATE_DIVS, v).label else hz(lfoHz(v))
+        P.GATE_RATE -> if (sync) div(RATE_DIVS, v).label else hz(gateHz(v))
+        P.APAN_RATE -> if (sync) div(RATE_DIVS, v).label else hz(panHz(v))
+        P.DELAY_TIME -> if (sync) div(DELAY_DIVS, v).label else time(delaySec(v))
         P.PITCH -> octaves(v).let { if (it == 0) "0" else if (it > 0) "+$it oct" else "$it oct" }
         P.GLIDE -> if (v < 0.01f) "Off" else time(glideSec(v))
         P.FILTER_TYPE -> FILTER_NAMES[filterType(v)]
@@ -126,7 +147,7 @@ object ParamMath {
         P.BASS, P.TREBLE -> eqDb(v).roundToInt().let { if (it > 0) "+${it}dB" else "${it}dB" }
         P.WIDTH -> "${(v * 200).roundToInt()}%"
         P.ARP -> ARP_NAMES[arpMode(v)]
-        P.ARP_RATE -> String.format(Locale.US, "%.1f/s", arpRate(v))
+        P.ARP_RATE -> if (sync) div(ARP_DIVS, v).label else String.format(Locale.US, "%.1f/s", arpRate(v))
         P.ARP_OCT -> "${arpOct(v)} oct"
         P.PAN -> {
             val x = ((v - 0.5f) * 200).roundToInt()

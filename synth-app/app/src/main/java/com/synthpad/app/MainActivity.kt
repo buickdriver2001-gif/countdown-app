@@ -27,6 +27,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
 
@@ -38,6 +39,9 @@ class MainActivity : Activity() {
     private lateinit var octaveLabel: TextView
     private lateinit var recButton: TextView
     private lateinit var volumeKnob: KnobView
+    private lateinit var tempoChip: TextView
+    private val prefs by lazy { getSharedPreferences("synthpad", MODE_PRIVATE) }
+    private val tapTimes = ArrayList<Long>()
 
     private var page = 0
     private var presetIndex = 0
@@ -73,7 +77,11 @@ class MainActivity : Activity() {
                 finish()
             }
         }
+        ParamMath.bpm = prefs.getFloat("bpm", 120f)
+        ParamMath.sync = prefs.getBoolean("sync", true)
+        engine.metronome = prefs.getBoolean("metronome", false)
         setContentView(buildUi())
+        updateTempoChip()
         // Hide the status bar only once the screen exists (doing it earlier crashes on Android 16)
         try {
             if (Build.VERSION.SDK_INT >= 30) {
@@ -192,6 +200,12 @@ class MainActivity : Activity() {
         top.addView(chip("+") { shiftOctave(1) }.apply {
             (layoutParams as LinearLayout.LayoutParams).marginStart = 0
         })
+        tempoChip = chip("♩ 120") { showTempo() }.apply {
+            (layoutParams as LinearLayout.LayoutParams).marginStart = dp(14)
+            minWidth = dp(76)
+            contentDescription = "Tempo"
+        }
+        top.addView(tempoChip)
         recButton = chip("●  REC") { toggleRecording() }.apply {
             setTextColor(Theme.REC)
             (layoutParams as LinearLayout.LayoutParams).marginStart = dp(14)
@@ -283,6 +297,88 @@ class MainActivity : Activity() {
     }
 
     // ------------------------------------------------------------------ presets & octave
+
+    // ------------------------------------------------------------------ tempo
+
+    private fun updateTempoChip() {
+        tempoChip.text = "♩ ${ParamMath.bpm.roundToInt()}"
+        tempoChip.contentDescription = "Tempo ${ParamMath.bpm.roundToInt()} BPM. Tap to change."
+        for (k in knobs) k.invalidate()
+    }
+
+    private fun setBpm(v: Float) {
+        ParamMath.bpm = v.coerceIn(60f, 200f)
+        prefs.edit().putFloat("bpm", ParamMath.bpm).apply()
+        updateTempoChip()
+    }
+
+    private fun showTempo() {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(8), dp(22), dp(4))
+        }
+        val big = TextView(this).apply {
+            textSize = 42f
+            setTextColor(Theme.ACCENT)
+            gravity = Gravity.CENTER
+            typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+        }
+        val seek = android.widget.SeekBar(this).apply { max = 140 }
+        fun refresh() {
+            big.text = "${ParamMath.bpm.roundToInt()} BPM"
+            seek.progress = ParamMath.bpm.roundToInt() - 60
+        }
+        box.addView(big)
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        for ((label, delta) in listOf("−5" to -5f, "−1" to -1f, "+1" to 1f, "+5" to 5f)) {
+            row.addView(chip(label) { setBpm(ParamMath.bpm.roundToInt() + delta); refresh() }.apply {
+                (layoutParams as LinearLayout.LayoutParams).height = dp(44)
+                minWidth = dp(58)
+            })
+        }
+        box.addView(row)
+        seek.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) { setBpm(60f + progress); big.text = "${ParamMath.bpm.roundToInt()} BPM" }
+            }
+            override fun onStartTrackingTouch(sb: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(sb: android.widget.SeekBar?) {}
+        })
+        box.addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)))
+        box.addView(chip("👆  Tap tempo (tap along to the beat)") {
+            val now = System.currentTimeMillis()
+            if (tapTimes.isNotEmpty() && now - tapTimes.last() > 2000) tapTimes.clear()
+            tapTimes.add(now)
+            if (tapTimes.size > 5) tapTimes.removeAt(0)
+            if (tapTimes.size >= 2) {
+                val avg = (tapTimes.last() - tapTimes.first()).toFloat() / (tapTimes.size - 1)
+                setBpm(60000f / avg)
+                refresh()
+            }
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(6) }
+        })
+        fun sw(label: String, on: Boolean, change: (Boolean) -> Unit) = android.widget.Switch(this).apply {
+            text = label
+            isChecked = on
+            setTextColor(Theme.TEXT)
+            textSize = 15f
+            setPadding(0, dp(10), 0, dp(10))
+            setOnCheckedChangeListener { _, c -> change(c) }
+        }
+        box.addView(sw("Sync effects to tempo (arp, gate, echo, wobble, auto-pan)", ParamMath.sync) {
+            ParamMath.sync = it; prefs.edit().putBoolean("sync", it).apply(); updateTempoChip()
+        })
+        box.addView(sw("Metronome click (not recorded)", engine.metronome) {
+            engine.metronome = it; prefs.edit().putBoolean("metronome", it).apply()
+        })
+        refresh()
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Tempo")
+            .setView(android.widget.ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Done", null)
+            .show()
+    }
 
     private fun applyPreset(i: Int) {
         presetIndex = i
