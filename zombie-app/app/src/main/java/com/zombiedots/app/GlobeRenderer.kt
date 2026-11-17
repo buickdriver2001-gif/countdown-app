@@ -186,14 +186,11 @@ class GlobeRenderer(private val world: World, private val d: Float) {
         c.drawCircle(cx, cy, radius * 1.12f, atmo)
         c.drawCircle(cx, cy, radius, ocean)
 
-        // Land and ice
-        drawDots(c, land, Color.parseColor("#2E6B4A"), 3.2f)
-        drawDots(c, ice, Color.parseColor("#DCE8F5"), 3.4f)
 
         // Latitude / longitude grid
         gridPaint.strokeWidth = 1f * d
         for (latDeg in listOf(-60, -30, 0, 30, 60)) {
-            gridPaint.color = if (abs(latDeg) == 60) Color.argb(110, 200, 230, 255) else Color.argb(40, 150, 200, 255)
+            gridPaint.color = Color.argb(40, 150, 200, 255)
             val lat = (latDeg * PI / 180).toFloat()
             polyline(c, 72) { t -> projectLL(-PI.toFloat() + t * 2f * PI.toFloat(), lat) }
         }
