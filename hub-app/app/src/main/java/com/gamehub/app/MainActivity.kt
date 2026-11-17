@@ -23,6 +23,7 @@ class MainActivity : Activity() {
     )
     private lateinit var hub: HubView
     private lateinit var drawer: AppDrawer
+    private lateinit var tutorial: TutorialView
     private val sfx by lazy { Sfx() }
     private var leftForApp = false
     private val prefs by lazy { getSharedPreferences("hub", MODE_PRIVATE) }
@@ -130,12 +131,19 @@ class MainActivity : Activity() {
             return
         }
         hub = HubView(this, builtIn, { open(it) }, { drawer.open(add = true) }, { appOptions(it) }, sfx, { homeSettings() },
-            { from, to -> moveApp(from, to) }, { drawer.open(add = false) })
+            { from, to -> moveApp(from, to) }, { drawer.open(add = false) }, { openSwitcher() })
         drawer = AppDrawer(this, sfx, { openPkg(it.pkg) }, { addApps(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
         drawer.onVisible = { open -> hub.covered = open; if (open) hub.clearSelection() }
         val root = android.widget.FrameLayout(this)
         root.addView(hub)
         root.addView(drawer)
+        tutorial = TutorialView(this, sfx, object : TutorialView.Actions {
+            override fun setHome() = openHomeSettings()
+            override fun appInfo() = openAppInfo()
+            override fun accessibility() = openAccessibility()
+            override fun done() = closeTutorial()
+        }).apply { visibility = android.view.View.GONE }
+        root.addView(tutorial)
         setContentView(root)
         drawer.load()
         // Full screen: no status bar, no navigation buttons (swipe from an edge to peek at them)
@@ -150,11 +158,8 @@ class MainActivity : Activity() {
             // Opened from its icon (or Home while NEXUS mode is on): NEXUS mode on
             HomeMode.setOn(this, true)
             if (savedInstanceState == null) Thread { playChime() }.start()
-            // Offer once to make NEXUS the phone's Home app
-            if (!HomeMode.isDefault(this) && !prefs.getBoolean("offeredHome", false)) {
-                prefs.edit().putBoolean("offeredHome", true).apply()
-                hub.postDelayed({ if (!isFinishing) offerHome() }, 6000)
-            }
+            // First time: show the guide once the start-up animation has finished
+            if (!prefs.getBoolean("tutorialSeen", false)) waitThenTutorial()
         }
     }
 
@@ -168,7 +173,64 @@ class MainActivity : Activity() {
     }
 
     @Deprecated("Deprecated in Java")
-    override fun onBackPressed() { if (::drawer.isInitialized && drawer.isOpen) drawer.close() else askClose() }
+    override fun onBackPressed() {
+        when {
+            ::tutorial.isInitialized && tutorial.visibility == android.view.View.VISIBLE -> closeTutorial()
+            ::drawer.isInitialized && drawer.isOpen -> drawer.close()
+            else -> askClose()
+        }
+    }
+
+    private fun waitThenTutorial() {
+        hub.postDelayed({
+            if (isFinishing) return@postDelayed
+            if (hub.booting) waitThenTutorial() else showTutorial()
+        }, 300)
+    }
+
+    private fun showTutorial() {
+        tutorial.restart()
+        tutorial.visibility = android.view.View.VISIBLE
+        tutorial.alpha = 0f
+        tutorial.animate().alpha(1f).setDuration(350).start()
+    }
+
+    private fun closeTutorial() {
+        prefs.edit().putBoolean("tutorialSeen", true).apply()
+        tutorial.animate().alpha(0f).setDuration(250).withEndAction { tutorial.visibility = android.view.View.GONE }.start()
+    }
+
+    private fun openSwitcher() {
+        startActivity(Intent(this, SwitcherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            android.app.ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out).toBundle())
+    }
+
+    /** NEXUS's own App info page (where "Allow restricted settings" lives, under ⋮). */
+    private fun openAppInfo() {
+        try { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) } catch (_: Exception) {}
+    }
+
+    private fun openAccessibility() {
+        try { startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (_: Exception) {}
+    }
+
+    /** Settings → Open apps: status, setup steps, and an on/off switch for the square button. */
+    private fun openAppsSettings() {
+        val on = Recents.serviceOn(this)
+        val replace = prefs.getBoolean("replaceRecents", true)
+        val status = if (on) "Helper is ON. Open apps are being remembered." else "Helper is OFF. Follow the two steps below to turn it on."
+        val opts = ArrayList<NexusUi.Option>()
+        if (!on) {
+            opts.add(NexusUi.Option("1.  Allow restricted settings") { openAppInfo() })
+            opts.add(NexusUi.Option("2.  Turn on helper", primary = true) { openAccessibility() })
+        } else opts.add(NexusUi.Option("Turn helper off") { openAccessibility() })
+        opts.add(NexusUi.Option("Square button opens NEXUS Open Apps:  " + (if (replace) "ON" else "OFF")) {
+            prefs.edit().putBoolean("replaceRecents", !replace).apply()
+            openAppsSettings()
+        })
+        opts.add(NexusUi.Option("Show Open Apps now") { openSwitcher() })
+        NexusUi.panel(this, "Open apps", "$status\n\nStep 1: on the App info page, tap ⋮ at the top right and choose Allow restricted settings (only needed for apps installed from a download).\nStep 2: in Accessibility, choose NEXUS Open Apps and switch it on.\n\nPictures of your apps stay on this phone and are never sent anywhere.", opts, cancel = "Done")
+    }
 
     /** Closing NEXUS on purpose: NEXUS mode off until it's opened again from its icon. */
     private fun askClose() {
@@ -210,9 +272,11 @@ class MainActivity : Activity() {
         NexusUi.panel(this, "NEXUS settings", null, listOf(
             NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
             NexusUi.Option("Choose my normal home screen") { chooseNormalHome() },
+            NexusUi.Option("Open apps (square button)") { openAppsSettings() },
+            NexusUi.Option("Tutorial") { showTutorial() },
             NexusUi.Option("How it works") {
                 NexusUi.panel(this, "How it works",
-                    "• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on.\n• Close NEXUS (Back, or Close NEXUS here) and Home goes to your normal home screen.\n• Open NEXUS from its icon to make it your home again.\n• Swipe up or tap ALL APPS to see every app. Hold an app in the list to move it.\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.",
+                    "• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on.\n• Close NEXUS (Back, or Close NEXUS here) and Home goes to your normal home screen.\n• Open NEXUS from its icon to make it your home again.\n• Swipe up or tap ALL APPS to see every app. Hold an app in the list to move it.\n• Tap RECENT (or press the square button, once the helper is on) for your open apps.\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.",
                     emptyList(), cancel = "OK")
             },
             NexusUi.Option("Close NEXUS", danger = true) { askClose() }

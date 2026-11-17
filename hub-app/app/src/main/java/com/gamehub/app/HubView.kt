@@ -36,7 +36,7 @@ class GameEntry(val name: String, val pkg: String, val tagline: String, val acce
 class HubView(context: Context, var games: List<GameEntry>, private val onPick: (GameEntry) -> Unit,
               private val onAdd: () -> Unit, private val onRemove: (GameEntry) -> Unit, private val sfx: Sfx,
               private val onSettings: () -> Unit, private val onReorder: (Int, Int) -> Unit,
-              private val onDrawer: () -> Unit) : View(context) {
+              private val onDrawer: () -> Unit, private val onRecent: () -> Unit) : View(context) {
 
     private val d = resources.displayMetrics.density
     private val rnd = Random(3)
@@ -533,7 +533,21 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.color = Color.argb((110 * a).toInt(), 160, 185, 230)
         // ALL APPS button (or swipe up from here)
         val bob = sin(t * 2f) * 2 * d
-        allAppsRect.set(w / 2 - 70 * d, h - 54 * d, w / 2 + 70 * d, h - 18 * d)
+        // RECENT (open apps) on the left, ALL APPS on the right
+        recentRect.set(w / 2 - 150 * d, h - 54 * d, w / 2 - 8 * d, h - 18 * d)
+        fill.color = Color.argb((60 * a).toInt(), 40, 80, 200)
+        c.drawRoundRect(recentRect, 18 * d, 18 * d, fill)
+        line.strokeWidth = 1f * d; line.color = Color.argb((120 * a).toInt(), 140, 190, 255)
+        c.drawRoundRect(recentRect, 18 * d, 18 * d, line)
+        // stacked-cards glyph
+        line.color = Color.argb((220 * a).toInt(), 200, 225, 255)
+        c.drawRoundRect(RectF(recentRect.left + 18 * d, recentRect.centerY() - 6 * d, recentRect.left + 30 * d, recentRect.centerY() + 8 * d), 2 * d, 2 * d, line)
+        c.drawLine(recentRect.left + 21 * d, recentRect.centerY() - 9 * d, recentRect.left + 33 * d, recentRect.centerY() - 9 * d, line)
+        c.drawLine(recentRect.left + 33 * d, recentRect.centerY() - 9 * d, recentRect.left + 33 * d, recentRect.centerY() + 5 * d, line)
+        text.textAlign = Paint.Align.LEFT; text.textSize = 12.5f * d; text.letterSpacing = 0.25f
+        text.color = Color.argb((230 * a).toInt(), 220, 235, 255)
+        c.drawText("RECENT", recentRect.left + 44 * d, recentRect.centerY() + 4.5f * d, text)
+        allAppsRect.set(w / 2 + 8 * d, h - 54 * d, w / 2 + 150 * d, h - 18 * d)
         fill.color = Color.argb((60 * a).toInt(), 40, 80, 200)
         c.drawRoundRect(allAppsRect, 18 * d, 18 * d, fill)
         line.strokeWidth = 1f * d; line.color = Color.argb((120 * a).toInt(), 140, 190, 255)
@@ -565,6 +579,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     private val allAppsRect = RectF()
+    private val recentRect = RectF()
     private var swipedUp = false
 
     // Moving apps (hold, then drag)
@@ -777,6 +792,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 if (dragging && !swipedUp) {
                     tracker?.computeCurrentVelocity(1000)
                     scrollVel = -(tracker?.yVelocity ?: 0f)
+                } else if (!longFired && launchFlash <= 0f && t > 1.2f && recentRect.contains(e.x, e.y)) {
+                    sfx.tick(); onRecent()
                 } else if (!longFired && launchFlash <= 0f && t > 1.2f && allAppsRect.contains(e.x, e.y)) {
                     sfx.tick(); onDrawer()
                 } else if (!longFired && launchFlash <= 0f && t > 1.2f && gearRect.contains(e.x, e.y)) {

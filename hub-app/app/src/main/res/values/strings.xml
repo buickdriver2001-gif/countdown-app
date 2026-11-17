@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">NEXUS</string>
+    <string name="a11y_summary">Shows NEXUS Open Apps when you press the square button.</string>
+    <string name="a11y_description">NEXUS uses this to show its own Open Apps screen when you press the square (recent apps) button, and to remember a small picture of the last screen of each app you use so it can show it on the Open Apps cards.\n\nPictures are kept only on this phone, inside NEXUS, and are never sent anywhere. Apps that block screenshots (like banking apps) are not captured. NEXUS does not read text, type, or tap for you.\n\nYou can turn this off at any time here, or in NEXUS settings.</string>
 </resources>

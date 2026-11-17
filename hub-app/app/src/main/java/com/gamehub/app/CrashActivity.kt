@@ -67,6 +67,26 @@ class CrashActivity : Activity() {
             }
         })
         root.addView(buttons)
+        // Never leave anyone stuck: if NEXUS is the Home app and keeps failing, these get you out
+        val escape = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, (8 * d).toInt(), 0, 0) }
+        escape.addView(Button(this).apply {
+            text = "Use my normal home screen"
+            setOnClickListener {
+                file.delete()
+                HomeMode.setOn(this@CrashActivity, false)
+                if (!HomeMode.goNormalHome(this@CrashActivity)) Toast.makeText(this@CrashActivity, "No other home screen found", Toast.LENGTH_SHORT).show()
+                else finish()
+            }
+        })
+        escape.addView(Button(this).apply {
+            text = "Change Home app"
+            setOnClickListener {
+                file.delete()
+                try { startActivity(Intent(android.provider.Settings.ACTION_HOME_SETTINGS)) }
+                catch (_: Exception) { try { startActivity(Intent(android.provider.Settings.ACTION_SETTINGS)) } catch (_: Exception) {} }
+            }
+        })
+        root.addView(escape)
         setContentView(root)
     }
 }
