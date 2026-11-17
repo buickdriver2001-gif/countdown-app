@@ -318,6 +318,7 @@ class MainActivity : Activity(), GameView.Listener {
             planeBtn.contentDescription = "Plane. Place your team first."
             aimBanner.visibility = View.GONE
             game.planeAimRequested = false
+            game.cureMode = false
             return
         }
 
@@ -348,13 +349,31 @@ class MainActivity : Activity(), GameView.Listener {
         healthBtn.contentDescription = if (w.healthReady) "Health upgrade ready. Level ${w.healthLevel}. Tap to make your survivors tougher."
             else "Health level ${w.healthLevel}. Next upgrade in ${w.healthCooldown.toInt() + 1} seconds."
         val sick = w.humans.count { it.infection > 0.01f }
-        cureBtn.text = if (w.cureReady) "💊 CURE\nReady" else "💊 CURE\n${w.cureCooldown.toInt() + 1}s"
+        if (!w.cureReady) game.cureMode = false
+        cureBtn.text = when {
+            !w.cureReady -> "💊 CURE\n${w.cureCooldown.toInt() + 1}s"
+            game.cureMode -> "💊 CURE\ntap a dot"
+            sick > 0 -> "💊 CURE\n$sick infected"
+            else -> "💊 CURE\nReady"
+        }
         cureBtn.alpha = if (w.cureReady) 1f else 0.45f
         cureBtn.contentDescription = if (w.cureReady) "Cure ready. $sick survivors are infected. Tap to cure everyone."
             else "Cure comes back in ${w.cureCooldown.toInt() + 1} seconds."
         planeBtn.alpha = if (w.airstrikeReady) 1f else 0.4f
         planeBtn.contentDescription = planeBtn.text.toString().replace("\n", ". ")
-        aimBanner.visibility = if (game.planeAimRequested && w.airstrikeReady) View.VISIBLE else View.GONE
+        when {
+            game.cureMode -> {
+                aimBanner.text = "💊 Slow motion! Tap a survivor to cure them. Tap CURE again to cure the most infected."
+                aimBanner.background = XmbBackground.tinted(d, Color.parseColor("#E36BD0"), 12f)
+                aimBanner.visibility = View.VISIBLE
+            }
+            game.planeAimRequested && w.airstrikeReady -> {
+                aimBanner.text = "✈ Drag your finger across the map to aim the plane. Tap PLANE again to cancel."
+                aimBanner.background = XmbBackground.tinted(d, Color.parseColor("#3DA5FF"), 12f)
+                aimBanner.visibility = View.VISIBLE
+            }
+            else -> aimBanner.visibility = View.GONE
+        }
     }
 
     private fun cycleSpeed() {
@@ -381,7 +400,28 @@ class MainActivity : Activity(), GameView.Listener {
         val w = game.world
         if (w.phase != Phase.RUNNING) { onAnnounce("Tap the map to put your team down first."); return }
         if (!w.cureReady) { onAnnounce("The cure comes back in ${w.cureCooldown.toInt() + 1} seconds."); return }
-        if (w.cure()) onAnnounce("Everyone is cured!")
+        if (game.cureMode) {
+            // Second tap: cure whoever is closest to turning
+            w.mostInfected()?.let { onCureTarget(it) } ?: run { game.cureMode = false }
+        } else {
+            if (w.mostInfected() == null) { onAnnounce("Nobody is infected right now."); return }
+            game.planeAimRequested = false
+            game.cureMode = true
+            onAnnounce("Tap a survivor to cure them, or tap cure again to cure the most infected.")
+        }
+        updateHud()
+    }
+
+    override fun onCureTarget(h: Human) {
+        val pct = (h.infection * 100).toInt()
+        if (h.infection < 0.01f) {
+            onAnnounce("That survivor isn't infected. Tap one with a green ring.")
+            return
+        }
+        if (game.world.cureOne(h)) {
+            onAnnounce(if (pct > 0) "Cured! Their infection was $pct percent." else "Cured!")
+        }
+        game.cureMode = false
         updateHud()
     }
 
@@ -389,6 +429,7 @@ class MainActivity : Activity(), GameView.Listener {
         val w = game.world
         if (w.phase != Phase.RUNNING) { onAnnounce("Tap the map to put your team down first."); return }
         if (!w.airstrikeReady) { onAnnounce("The plane comes back in ${w.airstrikeCooldown.toInt() + 1} seconds."); return }
+        game.cureMode = false
         game.planeAimRequested = !game.planeAimRequested
         if (game.planeAimRequested) onAnnounce("Now drag your finger across the map to aim the plane.")
         updateHud()
@@ -470,7 +511,8 @@ class MainActivity : Activity(), GameView.Listener {
         col.addView(card("🧟  Clear every zombie to finish a round. Each round brings more zombies, and they get tougher."))
         col.addView(card("✈  PLANE: press PLANE, then drag your finger across the map. A plane flies that way and drops bombs. It comes back after 20 seconds."))
         col.addView(card("❤  HEALTH: makes all your survivors tougher AND faster, so bites infect them less and they can outrun more zombies. Use it again every time the timer runs out. No limit!"))
-        col.addView(card("💊  CURE: removes the green infection rings from everyone. Comes back after 45 seconds."))
+        col.addView(card("⚠  A yellow warning sign over a survivor means they're about to turn into a zombie!"))
+        col.addView(card("💊  CURE: press it and the game goes into slow motion. Tap the survivor you want to heal, or press CURE again to heal the one who is most infected. Comes back after 15 seconds."))
         col.addView(card("⏩  The 1x button at the top changes the game speed. ❚❚ pauses."))
         col.addView(card("🏆  There's no last round. Keep upgrading, curing and bombing, and see how far your team can go!"))
         col.addView(menuRow("✔   Got it!", highlight = true) { show(returnTo) })

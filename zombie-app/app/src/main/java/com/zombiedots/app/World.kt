@@ -111,7 +111,7 @@ class World(private val rnd: Random = Random.Default) {
         const val NUKE_BREATHER = 8f
         const val ROUND_BREAK = 8f
         const val HEALTH_COOLDOWN = 30f
-        const val CURE_COOLDOWN = 45f
+        const val CURE_COOLDOWN = 15f
         const val MAX_HEALTH_LEVEL = Int.MAX_VALUE
         const val ROUND_MAX = 90f
         const val AIRSTRIKE_COOLDOWN = 20f
@@ -425,13 +425,16 @@ class World(private val rnd: Random = Random.Default) {
         return true
     }
 
-    fun cure(): Boolean {
-        if (phase != Phase.RUNNING || !cureReady) return false
+    /** The survivor closest to turning, if anyone is infected. */
+    fun mostInfected(): Human? = humans.filter { !it.dead && it.infection > 0.01f }.maxByOrNull { it.infection }
+
+    /** Cures one survivor completely. */
+    fun cureOne(h: Human): Boolean {
+        if (phase != Phase.RUNNING || !cureReady || h.dead) return false
         cureCooldown = CURE_COOLDOWN
-        for (h in humans) {
-            if (h.infection > 0.01f) texts.add(FloatText(h.x, h.y - 12f, "cured!", 1.2f))
-            h.infection = 0f
-        }
+        h.infection = 0f
+        h.hurtFlash = 0f
+        texts.add(FloatText(h.x, h.y - 12f, "cured!", 1.4f))
         return true
     }
 

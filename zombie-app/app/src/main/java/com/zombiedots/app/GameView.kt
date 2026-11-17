@@ -27,6 +27,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         fun onPhaseChanged(phase: Phase)
         fun onAnnounce(message: String)
         fun onAirstrikeLaunched()
+        fun onCureTarget(h: Human)
     }
 
     val world = World()
@@ -39,6 +40,8 @@ class GameView(context: Context, private val listener: Listener) : View(context)
     var vibrate = true
     /** Set when the PLANE button was pressed, so the next drag is clearly an airstrike. */
     var planeAimRequested = false
+    /** CURE was pressed: the game slows down and tapping a survivor cures them. */
+    var cureMode = false
     var best = 0f
     /** 3, 2, 1 while the nuke button is held; 0 otherwise. */
     var nukeCountdown = 0
@@ -155,11 +158,18 @@ class GameView(context: Context, private val listener: Listener) : View(context)
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
             if (world.phase == Phase.SETUP && !paused) startAt(e.x, e.y)
+            if (cureMode && world.phase == Phase.RUNNING && !paused) {
+                // Pick the survivor nearest the tap (generous so moving dots are easy to hit)
+                val tx = e.x / d; val ty = e.y / d
+                val h = world.humans.filter { it.role != Role.STRAY && !it.dead }
+                    .minByOrNull { (it.x - tx) * (it.x - tx) + (it.y - ty) * (it.y - ty) }
+                if (h != null && (h.x - tx) * (h.x - tx) + (h.y - ty) * (h.y - ty) < 45f * 45f) listener.onCureTarget(h)
+            }
             return true
         }
 
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-            if (world.phase == Phase.RUNNING && !paused && tapAddsZombies && !planeAimRequested) {
+            if (world.phase == Phase.RUNNING && !paused && tapAddsZombies && !planeAimRequested && !cureMode) {
                 world.dropZombies(e.x / d, e.y / d)
             }
             return true
@@ -210,7 +220,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         val now = System.nanoTime()
         val dt = if (lastFrame == 0L) 0f else min((now - lastFrame) / 1e9f, 0.05f)
         lastFrame = now
-        if (!paused) world.update(dt * speed)
+        if (!paused) world.update(dt * speed * (if (cureMode) 0.25f else 1f))
         if (flash > 0f) flash = max(0f, flash - dt * 2.2f)
 
         checkEvents()
@@ -471,6 +481,38 @@ class GameView(context: Context, private val listener: Listener) : View(context)
             infRect.set(hx - 8.5f * d, hy - 8.5f * d, hx + 8.5f * d, hy + 8.5f * d)
             c.drawArc(infRect, -90f, 360f * inf, false, infPaint)
         }
+        val now = System.currentTimeMillis()
+        if (cureMode && h.role != Role.STRAY) {
+            val most = world.mostInfected()
+            if (h === most) {
+                val p = (now % 900L) / 900f
+                cureRing.color = Color.argb(((1f - p) * 255).toInt(), 240, 139, 224)
+                c.drawCircle(hx, hy, (12f + 10f * p) * d, cureRing)
+                labelPaint.color = Color.parseColor("#F08BE0")
+                labelPaint.textSize = 10 * d
+                c.drawText("most infected", hx, hy + 22 * d, labelPaint)
+            } else {
+                cureRing.color = Color.argb(140, 240, 139, 224)
+                c.drawCircle(hx, hy, 12f * d, cureRing)
+            }
+            if (inf > 0.01f) {
+                labelPaint.color = Color.WHITE
+                labelPaint.textSize = 10 * d
+                c.drawText("${(inf * 100).toInt()}%", hx, hy - 13 * d, labelPaint)
+            }
+        } else if (inf >= 0.75f) {
+            // About to turn: pulsing warning sign
+            val pulse = 0.6f + 0.4f * kotlin.math.sin(now / 150.0).toFloat()
+            labelPaint.color = Color.argb((255 * pulse).toInt(), 255, 210, 60)
+            labelPaint.textSize = 14 * d
+            c.drawText("⚠", hx, hy - 12 * d, labelPaint)
+        }
+    }
+
+    private val cureRing = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2f * d }
+    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER; typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+        setShadowLayer(4f, 0f, 1f, Color.BLACK)
     }
 
     private fun drawStar(c: Canvas, x: Float, y: Float, r: Float) {
