@@ -507,10 +507,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         // A spark travelling along the rule
         val sx = w * 0.25f + (w * 0.5f) * ((t * 0.35f) % 1f)
         fill.color = Color.argb((220 * a).toInt(), 220, 235, 255); c.drawCircle(sx, ruleY + 0.6f * d, 1.8f * d, fill)
-        text.letterSpacing = 0.3f
-        text.textSize = 10.5f * d
-        text.color = Color.argb((160 * a).toInt(), 160, 190, 240)
-        c.drawText("SELECT AN APP", w / 2, ruleY + 22 * d, text)
         // Status corners: date left, clock right, thin brackets
         text.letterSpacing = 0.12f; text.textSize = 11.5f * d
         text.color = Color.argb((170 * a).toInt(), 190, 210, 245)
@@ -571,7 +567,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.textAlign = Paint.Align.CENTER
         text.textSize = 14 * d; text.letterSpacing = 0.18f
         text.color = Color.argb(((if (addSel) 255 else 190) * a).toInt(), 170, 205, 255)
-        c.drawText(if (addSel) "TAP AGAIN TO ADD AN APP" else "+  ADD AN APP", ar.centerX(), ar.centerY() + 5 * d, text)
+        c.drawText("+  ADD AN APP", ar.centerX(), ar.centerY() + 5 * d, text)
         c.restore()
         // The app being moved floats above everything, a little bigger and glowing
         if (moveIndex in games.indices) {
@@ -634,8 +630,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         line.color = Color.argb((90 * a).toInt(), 160, 200, 255)
         c.drawLine(w / 2 - 8 * d, h - 62 * d + bob, w / 2, h - 66 * d + bob, line); c.drawLine(w / 2, h - 66 * d + bob, w / 2 + 8 * d, h - 62 * d + bob, line)
         text.textAlign = Paint.Align.CENTER
-        val hint = when { moveIndex >= 0 -> "DRAG TO MOVE  ·  LET GO TO DROP"; selected in games.indices -> "TAP AGAIN TO OPEN"; else -> "TAP TO SELECT" }
-        c.drawText(if (moveIndex < 0) "$hint  ·  HOLD TO MOVE" else hint, w / 2, h - 74 * d, text)
     }
 
     private val gearRect = RectF()
@@ -722,7 +716,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         c.drawText(g.name, ic.right + 16 * d, r.top + r.height() * 0.46f, text)
         text.textSize = 11.5f * d; text.letterSpacing = 0.06f
         text.color = if (g.installed) Color.argb((175 * a).toInt(), 170, 200, 240) else Color.argb((200 * a).toInt(), 255, 190, 110)
-        val sub = when { !g.installed -> "Not installed · tap again to download"; sel -> "Tap again to open"; else -> g.tagline }
+        val sub = if (!g.installed) "Not installed" else g.tagline
         c.drawText(sub, ic.right + 16 * d, r.top + r.height() * 0.72f, text)
         if (sel) {
             // Chevron on the right
