@@ -390,7 +390,10 @@ class MainActivity : Activity(), GameView.Listener {
         if (w.phase != Phase.RUNNING) { onAnnounce("Tap the map to put your team down first."); return }
         when {
             !w.healthReady -> onAnnounce("Next health upgrade in ${w.healthCooldown.toInt() + 1} seconds.")
-            w.upgradeHealth() -> onAnnounce("Survivors are tougher and faster! Health level ${w.healthLevel}.")
+            w.upgradeHealth() -> {
+                game.vibe(Haptics.Kind.HEALTH)
+                onAnnounce("Survivors are tougher and faster! Health level ${w.healthLevel}.")
+            }
         }
         updateHud()
     }
@@ -418,6 +421,7 @@ class MainActivity : Activity(), GameView.Listener {
             return
         }
         if (game.world.cureOne(h)) {
+            game.vibe(Haptics.Kind.CURE)
             onAnnounce(if (pct > 0) "Cured! Their infection was $pct percent." else "Cured!")
         }
         game.cureMode = false
@@ -515,7 +519,7 @@ class MainActivity : Activity(), GameView.Listener {
         tutorialPage("Who is who",
             card(
                 "Your team:",
-                dot(game.playerColor, "Yellow = your survivor, the leader"),
+                dot(game.playerColor, "Gold = your leader. Carries a powerful shotgun that hits many zombies at once!"),
                 dot(game.hunterColor, "Blue = hunters. They shoot zombies."),
                 dot(game.strayColor, "Gray = lost survivors. They run over and join your team!")
             ),

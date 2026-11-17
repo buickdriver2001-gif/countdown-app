@@ -70,7 +70,7 @@ enum class Tactic(val label: String) {
 }
 
 /** A bullet in flight (purely visual: damage is applied when the shot is fired). */
-class Tracer(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val tracerRound: Boolean, val hit: Boolean) {
+class Tracer(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val tracerRound: Boolean, val hit: Boolean, val pellet: Boolean = false) {
     val length = kotlin.math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1)).coerceAtLeast(1f)
     /** Seconds the bullet takes to arrive. */
     val travel = length / BULLET_SPEED
@@ -126,6 +126,8 @@ class World(private val rnd: Random = Random.Default) {
         const val ROUND_BREAK = 8f
         const val HEALTH_COOLDOWN = 30f
         const val STRAY_TIME = 18f
+        const val SHOTGUN_RANGE = 85f
+        const val SHOTGUN_PELLETS = 7
         const val CURE_COOLDOWN = 15f
         const val MAX_HEALTH_LEVEL = Int.MAX_VALUE
         const val ROUND_MAX = 90f
@@ -966,7 +968,7 @@ class World(private val rnd: Random = Random.Default) {
         if (h.role == Role.STRAY) return
         h.cooldown -= dt
         if (h.cooldown > 0f) return
-        val range = if (h.role == Role.HUNTER) 115f else 80f
+        val range = if (h.role == Role.HUNTER) 115f else SHOTGUN_RANGE
         var best: Zombie? = null
         var bd = range * range
         for (z in zombies) {
@@ -977,6 +979,7 @@ class World(private val rnd: Random = Random.Default) {
         }
         val z = best ?: return
         val running = tactic == Tactic.RUN
+        if (h.role == Role.PLAYER) { fireShotgun(h, z, running); return }
         h.cooldown = (if (h.role == Role.HUNTER) 0.32f + rnd.nextFloat() * 0.2f else 0.8f + rnd.nextFloat() * 0.3f) *
             (if (running) 1.6f else 1f)
         val hitChance = (if (h.role == Role.HUNTER) 0.88f else 0.65f) * (if (running) 0.65f else 1f)
@@ -1010,6 +1013,32 @@ class World(private val rnd: Random = Random.Default) {
             val dx = z.x + miss - h.x; val dy = z.y - miss - h.y
             val len = sqrt(dx * dx + dy * dy).coerceAtLeast(1f)
             tracers.add(Tracer(h.x, h.y, h.x + dx / len * (len + 40f), h.y + dy / len * (len + 40f), rnd.nextInt(3) == 0, hit = false))
+        }
+    }
+
+    /** The leader's shotgun: a cone of pellets, each able to hit a different zombie. */
+    private fun fireShotgun(h: Human, aim: Zombie, running: Boolean) {
+        h.cooldown = 1.0f + rnd.nextFloat() * 0.25f
+        val base = atan2(aim.y - h.y, aim.x - h.x)
+        val spread = if (running) 0.55f else 0.4f // radians either side
+        for (p in 0 until SHOTGUN_PELLETS) {
+            val a = base + spread * (-1f + 2f * p / (SHOTGUN_PELLETS - 1)) + (rnd.nextFloat() - 0.5f) * 0.08f
+            val ux = cos(a); val uy = sin(a)
+            val reach = SHOTGUN_RANGE * (0.85f + rnd.nextFloat() * 0.2f)
+            // First zombie along this pellet's path
+            var hitZ: Zombie? = null
+            var along = reach
+            for (o in zombies) {
+                if (o.dead || !o.entered) continue
+                val ox = o.x - h.x; val oy = o.y - h.y
+                val t = ox * ux + oy * uy
+                if (t <= 0f || t >= along) continue
+                val side = abs(ox * uy - oy * ux)
+                if (side < o.radius + 1.5f) { along = t; hitZ = o }
+            }
+            val endX = h.x + ux * along; val endY = h.y + uy * along
+            if (hitZ != null) hurt(hitZ, 0.9f * damageBonus)
+            tracers.add(Tracer(h.x, h.y, endX, endY, false, hit = hitZ != null, pellet = true))
         }
     }
 

@@ -90,7 +90,7 @@ class NukeButtonView(context: Context, private val listener: Listener) : View(co
         updateDescription()
     }
 
-    private fun buzz(type: Int) { if (vibrate) performHapticFeedback(type) }
+    private fun buzz(kind: Haptics.Kind) { Haptics.enabled = vibrate; Haptics.play(context, kind) }
 
     fun close() {
         if (state == State.HOLDING) listener.onCountdown(0)
@@ -120,14 +120,14 @@ class NukeButtonView(context: Context, private val listener: Listener) : View(co
                 when (state) {
                     State.CLOSED -> {
                         state = State.OPEN
-                        buzz(HapticFeedbackConstants.VIRTUAL_KEY)
+                        buzz(Haptics.Kind.TICK)
                         listener.onMessage("Safety case open. Press and hold the red button to launch.")
                     }
                     State.OPEN -> if (lid > 0.8f) {
                         state = State.HOLDING
                         holdStart = SystemClock.uptimeMillis()
                         lastCount = 0
-                        buzz(HapticFeedbackConstants.LONG_PRESS)
+                        buzz(Haptics.Kind.TICK)
                     }
                     State.HOLDING -> {}
                 }
@@ -178,7 +178,7 @@ class NukeButtonView(context: Context, private val listener: Listener) : View(co
             if (n != lastCount) {
                 lastCount = n
                 listener.onCountdown(n)
-                buzz(HapticFeedbackConstants.LONG_PRESS)
+                buzz(Haptics.Kind.COUNT)
             }
             if (elapsed >= HOLD_MS) {
                 state = State.CLOSED

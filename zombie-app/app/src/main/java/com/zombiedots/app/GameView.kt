@@ -135,14 +135,15 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         val ok = world.nuke(l?.x ?: world.width / 2f, l?.y ?: world.height / 2f)
         if (ok) {
             flash = 1f
-            buzz(HapticFeedbackConstants.LONG_PRESS)
+            buzz(Haptics.Kind.NUKE)
             listener.onAnnounce("Nuke! Every zombie is gone. Next wave in ${World.NUKE_BREATHER.toInt()} seconds.")
         }
         return ok
     }
 
-    private fun buzz(type: Int) {
-        if (vibrate) performHapticFeedback(type)
+    private fun buzz(kind: Haptics.Kind) {
+        Haptics.enabled = vibrate
+        Haptics.play(context, kind)
     }
 
     // ---------- input
@@ -205,7 +206,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
                     aiming = false
                     if (world.airstrike(aimSX / d, aimSY / d, aimEX / d, aimEY / d)) {
                         planeAimRequested = false
-                        buzz(HapticFeedbackConstants.VIRTUAL_KEY)
+                        buzz(Haptics.Kind.PLANE)
                         listener.onAirstrikeLaunched()
                         listener.onAnnounce("Plane is on the way!")
                     }
@@ -242,21 +243,24 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         if (world.wave != lastWave) {
             lastWave = world.wave
             listener.onAnnounce("Wave ${world.wave} is coming!")
-            buzz(HapticFeedbackConstants.KEYBOARD_TAP)
+            buzz(Haptics.Kind.WAVE)
         }
         if (world.behemothArrived != lastBehemoth) {
             lastBehemoth = world.behemothArrived
             listener.onAnnounce("Warning! A behemoth is coming!")
-            buzz(HapticFeedbackConstants.LONG_PRESS)
+            buzz(Haptics.Kind.BOSS)
         }
         if (world.turned != lastTurned) {
             lastTurned = world.turned
             listener.onAnnounce("Oh no! Someone turned into a zombie.")
+            buzz(Haptics.Kind.TURNED)
         }
         val team = teamSize()
         if (team > lastTeam) listener.onAnnounce("A new survivor joined your team!")
         lastTeam = team
     }
+
+    fun vibe(kind: Haptics.Kind) = buzz(kind)
 
     fun teamSize() = world.humans.count { it.role != Role.STRAY && !it.dead }
 
@@ -480,18 +484,22 @@ class GameView(context: Context, private val listener: Listener) : View(context)
     private fun drawBullet(c: Canvas, t: Tracer) {
         val ux = (t.x2 - t.x1) / t.length
         val uy = (t.y2 - t.y1) / t.length
-        // Muzzle flash
+        // Muzzle flash (bigger for the shotgun)
         if (t.age < 0.05f) {
             val a = 1f - t.age / 0.05f
-            flashPaint.color = Color.argb((230 * a).toInt(), 255, 230, 150)
-            c.drawCircle((t.x1 + ux * 5f) * d, (t.y1 + uy * 5f) * d, 3.2f * d * (0.6f + 0.4f * a), flashPaint)
+            flashPaint.color = Color.argb(((if (t.pellet) 120 else 230) * a).toInt(), 255, 230, 150)
+            c.drawCircle((t.x1 + ux * 5f) * d, (t.y1 + uy * 5f) * d, (if (t.pellet) 5f else 3.2f) * d * (0.6f + 0.4f * a), flashPaint)
         }
         if (t.age <= t.travel) {
             val dist = t.length * (t.age / t.travel)
-            val tail = if (t.tracerRound) 22f else 11f
+            val tail = if (t.pellet) 6f else if (t.tracerRound) 22f else 11f
             val hx = (t.x1 + ux * dist) * d; val hy = (t.y1 + uy * dist) * d
             val tx = (t.x1 + ux * max(0f, dist - tail)) * d; val ty = (t.y1 + uy * max(0f, dist - tail)) * d
-            if (t.tracerRound) {
+            if (t.pellet) {
+                bulletGlow.color = Color.argb(70, 255, 210, 90); bulletGlow.strokeWidth = 3f * d
+                c.drawLine(tx, ty, hx, hy, bulletGlow)
+                bulletPaint.color = Color.parseColor("#FFE066"); bulletPaint.strokeWidth = 1.3f * d
+            } else if (t.tracerRound) {
                 bulletGlow.color = Color.argb(90, 255, 120, 40); bulletGlow.strokeWidth = 5f * d
                 c.drawLine(tx, ty, hx, hy, bulletGlow)
                 bulletPaint.color = Color.parseColor("#FFB15A"); bulletPaint.strokeWidth = 2.2f * d
