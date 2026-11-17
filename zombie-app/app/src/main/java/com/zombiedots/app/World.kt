@@ -145,7 +145,7 @@ class World(private val rnd: Random = Random.Default) {
         waveAge += dt
         if (spawnQueue > 0) {
             spawnTimer -= dt
-            val rate = min(2.5f + wave * 0.35f, 7f) // zombies per second
+            val rate = min(1.25f + wave * 0.18f, 3.5f) // zombies per second
             while (spawnTimer <= 0f && spawnQueue > 0) {
                 val (x, y) = edgePoint(waveEdges[spawnIndex++ % waveEdges.size])
                 if (spawnQueue <= behemothsPending) {
@@ -281,17 +281,17 @@ class World(private val rnd: Random = Random.Default) {
      */
     private fun growRound() {
         if (wave == 1) {
-            waveSize = 25; waveGrowth = 0; speedBase = 27f
+            waveSize = 13; waveGrowth = 0; speedBase = 27f
             return
         }
         var inc: Float
         var spInc: Float
         if (wave <= 5) {
-            inc = 6f
+            inc = 3f
             spInc = 2.6f
         } else {
             val fade = Math.pow(0.88, (wave - 5).toDouble()).toFloat()
-            inc = 6f * fade
+            inc = 3f * fade
             spInc = 2.6f * fade
             val roll = rnd.nextFloat()
             when {
@@ -551,6 +551,7 @@ class World(private val rnd: Random = Random.Default) {
         updateAirstrikes(dt)
         buildGrid()
         updateZombies(dt)
+        computeThreats()
         thinkSquad(dt)
         updateHumans(dt)
         attacks()
@@ -689,6 +690,26 @@ class World(private val rnd: Random = Random.Default) {
         }
     }
 
+    // ------------------------------------------------------------------ threat map
+
+    /** For each zombie (same index): distance to the closest survivor. */
+    private var threatDist = FloatArray(0)
+
+    private fun computeThreats() {
+        if (threatDist.size < zombies.size) threatDist = FloatArray(zombies.size * 2)
+        for (i in zombies.indices) {
+            val z = zombies[i]
+            var best = Float.MAX_VALUE
+            for (h in humans) {
+                if (h.dead) continue
+                val dx = h.x - z.x; val dy = h.y - z.y
+                val dd = dx * dx + dy * dy
+                if (dd < best) best = dd
+            }
+            threatDist[i] = sqrt(best) - z.radius
+        }
+    }
+
     // ------------------------------------------------------------------ squad brain
 
     private fun thinkSquad(dt: Float) {
@@ -706,9 +727,12 @@ class World(private val rnd: Random = Random.Default) {
             val d2 = dx * dx + dy * dy
             if (d2 < 220f * 220f) {
                 mid++
-                val w = 1f / (sqrt(d2) + 20f)
+                val dist = sqrt(d2) - z.radius
+                val w = 1f / (dist.coerceAtLeast(1f) + 20f)
                 tx += dx * w; ty += dy * w
-                if (d2 < 110f * 110f) near++
+                // Smart: count zombies by how soon they'll arrive, not just how close they are
+                val ttc = dist / max(5f, z.speed)
+                if (ttc < 2.6f) near += if (z.type == ZType.BEHEMOTH) 6 else 1
             }
         }
         // Nearest zombie anywhere on the map: the squad goes looking for it when nothing is close
@@ -773,7 +797,19 @@ class World(private val rnd: Random = Random.Default) {
         }
         if (tactic == Tactic.HUNT && huntTarget == null && bigOne == null) tacticTimer = 0f
         huntFocus = bigOne ?: huntTarget
+
+        // Escort: send the closest healthy hunter to bring a lost survivor home
+        val stray = humans.firstOrNull { it.role == Role.STRAY && !it.dead }
+        escort = if (stray != null && squad.size >= 2 && tactic != Tactic.RUN) {
+            val cur = escort
+            if (cur != null && !cur.dead && cur.role == Role.HUNTER && cur.infection < 0.6f) cur
+            else squad.filter { it.infection < 0.6f }.minByOrNull { (it.x - stray.x) * (it.x - stray.x) + (it.y - stray.y) * (it.y - stray.y) }
+        } else null
+        escortTarget = stray
     }
+
+    private var escort: Human? = null
+    private var escortTarget: Human? = null
 
     private var huntTarget: Zombie? = null
     /** What the squad is moving toward while hunting. */
@@ -820,6 +856,13 @@ class World(private val rnd: Random = Random.Default) {
                 val x = (lead.x + cos(a) * r).coerceIn(45f, maxX)
                 val y = (lead.y + sin(a) * r).coerceIn(45f, maxY)
                 var score = sqrt(nearestZombieDist2(x, y))
+                // Smart: prefer open areas with few zombies around, not just far from the closest one
+                var crowd = 0
+                for (z in zombies) {
+                    val ddx = z.x - x; val ddy = z.y - y
+                    if (ddx * ddx + ddy * ddy < 110f * 110f) crowd++
+                }
+                score -= crowd * 6f
                 // Don't run *through* the horde
                 val mx = (x + lead.x) / 2f; val my = (y + lead.y) / 2f
                 score += sqrt(nearestZombieDist2(mx, my)) * 0.8f
@@ -912,6 +955,16 @@ class World(private val rnd: Random = Random.Default) {
                     }
                     Tactic.PATROL -> { goalX = patrolX; goalY = patrolY; urgency = 0.45f }
                 }
+            } else if (lead != null && h === escort && escortTarget != null) {
+                // Escort duty: go meet the lost survivor and cover them on the way back
+                val s = escortTarget!!
+                goalX = s.x + (lead.x - s.x) * 0.15f; goalY = s.y + (lead.y - s.y) * 0.15f
+                urgency = 0.95f
+            } else if (lead != null && h.infection > 0.6f && tactic != Tactic.SPLIT) {
+                // Badly infected: fall back behind the leader, away from the danger
+                goalX = lead.x - fx0 * 14f + (if (h.slot % 2 == 0) -fy0 else fy0) * 8f
+                goalY = lead.y - fy0 * 14f + (if (h.slot % 2 == 0) fx0 else -fx0) * 8f
+                urgency = 0.9f
             } else if (lead != null) {
                 val n = max(1, squadSize)
                 // Spread across an arc facing the danger (fixed slots, no spinning)
@@ -969,13 +1022,30 @@ class World(private val rnd: Random = Random.Default) {
         h.cooldown -= dt
         if (h.cooldown > 0f) return
         val range = if (h.role == Role.HUNTER) 115f else SHOTGUN_RANGE
+        // Smart targeting: shoot whatever is most dangerous to the team, not just the closest
         var best: Zombie? = null
-        var bd = range * range
-        for (z in zombies) {
+        var bestScore = Float.MAX_VALUE
+        var smallInRange = false
+        for (i in zombies.indices) {
+            val z = zombies[i]
             if (z.dead || !z.entered) continue
             val dx = z.x - h.x; val dy = z.y - h.y
-            val d = dx * dx + dy * dy
-            if (d < bd) { bd = d; best = z }
+            val d2 = dx * dx + dy * dy
+            if (d2 > range * range) continue
+            if (z.type != ZType.BEHEMOTH) smallInRange = true
+            val toTeam = if (i < threatDist.size) threatDist[i] else 999f
+            var score = sqrt(d2) * 0.35f + toTeam
+            if (toTeam < 8f) score -= 40f              // biting someone right now
+            if (z.type == ZType.RUNNER) score -= 15f    // fast ones first
+            if (z.armor > 0f) score += 10f              // armor wastes bullets
+            if (z.type == ZType.BEHEMOTH) score += 60f  // boss only when nothing urgent
+            if (score < bestScore) { bestScore = score; best = z }
+        }
+        if (best?.type == ZType.BEHEMOTH && smallInRange && h.role == Role.PLAYER) {
+            // The shotgun is for crowds; let the rifles chip the boss
+            best = zombies.filter { !it.dead && it.entered && it.type != ZType.BEHEMOTH &&
+                (it.x - h.x) * (it.x - h.x) + (it.y - h.y) * (it.y - h.y) < range * range }
+                .minByOrNull { (it.x - h.x) * (it.x - h.x) + (it.y - h.y) * (it.y - h.y) } ?: best
         }
         val z = best ?: return
         val running = tactic == Tactic.RUN
@@ -1019,8 +1089,27 @@ class World(private val rnd: Random = Random.Default) {
     /** The leader's shotgun: a cone of pellets, each able to hit a different zombie. */
     private fun fireShotgun(h: Human, aim: Zombie, running: Boolean) {
         h.cooldown = 1.0f + rnd.nextFloat() * 0.25f
-        val base = atan2(aim.y - h.y, aim.x - h.x)
         val spread = if (running) 0.55f else 0.4f // radians either side
+        // Smart aim: point the cone where it will hit the most zombies
+        var base = atan2(aim.y - h.y, aim.x - h.x)
+        var bestCount = -1
+        for (c in zombies) {
+            if (c.dead || !c.entered) continue
+            val cx = c.x - h.x; val cy = c.y - h.y
+            if (cx * cx + cy * cy > SHOTGUN_RANGE * SHOTGUN_RANGE) continue
+            val ang = atan2(cy, cx)
+            var count = 0
+            for (o in zombies) {
+                if (o.dead || !o.entered) continue
+                val ox = o.x - h.x; val oy = o.y - h.y
+                if (ox * ox + oy * oy > SHOTGUN_RANGE * SHOTGUN_RANGE) continue
+                var diff = atan2(oy, ox) - ang
+                while (diff > Math.PI) diff -= (2 * Math.PI).toFloat()
+                while (diff < -Math.PI) diff += (2 * Math.PI).toFloat()
+                if (abs(diff) < spread) count++
+            }
+            if (count > bestCount) { bestCount = count; base = ang }
+        }
         for (p in 0 until SHOTGUN_PELLETS) {
             val a = base + spread * (-1f + 2f * p / (SHOTGUN_PELLETS - 1)) + (rnd.nextFloat() - 0.5f) * 0.08f
             val ux = cos(a); val uy = sin(a)

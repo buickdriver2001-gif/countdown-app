@@ -379,7 +379,6 @@ class GameView(context: Context, private val listener: Listener) : View(context)
             c.drawText(t.text, t.x * d, t.y * d, floatPaint)
         }
 
-        world.boss?.let { drawBossBar(c, it) }
         if (flash > 0f) c.drawColor(Color.argb((flash * 140).toInt(), 255, 240, 210))
         if (nukeCountdown > 0) drawCountdown(c)
     }
@@ -440,6 +439,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         behemothRim.strokeWidth = 2f * d
         behemothRim.color = Color.argb(200, 255, 80, 70)
         c.drawCircle(zx, zy, r * 0.75f, behemothRim)
+        drawBossBar(c, z, zx, zy, r)
         if (z.armor > 0f) {
             behemothRim.strokeWidth = 4f * d
             behemothRim.color = Color.argb((120 + 135 * (z.armor / z.armorMax).coerceIn(0f, 1f)).toInt(), 201, 209, 220)
@@ -455,15 +455,19 @@ class GameView(context: Context, private val listener: Listener) : View(context)
     private val bossFrame = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.5f * d; color = Color.parseColor("#AAFFFFFF") }
     private val bossRect = RectF()
 
-    /** Classic boss health bar along the bottom of the map. */
-    private fun drawBossBar(c: Canvas, z: Zombie) {
-        val left = width * 0.08f
-        val right = width * 0.92f
-        val barH = 9 * d
-        val bottom = height - 16 * d
-        val top = bottom - barH
+    /** Boss bar that rides above the behemoth (kept on screen near the edges). */
+    private fun drawBossBar(c: Canvas, z: Zombie, zx: Float, zy: Float, r: Float) {
+        val barW = max(r * 2.4f, 120 * d)
+        val left = (zx - barW / 2).coerceIn(6 * d, max(6 * d, width - barW - 6 * d))
+        val right = left + barW
+        val barH = 6 * d
         val armored = z.armorMax > 0f
-        c.drawText(if (armored) "☠  ARMORED BEHEMOTH" else "☠  BEHEMOTH", left, top - (if (armored) 12 else 6) * d, bossName)
+        var bottom = zy - r - 12 * d
+        if (bottom - barH - 30 * d < 0f) bottom = zy + r + 26 * d // too close to the top: show it underneath
+        bottom = bottom.coerceAtMost(height - 4 * d)
+        val top = bottom - barH
+        bossName.textSize = 10 * d
+        c.drawText(if (armored) "☠ ARMORED BEHEMOTH" else "☠ BEHEMOTH", left, top - (if (armored) 10 else 4) * d, bossName)
         bossRect.set(left, top, right, bottom)
         c.drawRoundRect(bossRect, 3 * d, 3 * d, hpBack)
         val hpFrac = (z.hp / z.maxHp).coerceIn(0f, 1f)
@@ -472,10 +476,10 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         bossRect.set(left, top, right, bottom)
         c.drawRoundRect(bossRect, 3 * d, 3 * d, bossFrame)
         if (armored) {
-            val at = top - 7 * d
-            bossRect.set(left, at, right, at + 4 * d)
+            val at = top - 6 * d
+            bossRect.set(left, at, right, at + 3.5f * d)
             c.drawRoundRect(bossRect, 2 * d, 2 * d, hpBack)
-            bossRect.set(left, at, left + (right - left) * (z.armor / z.armorMax).coerceIn(0f, 1f), at + 4 * d)
+            bossRect.set(left, at, left + (right - left) * (z.armor / z.armorMax).coerceIn(0f, 1f), at + 3.5f * d)
             c.drawRoundRect(bossRect, 2 * d, 2 * d, armorFill)
         }
     }
