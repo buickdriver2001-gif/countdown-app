@@ -62,6 +62,12 @@ class SwitcherActivity : Activity() {
         finish()
     }
 
+    fun openSetting(action: String) { try { startActivity(Intent(action)) } catch (_: Exception) {} }
+
+    fun openAppInfo() {
+        try { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName"))) } catch (_: Exception) {}
+    }
+
     /** Closes an app's background process (the app itself stays installed). */
     fun closeApp(pkg: String) {
         try { (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).killBackgroundProcesses(pkg) } catch (_: Exception) {}
@@ -94,6 +100,8 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
     private val r = RectF()
     private val clearRect = RectF()
     private val homeRect = RectF()
+    private val helperRect = RectF()
+    private val restrictRect = RectF()
 
     fun load() {
         val pm = a.packageManager
@@ -142,10 +150,24 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
 
         val live = cards.filter { !it.gone }
         if (live.isEmpty()) {
-            text.textSize = 15 * d; text.letterSpacing = 0.05f; text.color = Color.argb(200, 170, 200, 240)
-            c.drawText(if (Recents.serviceOn(a)) "No open apps yet" else "Turn on the NEXUS helper to see your apps here", w / 2, h * 0.45f, text)
-            text.textSize = 12 * d; text.color = Color.argb(150, 160, 185, 230)
-            c.drawText(if (Recents.serviceOn(a)) "Apps you use will show up here" else "NEXUS → ⚙ → Open apps (square button)", w / 2, h * 0.45f + 24 * d, text)
+            val on = Recents.serviceOn(a)
+            text.textSize = 16 * d; text.letterSpacing = 0.05f; text.color = Color.argb(220, 200, 220, 250)
+            c.drawText(if (on) "No open apps yet" else "The NEXUS helper is off", w / 2, h * 0.36f, text)
+            text.textSize = 12.5f * d; text.color = Color.argb(170, 170, 195, 235)
+            val lines = if (on) listOf("Open a few apps for a few seconds each,", "then come back here.")
+                else listOf("NEXUS needs its helper switched on to see", "which apps you've used.", "",
+                    "1. Tap TURN ON HELPER below.", "2. Choose NEXUS Open Apps and switch it on.",
+                    "3. If it says \"Restricted setting\", tap the second button,", "    then ⋮ (top right) → Allow restricted settings,", "    and switch the helper on again.")
+            lines.forEachIndexed { i, l -> c.drawText(l, w / 2, h * 0.36f + (30 + i * 20) * d, text) }
+            if (!on) {
+                helperRect.set(w / 2 - 130 * d, h * 0.62f, w / 2 + 130 * d, h * 0.62f + 48 * d)
+                restrictRect.set(w / 2 - 130 * d, h * 0.62f + 60 * d, w / 2 + 130 * d, h * 0.62f + 104 * d)
+                fill.shader = LinearGradient(0f, helperRect.top, 0f, helperRect.bottom, intArrayOf(Color.rgb(70, 130, 245), Color.rgb(40, 85, 200)), null, Shader.TileMode.CLAMP)
+                c.drawRoundRect(helperRect, 24 * d, 24 * d, fill); fill.shader = null
+                text.textSize = 14 * d; text.letterSpacing = 0.22f; text.color = Color.WHITE
+                c.drawText("TURN ON HELPER", helperRect.centerX(), helperRect.centerY() + 5 * d, text)
+                pill(c, restrictRect, "ALLOW RESTRICTED SETTINGS", true)
+            } else { helperRect.setEmpty(); restrictRect.setEmpty() }
         } else {
             // Carousel physics: glide, then settle on the nearest card
             if (!dragging) {
@@ -302,7 +324,11 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
             a.goNexus(); return
         }
         if (homeRect.contains(x, y)) { sfx.confirm(); a.goNexus(); return }
-        if (l.isEmpty()) { a.goNexus(); return }
+        if (l.isEmpty()) {
+            if (helperRect.contains(x, y)) { sfx.confirm(); a.openSetting(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS) }
+            else if (restrictRect.contains(x, y)) { sfx.confirm(); a.openAppInfo() }
+            return
+        }
         val cw = width * 0.62f
         val off = (x - width / 2f) / (cw * 0.78f)
         val idx = (pos + off).roundToInt()
