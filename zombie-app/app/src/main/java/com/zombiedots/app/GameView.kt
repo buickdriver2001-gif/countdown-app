@@ -367,7 +367,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
                 t.text.startsWith("⚠") -> { floatPaint.color = Color.parseColor("#FF5A4A"); floatPaint.textSize = 17 * d }
                 t.text.startsWith("ROUND") -> { floatPaint.color = Color.parseColor("#9CFF4D"); floatPaint.textSize = 15 * d }
                 t.text.endsWith("zombies") -> { floatPaint.color = Color.parseColor("#FFB0A0"); floatPaint.textSize = 12 * d }
-                t.text == "+HP" -> { floatPaint.color = Color.parseColor("#4BE36B"); floatPaint.textSize = 12 * d }
+                t.text == "+1 HP" -> { floatPaint.color = Color.parseColor("#4BE36B"); floatPaint.textSize = 12 * d }
                 t.text == "cured!" -> { floatPaint.color = Color.parseColor("#F08BE0"); floatPaint.textSize = 12 * d }
                 t.text == "armor broke" -> { floatPaint.color = Color.parseColor("#C9D1DC"); floatPaint.textSize = 10 * d }
                 t.text.startsWith("Survivor Joined") -> { floatPaint.color = hunterColor; floatPaint.textSize = 14 * d }

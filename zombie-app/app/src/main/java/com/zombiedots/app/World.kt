@@ -436,7 +436,17 @@ class World(private val rnd: Random = Random.Default) {
     val healthReady get() = healthCooldown <= 0f
     val cureReady get() = cureCharges > 0
     /** Each health level makes bites infect less (diminishing, never fully immune). */
-    val biteResist get() = 0.3f + 0.7f * Math.pow(0.9, healthLevel.toDouble()).toFloat()
+    val biteResist get() = 1f // health now works through hitsToTurn
+
+    /** Extra bites everyone can take from health upgrades: +1 per level, +0.5 per level after 10. */
+    val bonusHits: Float get() = if (healthLevel <= 10) healthLevel.toFloat() else 10f + (healthLevel - 10) * 0.5f
+
+    /** How many normal bites this survivor can take before turning. */
+    fun hitsToTurn(role: Role): Float = when (role) {
+        Role.PLAYER -> 7f
+        Role.HUNTER -> 6f
+        Role.STRAY -> 3f
+    } + bonusHits
     /** And makes hunters hit harder, up to +50%. */
     val damageBonus get() = 1f + 0.5f * (1f - Math.pow(0.9, healthLevel.toDouble()).toFloat())
     /** Each health level also makes survivors faster, up to about +45%. */
@@ -446,7 +456,7 @@ class World(private val rnd: Random = Random.Default) {
         if (phase != Phase.RUNNING || !healthReady) return false
         healthLevel++
         healthCooldown = HEALTH_COOLDOWN
-        for (h in humans) texts.add(FloatText(h.x, h.y - 12f, "+HP", 1.2f))
+        for (h in humans) texts.add(FloatText(h.x, h.y - 12f, "+1 HP", 1.2f))
         return true
     }
 
@@ -1166,11 +1176,8 @@ class World(private val rnd: Random = Random.Default) {
                 if (d2 >= reach * reach) continue
                 z.attackCd = if (z.type == ZType.BEHEMOTH) 1.6f else 1.1f
                 val bite = when (z.type) { ZType.BEHEMOTH -> 3f; ZType.FAT -> 1.5f; else -> 1f }
-                h.infection += bite * biteResist * when (h.role) {
-                    Role.PLAYER -> 0.12f + rnd.nextFloat() * 0.06f
-                    Role.HUNTER -> 0.14f + rnd.nextFloat() * 0.08f
-                    Role.STRAY -> 0.45f
-                }
+                // Health = how many bites it takes to turn (fat = 1.5 bites, behemoth = 3)
+                h.infection += bite / hitsToTurn(h.role) * (0.9f + rnd.nextFloat() * 0.2f)
                 h.hurtFlash = 1f
                 val d = sqrt(d2).coerceAtLeast(0.5f)
                 val knock = if (z.type == ZType.BEHEMOTH) 160f else 70f

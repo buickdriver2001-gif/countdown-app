@@ -341,12 +341,12 @@ class MainActivity : Activity(), GameView.Listener {
             else -> "✈ PLANE\nReady"
         }
         healthBtn.text = when {
-            !w.healthReady -> "❤ Lv ${w.healthLevel}\n${w.healthCooldown.toInt() + 1}s"
-            else -> "❤ HEALTH\n+1 · Lv ${w.healthLevel}"
+            !w.healthReady -> "❤ ${w.hitsToTurn(Role.HUNTER).toInt()} hits\n${w.healthCooldown.toInt() + 1}s"
+            else -> "❤ HEALTH +1\n${w.hitsToTurn(Role.HUNTER).toInt()} hits"
         }
         healthBtn.alpha = if (w.healthReady) 1f else 0.45f
-        healthBtn.contentDescription = if (w.healthReady) "Health upgrade ready. Level ${w.healthLevel}. Tap to make your survivors tougher."
-            else "Health level ${w.healthLevel}. Next upgrade in ${w.healthCooldown.toInt() + 1} seconds."
+        healthBtn.contentDescription = if (w.healthReady) "Health upgrade ready. Hunters can take ${w.hitsToTurn(Role.HUNTER).toInt()} bites before turning. Tap to add one more."
+            else "Hunters can take ${w.hitsToTurn(Role.HUNTER).toInt()} bites before turning. Next upgrade in ${w.healthCooldown.toInt() + 1} seconds."
         val sick = w.humans.count { it.infection > 0.01f }
         if (!w.cureReady) game.cureMode = false
         cureBtn.text = when {
@@ -391,7 +391,7 @@ class MainActivity : Activity(), GameView.Listener {
             !w.healthReady -> onAnnounce("Next health upgrade in ${w.healthCooldown.toInt() + 1} seconds.")
             w.upgradeHealth() -> {
                 game.vibe(Haptics.Kind.HEALTH)
-                onAnnounce("Survivors are tougher and faster! Health level ${w.healthLevel}.")
+                onAnnounce("Plus one health! Hunters can now take ${w.hitsToTurn(Role.HUNTER).toInt()} bites before turning.")
             }
         }
         updateHud()
@@ -538,7 +538,7 @@ class MainActivity : Activity(), GameView.Listener {
         tutorialPage("Your buttons",
             card("☢  NUKE: tap it to open the safety case, then press and HOLD the red button. 3… 2… 1… every zombie disappears! You only get ONE."),
             card("✈  PLANE: tap it, then drag your finger across the map. A plane drops bombs along your line. Comes back after 20 seconds."),
-            card("❤  HEALTH: makes your whole team tougher and faster. Use it every time it's ready. No limit!"),
+            card("❤  HEALTH: everyone can take a few bites before turning (hunters 6, your leader 7). Each HEALTH tap adds +1 bite to the whole team, and makes them a bit faster too. Use it every time it's ready!"),
             card("💊  CURE: you have 3 charges. Each tap heals your WHOLE team by a third (3 taps = fully cured). When all 3 are used up, they come back after 2 minutes.")
         )
         tutorialPage("Rounds and bosses",
