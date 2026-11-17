@@ -14,7 +14,13 @@ import kotlin.random.Random
  * so it can be tested on its own.
  */
 
-class Zombie(var x: Float, var y: Float, val speed: Float, val runner: Boolean = false, var hp: Float = 1f) {
+enum class ZType { NORMAL, RUNNER, FAT, ARMORED }
+
+class Zombie(var x: Float, var y: Float, val speed: Float, val type: ZType = ZType.NORMAL, var hp: Float = 1f) {
+    var armor = 0f
+    var armorMax = 0f
+    val runner get() = type == ZType.RUNNER
+    val radius get() = when (type) { ZType.FAT -> 6f; ZType.ARMORED -> 3.8f; else -> 3.2f }
     var vx = 0f
     var vy = 0f
     var target: Human? = null
@@ -96,7 +102,9 @@ class World(private val rnd: Random = Random.Default) {
         const val MAX_HUNTERS = 8
         const val ZOMBIE_R = 3.2f
         const val HUMAN_R = 4.5f
-        const val NUKE_BREATHER = 10f
+        const val NUKE_BREATHER = 8f
+        const val ROUND_BREAK = 8f
+        const val ROUND_MAX = 90f
         const val AIRSTRIKE_COOLDOWN = 20f
         const val BOMB_RADIUS = 24f
         const val BOMB_SPACING = 16f
@@ -104,7 +112,33 @@ class World(private val rnd: Random = Random.Default) {
         const val MIN_STRIKE_LENGTH = 50f
     }
 
-    val nextWaveIn: Float get() = WAVE_TIME - waveTimer
+    /** Seconds until the next round during a break, or 0 while a round is going. */
+    val nextWaveIn: Float get() = intermission
+
+    private fun updateRounds(dt: Float) {
+        waveAge += dt
+        if (spawnQueue > 0) {
+            spawnTimer -= dt
+            val rate = min(2.5f + wave * 0.35f, 7f) // zombies per second
+            while (spawnTimer <= 0f && spawnQueue > 0) {
+                val (x, y) = edgePoint(waveEdges[spawnIndex++ % waveEdges.size])
+                addZombie(x, y)
+                spawnQueue--
+                spawnTimer += 1f / rate
+            }
+        } else if (zombies.isEmpty()) {
+            if (intermission <= 0f) {
+                intermission = ROUND_BREAK
+                texts.add(FloatText(width / 2f, height / 2f, "ROUND $wave CLEARED!", 2.4f))
+            }
+        }
+        if (intermission > 0f) {
+            intermission -= dt
+            if (intermission <= 0f) spawnWave()
+        } else if (waveAge > ROUND_MAX && spawnQueue == 0) {
+            spawnWave() // stragglers can't stall the game forever
+        }
+    }
 
     // ------------------------------------------------------------------ airstrikes
 
@@ -181,6 +215,7 @@ class World(private val rnd: Random = Random.Default) {
         strayTimer = 15f // first stray after ~15s
         nukeReady = true; turned = 0
         waveSize = 0; waveGrowth = 0; speedBase = 25f
+        spawnQueue = 0; intermission = 0f; waveAge = 0f; spawnIndex = 0
         tactic = Tactic.SQUAD_UP; tacticTimer = 0f
     }
 
@@ -215,11 +250,11 @@ class World(private val rnd: Random = Random.Default) {
         var inc: Float
         var spInc: Float
         if (wave <= 5) {
-            inc = 10f
+            inc = 6f
             spInc = 2.6f
         } else {
             val fade = Math.pow(0.88, (wave - 5).toDouble()).toFloat()
-            inc = 10f * fade
+            inc = 6f * fade
             spInc = 2.6f * fade
             val roll = rnd.nextFloat()
             when {
@@ -233,17 +268,26 @@ class World(private val rnd: Random = Random.Default) {
         speedBase = min(speedBase + spInc, 52f)
     }
 
+    // Black Ops-style rounds: zombies trickle in; the next round starts once this one is cleared
+    var spawnQueue = 0
+    private var spawnTimer = 0f
+    private var waveEdges = listOf(0)
+    private var spawnIndex = 0
+    var intermission = 0f
+    private var waveAge = 0f
+
+    /** Zombies still to come this round, including those on the map. */
+    val zombiesLeft get() = zombies.size + spawnQueue
+
     private fun spawnWave(first: Boolean = false) {
         wave++
         growRound()
-        val count = waveSize
         val edges = 1 + rnd.nextInt(if (wave > 3) 3 else 2)
-        val chosen = (0 until 4).shuffled(rnd).take(edges)
-        repeat(count) { i ->
-            if (zombies.size >= MAX_ZOMBIES) return@repeat
-            val (x, y) = edgePoint(chosen[i % chosen.size])
-            addZombie(x, y)
-        }
+        waveEdges = (0 until 4).shuffled(rnd).take(edges)
+        spawnQueue = waveSize
+        spawnTimer = 0f
+        waveAge = 0f
+        intermission = 0f
         if (!first) {
             texts.add(FloatText(width / 2f, height / 2f, "WAVE $wave", 2.2f))
             texts.add(FloatText(width / 2f, height / 2f + 26f, "+$waveGrowth zombies", 2.2f))
@@ -270,6 +314,17 @@ class World(private val rnd: Random = Random.Default) {
     /** Deals damage; returns true if the zombie went down. */
     private fun hurt(z: Zombie, dmg: Float): Boolean {
         if (z.dead) return false
+        if (z.armor > 0f) {
+            // Armor soaks bullets (at 60%) until it breaks; leftover damage goes through
+            z.armor -= dmg * 0.6f
+            if (z.armor > 0f) return false
+            val overflow = -z.armor / 0.6f
+            z.armor = 0f
+            texts.add(FloatText(z.x, z.y - 8f, "armor broke", 0.9f))
+            z.hp -= overflow
+            if (z.hp <= 0f) { killZombie(z); return true }
+            return false
+        }
         z.hp -= dmg
         if (z.hp <= 0f) { killZombie(z); return true }
         return false
@@ -277,14 +332,27 @@ class World(private val rnd: Random = Random.Default) {
 
     private fun addZombie(x: Float, y: Float, inside: Boolean = false) {
         if (zombies.size >= MAX_ZOMBIES) return
-        // A mix of slow shamblers, normal walkers and a few fast runners
+        // A mix: slow shamblers, normal walkers, fast runners, and (later) fat and armored zombies
+        val fatChance = if (wave >= 3) min(0.06f + wave * 0.01f, 0.14f) else 0f
+        val armorChance = if (wave >= 4) min(0.06f + wave * 0.012f, 0.18f) else 0f
         val roll = rnd.nextFloat()
-        val mult = when {
-            roll < 0.25f -> 0.45f + rnd.nextFloat() * 0.25f
-            roll < 0.87f -> 0.8f + rnd.nextFloat() * 0.35f
-            else -> 1.4f + rnd.nextFloat() * 0.4f
+        val base = zombieHp()
+        val z = when {
+            roll < fatChance ->
+                Zombie(x, y, zombieBaseSpeed() * (0.5f + rnd.nextFloat() * 0.15f), ZType.FAT, base * 3.2f)
+            roll < fatChance + armorChance ->
+                Zombie(x, y, zombieBaseSpeed() * (0.75f + rnd.nextFloat() * 0.2f), ZType.ARMORED, base).also {
+                    it.armorMax = base * 2.2f; it.armor = it.armorMax
+                }
+            else -> {
+                val r2 = rnd.nextFloat()
+                when {
+                    r2 < 0.25f -> Zombie(x, y, zombieBaseSpeed() * (0.45f + rnd.nextFloat() * 0.25f), ZType.NORMAL, base)
+                    r2 < 0.87f -> Zombie(x, y, zombieBaseSpeed() * (0.8f + rnd.nextFloat() * 0.35f), ZType.NORMAL, base)
+                    else -> Zombie(x, y, zombieBaseSpeed() * (1.4f + rnd.nextFloat() * 0.4f), ZType.RUNNER, base * 0.7f)
+                }
+            }
         }
-        val z = Zombie(x, y, zombieBaseSpeed() * mult, runner = mult >= 1.4f, hp = zombieHp())
         z.entered = inside
         z.wanderAngle = rnd.nextFloat() * 6.283f
         z.retarget = rnd.nextFloat() * 0.3f
@@ -311,8 +379,8 @@ class World(private val rnd: Random = Random.Default) {
         nukes.add(Nuke(x, y, 0f))
         var n = 0
         for (z in zombies) { if (!z.dead) { killZombie(z, quiet = true); n++ } }
-        waveTimer = WAVE_TIME - NUKE_BREATHER // short breather, then the next wave
-        texts.add(FloatText(width / 2f, height / 2f + 80f, "next wave in ${NUKE_BREATHER.toInt()}s", 2.5f))
+        spawnQueue = 0 // the rest of this round never arrives
+        texts.add(FloatText(width / 2f, height / 2f + 80f, "next wave in ${ROUND_BREAK.toInt()}s", 2.5f))
         texts.add(FloatText(width / 2f, height / 2f + 40f, "+$n", 2f))
         return true
     }
@@ -361,8 +429,7 @@ class World(private val rnd: Random = Random.Default) {
         time += dt
         ageEffects(dt)
 
-        waveTimer += dt
-        if (waveTimer >= WAVE_TIME) { waveTimer = 0f; spawnWave() }
+        updateRounds(dt)
 
         strayTimer += dt
         if (strayTimer >= 30f) { strayTimer = 0f; maybeSpawnStray() }
@@ -480,10 +547,11 @@ class World(private val rnd: Random = Random.Default) {
                         val o = zombies[j]
                         val ex = z.x - o.x; val ey = z.y - o.y
                         val d2 = ex * ex + ey * ey
-                        if (d2 < 49f && d2 > 0.0001f) {
+                        val gap = z.radius + o.radius + 0.6f
+                        if (d2 < gap * gap && d2 > 0.0001f) {
                             val d = sqrt(d2)
-                            sx += ex / d * (7f - d) / 7f
-                            sy += ey / d * (7f - d) / 7f
+                            sx += ex / d * (gap - d) / gap
+                            sy += ey / d * (gap - d) / gap
                         }
                     }
                     j = next[j]
@@ -768,17 +836,17 @@ class World(private val rnd: Random = Random.Default) {
 
     /** Zombies bite; every bite adds infection. Fully infected dots turn. */
     private fun attacks() {
-        val reach = ZOMBIE_R + HUMAN_R + 1f
-        val r2 = reach * reach
         for (h in humans) {
             if (h.dead) continue
             for (z in zombies) {
                 if (z.dead || z.attackCd > 0f) continue
                 val dx = h.x - z.x; val dy = h.y - z.y
                 val d2 = dx * dx + dy * dy
-                if (d2 >= r2) continue
+                val reach = z.radius + HUMAN_R + 1f
+                if (d2 >= reach * reach) continue
                 z.attackCd = 1.1f
-                h.infection += when (h.role) {
+                val bite = if (z.type == ZType.FAT) 1.5f else 1f
+                h.infection += bite * when (h.role) {
                     Role.PLAYER -> 0.12f + rnd.nextFloat() * 0.06f
                     Role.HUNTER -> 0.14f + rnd.nextFloat() * 0.08f
                     Role.STRAY -> 0.45f

@@ -94,6 +94,12 @@ class GameView(context: Context, private val listener: Listener) : View(context)
 
     val zombieColor = Color.parseColor("#FF3B3B")
     val runnerColor = Color.parseColor("#FF8A5C")
+    val fatColor = Color.parseColor("#B3262B")
+    private val bigZombie = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.2f * d }
+    private val armorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = 2f * d; color = Color.parseColor("#C9D1DC")
+    }
     val playerColor = Color.parseColor("#FFE066")
     val hunterColor = Color.parseColor("#3DA5FF")
     val strayColor = Color.parseColor("#B8C0CF")
@@ -279,12 +285,36 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         for (pass in 0..1) {
             var k = 0
             for (z in zs) {
+                if (z.type == ZType.FAT || z.type == ZType.ARMORED) continue
                 if (z.runner != (pass == 1)) continue
                 points[k++] = z.x * d
                 points[k++] = z.y * d
             }
             zombiePaint.color = if (pass == 1) runnerColor else zombieColor
             if (k > 0) c.drawPoints(points, 0, k, zombiePaint)
+        }
+        // Fat and armored zombies are drawn one by one
+        for (z in zs) {
+            val zx = z.x * d; val zy = z.y * d
+            when (z.type) {
+                ZType.FAT -> {
+                    bigZombie.color = fatColor
+                    val r = z.radius * d
+                    if (shapes) c.drawRect(zx - r, zy - r, zx + r, zy + r, bigZombie) else c.drawCircle(zx, zy, r, bigZombie)
+                    rimPaint.color = Color.argb(150, 255, 120, 110)
+                    c.drawCircle(zx, zy, r, rimPaint)
+                }
+                ZType.ARMORED -> {
+                    bigZombie.color = zombieColor
+                    val r = z.radius * d
+                    if (shapes) c.drawRect(zx - r, zy - r, zx + r, zy + r, bigZombie) else c.drawCircle(zx, zy, r, bigZombie)
+                    if (z.armor > 0f) {
+                        armorPaint.alpha = (110 + 145 * (z.armor / z.armorMax).coerceIn(0f, 1f)).toInt()
+                        c.drawCircle(zx, zy, r + 2.2f * d, armorPaint)
+                    }
+                }
+                else -> {}
+            }
         }
 
         for (t in world.tracers) {
@@ -310,11 +340,14 @@ class GameView(context: Context, private val listener: Listener) : View(context)
 
         for (t in world.texts) {
             when {
-                t.text.startsWith("WAVE") -> { floatPaint.color = zombieColor; floatPaint.textSize = 30 * d }
-                t.text.startsWith("Survivor Joined") -> { floatPaint.color = hunterColor; floatPaint.textSize = 18 * d }
-                t.text.endsWith("turned!") -> { floatPaint.color = Color.parseColor("#9CFF4D"); floatPaint.textSize = 16 * d }
-                t.text.startsWith("+") -> { floatPaint.color = Color.parseColor("#FFB13B"); floatPaint.textSize = 30 * d }
-                else -> { floatPaint.color = Color.WHITE; floatPaint.textSize = 14 * d }
+                t.text.startsWith("WAVE") -> { floatPaint.color = zombieColor; floatPaint.textSize = 18 * d }
+                t.text.startsWith("ROUND") -> { floatPaint.color = Color.parseColor("#9CFF4D"); floatPaint.textSize = 15 * d }
+                t.text.endsWith("zombies") -> { floatPaint.color = Color.parseColor("#FFB0A0"); floatPaint.textSize = 12 * d }
+                t.text == "armor broke" -> { floatPaint.color = Color.parseColor("#C9D1DC"); floatPaint.textSize = 10 * d }
+                t.text.startsWith("Survivor Joined") -> { floatPaint.color = hunterColor; floatPaint.textSize = 14 * d }
+                t.text.endsWith("turned!") -> { floatPaint.color = Color.parseColor("#9CFF4D"); floatPaint.textSize = 13 * d }
+                t.text.startsWith("+") -> { floatPaint.color = Color.parseColor("#FFB13B"); floatPaint.textSize = 18 * d }
+                else -> { floatPaint.color = Color.WHITE; floatPaint.textSize = 12 * d }
             }
             floatPaint.alpha = (min(1f, t.life) * 255).toInt()
             c.drawText(t.text, t.x * d, t.y * d, floatPaint)

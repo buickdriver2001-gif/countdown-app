@@ -234,7 +234,7 @@ class MainActivity : Activity(), GameView.Listener {
             setPadding(dp(14f), dp(6f), dp(8f), dp(6f))
         }
         val stats = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        line1 = text("", 15f, light = false)
+        line1 = text("", 14f, light = false)
         line2 = text("", 12f, Color.parseColor("#D6E2FF"))
         line3 = text("", 12f, Color.parseColor("#9FD0FF"), light = false)
         stats.addView(line1)
@@ -311,12 +311,15 @@ class MainActivity : Activity(), GameView.Listener {
             return
         }
 
-        val next = w.nextWaveIn.toInt().coerceAtLeast(0) + 1
-        line1.text = "Wave ${w.wave}  ·  next wave in ${next}s"
-        line1.setTextColor(if (next <= 5) Color.parseColor("#FFB13B") else Color.WHITE)
+        val breakTime = w.nextWaveIn > 0f
+        val next = w.nextWaveIn.toInt() + 1
+        line1.text = if (breakTime) "Round ${w.wave} cleared!  ·  next wave in ${next}s"
+            else "Wave ${w.wave}  ·  ${w.zombiesLeft} zombies left"
+        line1.setTextColor(if (breakTime) Color.parseColor("#9CFF4D") else Color.WHITE)
         line2.text = "⏱ ${fmt(w.time)}    🪖 Survivors ${game.teamSize()}    🧟 ${w.zombies.size}"
         line3.text = "Survivors are: ${w.tactic.label}"
-        line1.contentDescription = "Wave ${w.wave}. Next wave in $next seconds."
+        line1.contentDescription = if (breakTime) "Round ${w.wave} cleared. Next wave in $next seconds."
+            else "Wave ${w.wave}. ${w.zombiesLeft} zombies left."
         line2.contentDescription = "Time ${fmt(w.time)}. Survivors ${game.teamSize()}. Zombies ${w.zombies.size}."
 
         nukeBtn.available = w.nukeReady && !game.paused
@@ -416,7 +419,14 @@ class MainActivity : Activity(), GameView.Listener {
         ))
         col.addView(card("🟢  When a zombie bites someone, a green ring fills up around them. When the ring is full, they turn into a zombie!"))
         col.addView(card("☢  NUKE: tap the NUKE button to open the clear safety case. Then press and HOLD the red button: 3… 2… 1… every zombie disappears! Let go early to cancel. You only get ONE, so save it for an emergency."))
-        col.addView(card("🧟  Every round brings more zombies, and they get tougher. Bright orange zombies are fast runners!"))
+        col.addView(card(
+            "Zombie types:",
+            dot(game.zombieColor, "Red = normal zombie"),
+            dot(game.runnerColor, "Orange = fast runner"),
+            dot(game.fatColor, "Big dark red = fat zombie. Slow, but takes lots of hits."),
+            dot(Color.parseColor("#C9D1DC"), "Steel ring = armored zombie. Shoot off the armor first!")
+        ))
+        col.addView(card("🧟  Clear every zombie to finish a round. Each round brings more zombies, and they get tougher."))
         col.addView(card("✈  PLANE: press PLANE, then drag your finger across the map. A plane flies that way and drops bombs. It comes back after 20 seconds."))
         col.addView(card("⏩  The 1x button at the top changes the game speed. ❚❚ pauses."))
         col.addView(card("🏆  How long can your team survive?"))
