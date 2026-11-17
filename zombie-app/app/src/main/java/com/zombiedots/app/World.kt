@@ -14,7 +14,7 @@ import kotlin.random.Random
  * so it can be tested on its own.
  */
 
-class Zombie(var x: Float, var y: Float, val speed: Float) {
+class Zombie(var x: Float, var y: Float, val speed: Float, val runner: Boolean = false, var hp: Float = 1f) {
     var vx = 0f
     var vy = 0f
     var target: Human? = null
@@ -180,6 +180,7 @@ class World(private val rnd: Random = Random.Default) {
         time = 0f; kills = 0; wave = 0; waveTimer = 0f
         strayTimer = 15f // first stray after ~15s
         nukeReady = true; turned = 0
+        waveSize = 0; waveGrowth = 0; speedBase = 25f
         tactic = Tactic.SQUAD_UP; tacticTimer = 0f
     }
 
@@ -196,9 +197,46 @@ class World(private val rnd: Random = Random.Default) {
         spawnWave(first = true)
     }
 
+    /** Zombies in the current round and how many more than last round. */
+    var waveSize = 0
+    var waveGrowth = 0
+    private var speedBase = 25f
+
+    /**
+     * Round scaling: steady growth for rounds 1-5 (like Black Ops), then diminishing returns
+     * (like Souls levelling). Each later round usually adds a bit less than the one before;
+     * some add just one, and now and then one gives an extra jump.
+     */
+    private fun growRound() {
+        if (wave == 1) {
+            waveSize = 25; waveGrowth = 0; speedBase = 27f
+            return
+        }
+        var inc: Float
+        var spInc: Float
+        if (wave <= 5) {
+            inc = 10f
+            spInc = 2.6f
+        } else {
+            val fade = Math.pow(0.88, (wave - 5).toDouble()).toFloat()
+            inc = 10f * fade
+            spInc = 2.6f * fade
+            val roll = rnd.nextFloat()
+            when {
+                roll < 0.18f -> { inc = 1f; spInc *= 0.2f }       // a "dud" round: just one more
+                roll < 0.33f -> { inc *= 1.7f; spInc *= 1.5f }    // a bonus jump
+                else -> inc *= 0.8f + rnd.nextFloat() * 0.4f
+            }
+        }
+        waveGrowth = max(1, Math.round(inc))
+        waveSize += waveGrowth
+        speedBase = min(speedBase + spInc, 52f)
+    }
+
     private fun spawnWave(first: Boolean = false) {
         wave++
-        val count = if (first) 30 else 22 + wave * 11
+        growRound()
+        val count = waveSize
         val edges = 1 + rnd.nextInt(if (wave > 3) 3 else 2)
         val chosen = (0 until 4).shuffled(rnd).take(edges)
         repeat(count) { i ->
@@ -206,7 +244,10 @@ class World(private val rnd: Random = Random.Default) {
             val (x, y) = edgePoint(chosen[i % chosen.size])
             addZombie(x, y)
         }
-        if (!first) texts.add(FloatText(width / 2f, height / 2f, "WAVE $wave", 2.2f))
+        if (!first) {
+            texts.add(FloatText(width / 2f, height / 2f, "WAVE $wave", 2.2f))
+            texts.add(FloatText(width / 2f, height / 2f + 26f, "+$waveGrowth zombies", 2.2f))
+        }
     }
 
     private fun edgePoint(edge: Int): Pair<Float, Float> {
@@ -219,11 +260,31 @@ class World(private val rnd: Random = Random.Default) {
         }
     }
 
-    private fun zombieBaseSpeed() = min(25f + wave * 2.4f, 52f)
+    private fun zombieBaseSpeed() = speedBase
+
+    /** Black Ops-style zombie toughness: +30% per round up to round 9, then x1.1 per round. */
+    fun zombieHp(): Float =
+        if (wave <= 9) 1f + 0.3f * (wave - 1)
+        else (1f + 0.3f * 8) * Math.pow(1.1, (wave - 9).toDouble()).toFloat()
+
+    /** Deals damage; returns true if the zombie went down. */
+    private fun hurt(z: Zombie, dmg: Float): Boolean {
+        if (z.dead) return false
+        z.hp -= dmg
+        if (z.hp <= 0f) { killZombie(z); return true }
+        return false
+    }
 
     private fun addZombie(x: Float, y: Float, inside: Boolean = false) {
         if (zombies.size >= MAX_ZOMBIES) return
-        val z = Zombie(x, y, zombieBaseSpeed() * (0.75f + rnd.nextFloat() * 0.6f))
+        // A mix of slow shamblers, normal walkers and a few fast runners
+        val roll = rnd.nextFloat()
+        val mult = when {
+            roll < 0.25f -> 0.45f + rnd.nextFloat() * 0.25f
+            roll < 0.87f -> 0.8f + rnd.nextFloat() * 0.35f
+            else -> 1.4f + rnd.nextFloat() * 0.4f
+        }
+        val z = Zombie(x, y, zombieBaseSpeed() * mult, runner = mult >= 1.4f, hp = zombieHp())
         z.entered = inside
         z.wanderAngle = rnd.nextFloat() * 6.283f
         z.retarget = rnd.nextFloat() * 0.3f
@@ -672,12 +733,33 @@ class World(private val rnd: Random = Random.Default) {
         }
         val z = best ?: return
         val running = tactic == Tactic.RUN
-        h.cooldown = (if (h.role == Role.HUNTER) 0.5f + rnd.nextFloat() * 0.3f else 1f + rnd.nextFloat() * 0.4f) *
+        h.cooldown = (if (h.role == Role.HUNTER) 0.32f + rnd.nextFloat() * 0.2f else 0.8f + rnd.nextFloat() * 0.3f) *
             (if (running) 1.6f else 1f)
-        val hitChance = (if (h.role == Role.HUNTER) 0.75f else 0.55f) * (if (running) 0.6f else 1f)
+        val hitChance = (if (h.role == Role.HUNTER) 0.88f else 0.65f) * (if (running) 0.65f else 1f)
         if (rnd.nextFloat() < hitChance) {
-            tracers.add(Tracer(h.x, h.y, z.x, z.y, 0.12f))
-            killZombie(z)
+            // Hunters hit hard, with the odd critical hit
+            val dmg = (if (h.role == Role.HUNTER) 1f else 0.7f) * (if (rnd.nextFloat() < 0.15f) 2f else 1f)
+            val killed = hurt(z, dmg)
+            var endX = z.x
+            var endY = z.y
+            // Hunters' shots can punch through into the zombie behind
+            if (killed && h.role == Role.HUNTER && rnd.nextFloat() < 0.4f) {
+                val dx = z.x - h.x; val dy = z.y - h.y
+                val len = sqrt(dx * dx + dy * dy).coerceAtLeast(0.01f)
+                val ux = dx / len; val uy = dy / len
+                var second: Zombie? = null
+                var bestAlong = 40f
+                for (o in zombies) {
+                    if (o.dead) continue
+                    val ox = o.x - z.x; val oy = o.y - z.y
+                    val along = ox * ux + oy * uy
+                    if (along <= 0f || along >= bestAlong) continue
+                    val side = abs(ox * uy - oy * ux)
+                    if (side < 6f) { bestAlong = along; second = o }
+                }
+                second?.let { hurt(it, dmg * 0.7f); endX = it.x; endY = it.y }
+            }
+            tracers.add(Tracer(h.x, h.y, endX, endY, 0.12f))
         } else {
             val miss = (rnd.nextFloat() - 0.5f) * 20f
             tracers.add(Tracer(h.x, h.y, z.x + miss, z.y - miss, 0.12f))
@@ -706,7 +788,7 @@ class World(private val rnd: Random = Random.Default) {
                 h.vx += dx / d * 70f
                 h.vy += dy / d * 70f
                 val fight = when (h.role) { Role.HUNTER -> 0.35f; Role.PLAYER -> 0.2f; Role.STRAY -> 0.05f }
-                if (rnd.nextFloat() < fight) killZombie(z)
+                if (rnd.nextFloat() < fight) hurt(z, 1f)
             }
             if (h.infection >= 1f) {
                 h.dead = true

@@ -39,7 +39,7 @@ class MainActivity : Activity(), GameView.Listener {
     private lateinit var line3: TextView
     private lateinit var speedBtn: TextView
     private lateinit var menuBtn: TextView
-    private lateinit var nukeBtn: TextView
+    private lateinit var nukeBtn: NukeButtonView
     private lateinit var planeBtn: TextView
     private lateinit var aimBanner: TextView
 
@@ -58,7 +58,6 @@ class MainActivity : Activity(), GameView.Listener {
     private var shown: View? = null
     private var returnTo: View? = null
 
-    private var nukeArmedUntil = 0L
     private val handler = Handler(Looper.getMainLooper())
 
     private val speeds = listOf(0.5f to "½x", 1f to "1x", 2f to "2x", 4f to "4x")
@@ -256,7 +255,12 @@ class MainActivity : Activity(), GameView.Listener {
             background = XmbBackground.glass(d, 0f)
             setPadding(dp(10f), dp(8f), dp(10f), dp(8f))
         }
-        nukeBtn = actionButton(Color.parseColor("#FF8A3D")) { onNukePressed() }
+        nukeBtn = NukeButtonView(this, object : NukeButtonView.Listener {
+            override fun onLaunch() { game.fireNuke(); updateHud() }
+            override fun onCountdown(n: Int) { game.nukeCountdown = n; if (n > 0) onAnnounce("$n") }
+            override fun onMessage(text: String) = onAnnounce(text)
+        })
+        nukeBtn.vibrate = game.vibrate
         planeBtn = actionButton(Color.parseColor("#3DA5FF")) { onPlanePressed() }
         bar.addView(nukeBtn, LinearLayout.LayoutParams(0, dp(52f), 1f).apply { marginEnd = dp(5f) })
         bar.addView(planeBtn, LinearLayout.LayoutParams(0, dp(52f), 1f).apply { marginStart = dp(5f) })
@@ -297,11 +301,10 @@ class MainActivity : Activity(), GameView.Listener {
             line1.setTextColor(Color.WHITE)
             line2.text = if (w.phase == Phase.SETUP) "👆 Tap the map to put your team down" else "Game over"
             line3.text = if (game.best > 0f) "🏆 Best: ${fmt(game.best)}" else ""
-            nukeBtn.text = "☢ NUKE"
+            nukeBtn.available = false
+            nukeBtn.used = false
             planeBtn.text = "✈ PLANE"
-            nukeBtn.alpha = 0.4f
             planeBtn.alpha = 0.4f
-            nukeBtn.contentDescription = "Nuke. Place your team first."
             planeBtn.contentDescription = "Plane. Place your team first."
             aimBanner.visibility = View.GONE
             game.planeAimRequested = false
@@ -311,19 +314,13 @@ class MainActivity : Activity(), GameView.Listener {
         val next = w.nextWaveIn.toInt().coerceAtLeast(0) + 1
         line1.text = "Wave ${w.wave}  ·  next wave in ${next}s"
         line1.setTextColor(if (next <= 5) Color.parseColor("#FFB13B") else Color.WHITE)
-        line2.text = "⏱ ${fmt(w.time)}    🪖 Team ${game.teamSize()}    🧟 ${w.zombies.size}"
-        line3.text = "Team is: ${w.tactic.label}"
+        line2.text = "⏱ ${fmt(w.time)}    🪖 Survivors ${game.teamSize()}    🧟 ${w.zombies.size}"
+        line3.text = "Survivors are: ${w.tactic.label}"
         line1.contentDescription = "Wave ${w.wave}. Next wave in $next seconds."
-        line2.contentDescription = "Time ${fmt(w.time)}. Team ${game.teamSize()}. Zombies ${w.zombies.size}."
+        line2.contentDescription = "Time ${fmt(w.time)}. Survivors ${game.teamSize()}. Zombies ${w.zombies.size}."
 
-        val armed = SystemClock.uptimeMillis() < nukeArmedUntil && w.nukeReady
-        nukeBtn.text = when {
-            !w.nukeReady -> "☢ NUKE\nUsed up"
-            armed -> "☢ TAP AGAIN\nto launch!"
-            else -> "☢ NUKE\nReady · tap twice"
-        }
-        nukeBtn.alpha = if (w.nukeReady) 1f else 0.4f
-        nukeBtn.contentDescription = nukeBtn.text.toString().replace("\n", ". ")
+        nukeBtn.available = w.nukeReady && !game.paused
+        nukeBtn.used = !w.nukeReady
 
         planeBtn.text = when {
             !w.airstrikeReady -> "✈ PLANE\nBack in ${w.airstrikeCooldown.toInt() + 1}s"
@@ -342,20 +339,6 @@ class MainActivity : Activity(), GameView.Listener {
         prefs.edit().putFloat("speed", next.first).apply()
         if (::speedRow.isInitialized) updateSpeedRow()
         onAnnounce("Game speed: ${speedNames[next.first]}")
-        updateHud()
-    }
-
-    private fun onNukePressed() {
-        val w = game.world
-        if (w.phase != Phase.RUNNING) { onAnnounce("Tap the map to put your team down first."); return }
-        if (!w.nukeReady) { onAnnounce("The nuke is used up. You only get one each game."); return }
-        if (SystemClock.uptimeMillis() < nukeArmedUntil) {
-            nukeArmedUntil = 0L
-            game.fireNuke()
-        } else {
-            nukeArmedUntil = SystemClock.uptimeMillis() + 3000
-            onAnnounce("Tap the nuke button again to launch it.")
-        }
         updateHud()
     }
 
@@ -432,7 +415,8 @@ class MainActivity : Activity(), GameView.Listener {
             dot(game.zombieColor, "Red = zombies. They chase your team.")
         ))
         col.addView(card("🟢  When a zombie bites someone, a green ring fills up around them. When the ring is full, they turn into a zombie!"))
-        col.addView(card("☢  NUKE: press the NUKE button two times. Every zombie disappears! You only get ONE, so save it for an emergency."))
+        col.addView(card("☢  NUKE: tap the NUKE button to open the clear safety case. Then press and HOLD the red button: 3… 2… 1… every zombie disappears! Let go early to cancel. You only get ONE, so save it for an emergency."))
+        col.addView(card("🧟  Every round brings more zombies, and they get tougher. Bright orange zombies are fast runners!"))
         col.addView(card("✈  PLANE: press PLANE, then drag your finger across the map. A plane flies that way and drops bombs. It comes back after 20 seconds."))
         col.addView(card("⏩  The 1x button at the top changes the game speed. ❚❚ pauses."))
         col.addView(card("🏆  How long can your team survive?"))
@@ -473,7 +457,7 @@ class MainActivity : Activity(), GameView.Listener {
         col.addView(toggle("Tapping the map adds more zombies (harder)", "tapZombies", game.tapAddsZombies) {
             game.tapAddsZombies = it
         })
-        col.addView(toggle("Vibration", "vibrate", game.vibrate) { game.vibrate = it })
+        col.addView(toggle("Vibration", "vibrate", game.vibrate) { game.vibrate = it; nukeBtn.vibrate = it })
         col.addView(menuRow("✔   Done", highlight = true) { show(returnTo) })
         return frame
     }

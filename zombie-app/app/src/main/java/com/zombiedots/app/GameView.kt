@@ -40,6 +40,8 @@ class GameView(context: Context, private val listener: Listener) : View(context)
     /** Set when the PLANE button was pressed, so the next drag is clearly an airstrike. */
     var planeAimRequested = false
     var best = 0f
+    /** 3, 2, 1 while the nuke button is held; 0 otherwise. */
+    var nukeCountdown = 0
 
     /** True while a menu covers the map: stop redrawing so the menu stays smooth. */
     var covered = false
@@ -91,6 +93,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
     private val path = Path()
 
     val zombieColor = Color.parseColor("#FF3B3B")
+    val runnerColor = Color.parseColor("#FF8A5C")
     val playerColor = Color.parseColor("#FFE066")
     val hunterColor = Color.parseColor("#3DA5FF")
     val strayColor = Color.parseColor("#B8C0CF")
@@ -155,16 +158,6 @@ class GameView(context: Context, private val listener: Listener) : View(context)
             return true
         }
 
-        override fun onDoubleTap(e: MotionEvent): Boolean {
-            if (world.phase == Phase.RUNNING && !paused && !planeAimRequested) {
-                if (world.nuke(e.x / d, e.y / d)) {
-                    flash = 1f
-                    buzz(HapticFeedbackConstants.LONG_PRESS)
-                    listener.onAnnounce("Nuke! Every zombie is gone.")
-                }
-            }
-            return true
-        }
     })
 
     @SuppressLint("ClickableViewAccessibility")
@@ -283,11 +276,16 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         zombiePaint.strokeCap = if (shapes) Paint.Cap.SQUARE else Paint.Cap.ROUND
         val zs = world.zombies
         if (points.size < zs.size * 2) points = FloatArray(zs.size * 4)
-        for (i in zs.indices) {
-            points[i * 2] = zs[i].x * d
-            points[i * 2 + 1] = zs[i].y * d
+        for (pass in 0..1) {
+            var k = 0
+            for (z in zs) {
+                if (z.runner != (pass == 1)) continue
+                points[k++] = z.x * d
+                points[k++] = z.y * d
+            }
+            zombiePaint.color = if (pass == 1) runnerColor else zombieColor
+            if (k > 0) c.drawPoints(points, 0, k, zombiePaint)
         }
-        c.drawPoints(points, 0, zs.size * 2, zombiePaint)
 
         for (t in world.tracers) {
             tracerPaint.alpha = (t.life / 0.12f * 255).toInt().coerceIn(0, 255)
@@ -323,6 +321,23 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         }
 
         if (flash > 0f) c.drawColor(Color.argb((flash * 140).toInt(), 255, 240, 210))
+        if (nukeCountdown > 0) drawCountdown(c)
+    }
+
+    private val countPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE; textAlign = Paint.Align.CENTER
+        typeface = Typeface.create("sans-serif-black", Typeface.NORMAL)
+    }
+
+    private fun drawCountdown(c: Canvas) {
+        val t = (System.currentTimeMillis() % 1000L) / 1000f
+        c.drawColor(Color.argb((40 + 50 * (1f - t)).toInt(), 255, 0, 0))
+        countPaint.textSize = (150 - 30 * t) * d
+        countPaint.setShadowLayer(30f * d, 0f, 0f, Color.RED)
+        c.drawText("$nukeCountdown", width / 2f, height / 2f + 50 * d, countPaint)
+        countPaint.textSize = 18 * d
+        countPaint.setShadowLayer(6f, 0f, 1f, Color.BLACK)
+        c.drawText("Keep holding… let go to cancel", width / 2f, height / 2f + 100 * d, countPaint)
     }
 
     private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
