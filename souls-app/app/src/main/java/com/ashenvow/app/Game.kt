@@ -29,7 +29,18 @@ class Input {
 }
 
 enum class PState { IDLE, ATTACK, HEAVY, ROLL, HEAL, STAGGER, DEAD }
-enum class BState { INTRO, IDLE, SLAM, SWEEP, LUNGE, LEAP, COMBO, STAGGER, PHASE, DEAD }
+enum class BState { INTRO, IDLE, CHAIN, LUNGE, LEAP, SKYFALL, STAGGER, PHASE, DEAD }
+
+/** The boss's melee moves, strung together into combos. */
+enum class Move(val wind: Float, val hit0: Float, val hit1: Float, val chainAt: Float, val end: Float) {
+    SWEEP(0.62f, 0.66f, 0.84f, 1.0f, 2.1f),       // wide cut from its right to its left
+    BACKHAND(0.42f, 0.46f, 0.62f, 0.85f, 1.95f),   // cut back the other way
+    SLAM(0.72f, 0.86f, 0.86f, 1.05f, 2.3f),        // overhead smash
+    THRUST(0.55f, 0.6f, 0.78f, 0.95f, 2.1f)        // stepping stab with long reach
+}
+
+/** A falling star of light (phase two). */
+class Star(val x: Float, val z: Float, var t: Float) { var done = false }
 enum class Screen { TITLE, FIGHT, DIED, WON }
 
 class Spark(var x: Float, var y: Float, var z: Float, var vx: Float, var vy: Float, var vz: Float, var life: Float, val ember: Boolean)
@@ -86,9 +97,16 @@ class Boss {
     var moving = 0f
     var hurtFlash = 0f
     var comboStep = 0
+    /** The combo being performed, and how long the boss holds the wind-up of each move (delayed swings). */
+    var chain: List<Move> = emptyList()
+    var holds = FloatArray(6)
+    val move: Move get() = chain.getOrElse(comboStep) { Move.SWEEP }
+    /** Move time with the hold taken out (what the animation follows). */
+    var mt = 0f
+    var skyCd = 0f
 
     companion object {
-        const val MAX_HP = 900f
+        const val MAX_HP = 800f
         const val MAX_POISE = 100f
         const val RADIUS = 1.35f
         const val NAME = "The Hollow Warden"
@@ -139,7 +157,7 @@ class Game(seed: Int = 1) {
     fun newFight() {
         player = Player()
         boss = Boss()
-        sparks.clear(); waves.clear()
+        sparks.clear(); waves.clear(); stars.clear()
         camYaw = 0f
         locked = true
         screen = Screen.FIGHT
@@ -277,7 +295,7 @@ class Game(seed: Int = 1) {
                 moveSpeed = 1.3f * stick
                 if (!p.healed && p.t > 0.65f) {
                     p.healed = true; p.flasks--
-                    p.hp = min(Player.MAX_HP, p.hp + 55f)
+                    p.hp = min(Player.MAX_HP, p.hp + 60f)
                     repeat(14) { sparks.add(Spark(p.x, 1f, p.z, rnd.nextFloat() - 0.5f, 1.5f + rnd.nextFloat() * 2f, rnd.nextFloat() - 0.5f, 0.9f, true)) }
                 }
                 if (p.t >= 1.15f) { p.state = PState.IDLE; p.t = 0f }
@@ -323,7 +341,7 @@ class Game(seed: Int = 1) {
         p.x += sin(p.yaw) * speed * dt; p.z += cos(p.yaw) * speed * dt
     }
 
-    val playerInvincible get() = player.state == PState.ROLL && player.t in 0.03f..0.4f
+    val playerInvincible get() = player.state == PState.ROLL && player.t in 0.03f..0.43f
 
     private fun tryHitBoss(p: Player, reach: Float, arc: Float, dmg: Float, poiseDmg: Float) {
         val b = boss
@@ -356,18 +374,21 @@ class Game(seed: Int = 1) {
             repeat(60) { sparks.add(Spark(b.x, 2f + rnd.nextFloat() * 2f, b.z, (rnd.nextFloat() - 0.5f) * 4f, rnd.nextFloat() * 5f, (rnd.nextFloat() - 0.5f) * 4f, 1.5f + rnd.nextFloat(), true)) }
             return
         }
-        if (b.state != BState.STAGGER && b.state != BState.PHASE && b.state != BState.LEAP) {
+        if (b.state != BState.STAGGER && b.state != BState.PHASE && b.state != BState.LEAP && b.state != BState.SKYFALL) {
             b.poise -= poiseDmg
             if (b.poise <= 0f) { b.state = BState.STAGGER; b.t = 0f; b.poise = Boss.MAX_POISE; b.y = 0f }
         }
     }
 
-    private fun bossSpeed() = if (boss.phase2) 1.2f else 1f
+    private fun bossSpeed() = if (boss.phase2) 1.15f else 1.0f
+
+    val stars = ArrayList<Star>()
 
     private fun updateBoss(dt: Float) {
         val b = boss
         val p = player
         b.hurtFlash = max(0f, b.hurtFlash - dt * 4f)
+        if (b.skyCd > 0f) b.skyCd -= dt
         b.t += dt * (if (b.state == BState.IDLE || b.state == BState.DEAD || b.state == BState.STAGGER) 1f else bossSpeed())
         val dx = p.x - b.x; val dz = p.z - b.z
         val dist = sqrt(dx * dx + dz * dz)
@@ -376,51 +397,35 @@ class Game(seed: Int = 1) {
 
         fun turn(rate: Float) { b.yaw += wrapAngle(toP - b.yaw).coerceIn(-rate * dt, rate * dt) }
         fun fwd(speed: Float) { b.x += sin(b.yaw) * speed * dt; b.z += cos(b.yaw) * speed * dt }
-        fun done(recover: Float) { if (b.t >= recover) { b.state = BState.IDLE; b.t = 0f; b.cooldown = (0.5f + rnd.nextFloat() * 0.8f) / bossSpeed() } }
+        fun done(recover: Float) { if (b.t >= recover) toIdle() }
 
         // Phase two at half health
-        if (!b.phase2 && b.hp < Boss.MAX_HP * 0.5f && b.state == BState.IDLE) {
-            b.phase2 = true; b.state = BState.PHASE; b.t = 0f
+        if (!b.phase2 && b.hp < Boss.MAX_HP * 0.5f && (b.state == BState.IDLE || b.state == BState.CHAIN && b.t > b.move.chainAt + b.holds[b.comboStep])) {
+            b.phase2 = true; b.state = BState.PHASE; b.t = 0f; b.hitDone = false
             evPhase.incrementAndGet()
         }
 
         when (b.state) {
-            BState.INTRO -> { turn(2f); if (b.t > 1.6f) { b.state = BState.IDLE; b.t = 0f } }
+            BState.INTRO -> { turn(2f); if (b.t > 1.6f) toIdle(0.6f) }
             BState.IDLE -> {
-                if (p.state == PState.DEAD) { b.walkPhase += dt * 0.5f; return }
-                turn(2.4f * bossSpeed())
+                if (p.state == PState.DEAD) return
+                turn(2.6f * bossSpeed())
                 b.cooldown -= dt
-                val range = if (b.phase2) 4.6f else 4.2f
-                if (dist > range) { fwd(2.7f * bossSpeed()); b.moving = 1f; b.walkPhase += dt * 2.7f }
+                if (dist > 4.3f) { fwd(3.0f * bossSpeed()); b.moving = 1f; b.walkPhase += dt * 3f }
                 if (b.cooldown <= 0f) chooseAttack(dist)
             }
-            BState.SLAM -> {
-                // Overhead smash: long wind-up, then a heavy blow in front
-                if (b.t < 0.75f) { turn(2.2f); if (dist > 3f) fwd(1.6f) }
-                if (!b.hitDone && b.t >= 0.95f) {
-                    b.hitDone = true
-                    val hx = b.x + sin(b.yaw) * 3.2f; val hz = b.z + cos(b.yaw) * 3.2f
-                    impact(hx, hz, 0.8f)
-                    hitPlayerCircle(hx, hz, 2.0f, 36f)
-                }
-                done(1.95f)
-            }
-            BState.SWEEP -> {
-                if (b.t < 0.6f) turn(2.6f)
-                if (!b.hitDone && b.t in 0.72f..0.95f) {
-                    if (dist < 4.9f + Player.RADIUS && abs(wrapAngle(toP - b.yaw)) < 1.9f) { b.hitDone = true; hurtPlayer(28f, b.x, b.z) }
-                }
-                if (b.t > 0.95f) b.hitDone = true
-                done(1.7f)
-            }
+            BState.CHAIN -> updateChain(dt, dist, toP)
             BState.LUNGE -> {
                 if (b.t < 0.6f) { turn(3f); b.lungeDX = sin(b.yaw); b.lungeDZ = cos(b.yaw) }
                 else if (b.t < 1.08f) {
-                    b.x += b.lungeDX * 13f * dt; b.z += b.lungeDZ * 13f * dt
+                    b.x += b.lungeDX * 14f * dt; b.z += b.lungeDZ * 14f * dt
                     b.moving = 1f; b.walkPhase += dt * 8f
                     if (!b.hitDone && dist < Boss.RADIUS + 1.1f) { b.hitDone = true; hurtPlayer(30f, b.x, b.z) }
                 }
-                done(2.1f)
+                // Often flows straight into a combo when it lands close
+                if (b.t >= 1.12f && dist < 5f && rnd.nextFloat() < (if (b.phase2) 0.7f else 0.4f) && !b.hitDone) {
+                    startChain(listOf(Move.SWEEP, Move.BACKHAND).take(if (b.phase2) 2 else 1))
+                } else done(2.0f)
             }
             BState.LEAP -> {
                 // Jumps high and crashes down where the player was standing
@@ -435,56 +440,168 @@ class Game(seed: Int = 1) {
                     impact(b.x, b.z, 1.2f)
                     hitPlayerCircle(b.x, b.z, 2.4f, 40f)
                     waves.add(Shockwave(b.x, b.z))
+                    if (b.phase2) starRain(3)
                 }
                 done(2.8f)
             }
-            BState.COMBO -> {
-                // Phase two: sweep, then straight into a slam
-                if (b.comboStep == 0) {
-                    if (b.t < 0.5f) turn(2.8f)
-                    if (!b.hitDone && b.t in 0.6f..0.82f && dist < 5f + Player.RADIUS && abs(wrapAngle(toP - b.yaw)) < 1.9f) { b.hitDone = true; hurtPlayer(26f, b.x, b.z) }
-                    if (b.t >= 1.05f) { b.comboStep = 1; b.t = 0f; b.hitDone = false }
-                } else {
-                    if (b.t < 0.55f) { turn(2.4f); if (dist > 3f) fwd(2.2f) }
-                    if (!b.hitDone && b.t >= 0.75f) {
-                        b.hitDone = true
-                        val hx = b.x + sin(b.yaw) * 3.2f; val hz = b.z + cos(b.yaw) * 3.2f
-                        impact(hx, hz, 0.9f)
-                        hitPlayerCircle(hx, hz, 2.1f, 38f)
+            BState.SKYFALL -> {
+                // Crouch, launch into the sky, hang there tracking you... then fall like a meteor
+                when {
+                    b.t < 0.9f -> { turn(2f) }
+                    b.t < 1.5f -> { val k = (b.t - 0.9f) / 0.6f; b.y = 40f * k * k; if (b.t - dt < 0.9f) { impact(b.x, b.z, 0.7f); shake = 0.4f } }
+                    b.t < 3.4f -> {
+                        // Out of sight: drifts over to where you are (its shadow gives it away)
+                        b.y = 40f
+                        if (b.t < 2.9f) {
+                            val k = min(1f, dt * 2.2f)
+                            b.x += (p.x - b.x) * k; b.z += (p.z - b.z) * k
+                        }
                     }
-                    done(1.8f)
+                    b.t < 3.75f -> { val k = (b.t - 3.4f) / 0.35f; b.y = 40f * (1f - k) }
+                    !b.hitDone -> {
+                        b.hitDone = true; b.y = 0f
+                        impact(b.x, b.z, 2f)
+                        shake = 1f
+                        hitPlayerCircle(b.x, b.z, 3.3f, 55f)
+                        waves.add(Shockwave(b.x, b.z))
+                        starRain(7)
+                    }
                 }
+                done(5.2f)
             }
             BState.STAGGER -> {
                 // Knocked off balance: free hits (and critical damage) for a moment
-                if (b.t >= 2.2f) { b.state = BState.IDLE; b.t = 0f; b.cooldown = 0.3f }
+                if (b.t >= 2.2f) toIdle(0.25f)
             }
             BState.PHASE -> {
-                // Roars and bursts into flame, pushing the player back
+                // Roars and bursts into light and flame, pushing the player back
                 if (!b.hitDone && b.t > 1.0f) {
                     b.hitDone = true
                     waves.add(Shockwave(b.x, b.z))
-                    shake = 0.6f
-                    repeat(50) { sparks.add(Spark(b.x, 2.5f, b.z, (rnd.nextFloat() - 0.5f) * 10f, rnd.nextFloat() * 6f, (rnd.nextFloat() - 0.5f) * 10f, 1.2f, true)) }
+                    shake = 0.7f
+                    repeat(60) { sparks.add(Spark(b.x, 2.5f, b.z, (rnd.nextFloat() - 0.5f) * 10f, rnd.nextFloat() * 6f, (rnd.nextFloat() - 0.5f) * 10f, 1.2f, true)) }
+                    starRain(6)
                 }
-                if (b.t >= 2.4f) { b.state = BState.IDLE; b.t = 0f; b.cooldown = 0.4f; b.hitDone = false }
+                if (b.t >= 2.4f) { toIdle(0.3f); b.skyCd = 4f }
             }
             BState.DEAD -> { b.y = 0f }
         }
         if (b.phase2 && b.state != BState.DEAD && rnd.nextFloat() < dt * 14f) {
             sparks.add(Spark(b.x + (rnd.nextFloat() - 0.5f) * 1.6f, b.y + 1.5f + rnd.nextFloat() * 3f, b.z + (rnd.nextFloat() - 0.5f) * 1.6f, 0f, 1.2f + rnd.nextFloat(), 0f, 1f, true))
         }
+        updateStars(dt)
+    }
+
+    private fun toIdle(cool: Float = -1f) {
+        val b = boss
+        b.state = BState.IDLE; b.t = 0f; b.y = 0f
+        b.cooldown = if (cool >= 0f) cool else (0.35f + rnd.nextFloat() * 0.75f) / bossSpeed()
+    }
+
+    private fun startChain(moves: List<Move>) {
+        val b = boss
+        b.state = BState.CHAIN; b.chain = moves; b.comboStep = 0; b.t = 0f; b.hitDone = false
+        // Random pauses at the top of wind-ups make the timing hard to read (bigger in phase two)
+        for (i in b.holds.indices) {
+            val m = moves.getOrNull(i)
+            val maxHold = if (m == Move.SLAM || m == Move.THRUST) (if (b.phase2) 0.6f else 0.45f) else 0.25f
+            b.holds[i] = if (rnd.nextFloat() < 0.45f) rnd.nextFloat() * maxHold else 0f
+        }
+    }
+
+    /** Runs one move of the current combo; the hold freezes the wind-up pose for a moment. */
+    private fun updateChain(dt: Float, dist: Float, toP: Float) {
+        val b = boss
+        val m = b.move
+        val hold = b.holds[b.comboStep]
+        val t = b.t
+        val mt = if (t < m.wind) t else if (t < m.wind + hold) m.wind else t - hold
+        b.mt = mt
+        val last = b.comboStep >= b.chain.size - 1
+        fun turnTo(rate: Float) { b.yaw += wrapAngle(toP - b.yaw).coerceIn(-rate * dt, rate * dt) }
+        fun fwd(speed: Float) { b.x += sin(b.yaw) * speed * dt; b.z += cos(b.yaw) * speed * dt }
+        // Tracks you during the wind-up (and the hold), then commits
+        if (mt < m.wind) { turnTo(2.8f); if (dist > 3.4f) fwd(2.2f) }
+        else if (t < m.wind + hold) turnTo(1.6f)
+        when (m) {
+            Move.SWEEP, Move.BACKHAND -> {
+                if (!b.hitDone && mt in m.hit0..m.hit1 && dist < 4.9f + Player.RADIUS && abs(wrapAngle(toP - b.yaw)) < 1.9f) {
+                    b.hitDone = true; hurtPlayer(if (m == Move.SWEEP) 25f else 21f, b.x, b.z)
+                }
+            }
+            Move.SLAM -> {
+                if (!b.hitDone && mt >= m.hit0) {
+                    b.hitDone = true
+                    val hx = b.x + sin(b.yaw) * 3.2f; val hz = b.z + cos(b.yaw) * 3.2f
+                    impact(hx, hz, 0.9f)
+                    hitPlayerCircle(hx, hz, 2.1f, 36f)
+                    if (b.phase2) starRain(2)
+                }
+            }
+            Move.THRUST -> {
+                if (mt in m.wind..m.hit1) fwd(7f)
+                if (!b.hitDone && mt in m.hit0..m.hit1 && dist < 5.8f && abs(wrapAngle(toP - b.yaw)) < 0.5f) {
+                    b.hitDone = true; hurtPlayer(32f, b.x, b.z)
+                }
+            }
+        }
+        if (!last && mt >= m.chainAt) { b.comboStep++; b.t = 0f; b.hitDone = false; return }
+        if (last && mt >= m.end) toIdle()
     }
 
     private fun chooseAttack(dist: Float) {
         val b = boss
         val r = rnd.nextFloat()
-        b.state = when {
-            dist > 8f -> if (b.phase2 && r < 0.55f) BState.LEAP else BState.LUNGE
-            dist > 4.8f -> if (b.phase2 && r < 0.3f) BState.LEAP else if (r < 0.55f) BState.SLAM else BState.LUNGE
-            else -> if (b.phase2 && r < 0.35f) BState.COMBO else if (r < 0.5f) BState.SWEEP else BState.SLAM
+        val p2 = b.phase2
+        b.t = 0f; b.hitDone = false; b.comboStep = 0; b.y = 0f
+        when {
+            p2 && b.skyCd <= 0f && dist > 6f && r < 0.35f -> { b.state = BState.SKYFALL; b.skyCd = 22f }
+            dist > 9f -> b.state = if (r < (if (p2) 0.45f else 0.25f)) BState.LEAP else BState.LUNGE
+            dist > 4.8f -> when {
+                r < 0.35f -> startChain(if (p2) listOf(Move.THRUST, Move.SWEEP, Move.SLAM) else listOf(Move.THRUST, Move.BACKHAND))
+                r < 0.6f -> startChain(listOf(Move.THRUST))
+                else -> b.state = BState.LUNGE
+            }
+            else -> {
+                val combos = if (p2) listOf(
+                    listOf(Move.SWEEP, Move.BACKHAND, Move.SWEEP, Move.SLAM),
+                    listOf(Move.SLAM, Move.SWEEP, Move.SLAM),
+                    listOf(Move.SWEEP, Move.BACKHAND, Move.THRUST),
+                    listOf(Move.BACKHAND, Move.SLAM),
+                    listOf(Move.SWEEP, Move.SLAM, Move.BACKHAND, Move.SLAM)
+                ) else listOf(
+                    listOf(Move.SWEEP),
+                    listOf(Move.SLAM),
+                    listOf(Move.SWEEP, Move.BACKHAND),
+                    listOf(Move.SWEEP, Move.BACKHAND, Move.SLAM),
+                    listOf(Move.THRUST, Move.SWEEP)
+                )
+                startChain(combos[rnd.nextInt(combos.size)])
+            }
         }
-        b.t = 0f; b.hitDone = false; b.comboStep = 0
+    }
+
+    /** Stars of light fall around the player, a beat apart. */
+    private fun starRain(n: Int) {
+        val p = player
+        repeat(n) { i ->
+            val a = rnd.nextFloat() * 6.283f; val d = if (i == 0) 0.3f else 1.5f + rnd.nextFloat() * 4.5f
+            stars.add(Star(p.x + sin(a) * d, p.z + cos(a) * d, -0.38f * i))
+        }
+    }
+
+    private fun updateStars(dt: Float) {
+        val it = stars.iterator()
+        while (it.hasNext()) {
+            val s = it.next()
+            s.t += dt
+            if (!s.done && s.t >= STAR_FALL) {
+                s.done = true
+                impact(s.x, s.z, 0.45f)
+                hitPlayerCircle(s.x, s.z, 1.1f, 14f)
+            }
+            if (s.t > STAR_FALL + 0.3f) it.remove()
+        }
     }
 
     private fun impact(x: Float, z: Float, power: Float) {
@@ -614,20 +731,56 @@ class Game(seed: Int = 1) {
     /** How close the boss is to striking (0 = not attacking, 1 = about to hit). Used for the eye glow. */
     fun bossWindup(): Float {
         val b = boss
-        // Fades out once the blow has landed (or the swing is over)
         if (b.hitDone) return 0f
-        if (b.state == BState.SWEEP && b.t > 0.95f) return 0f
-        if (b.state == BState.LUNGE && b.t > 1.08f) return 0f
-        if (b.state == BState.COMBO && b.comboStep == 0 && b.t > 0.82f) return 0f
         return when (b.state) {
-            BState.SLAM -> (b.t / 0.95f).coerceIn(0f, 1f)
-            BState.SWEEP -> (b.t / 0.72f).coerceIn(0f, 1f)
-            BState.LUNGE -> (b.t / 0.6f).coerceIn(0f, 1f)
+            BState.CHAIN -> if (b.mt > b.move.hit1) 0f else (b.mt / b.move.hit0).coerceIn(0f, 1f)
+            BState.LUNGE -> if (b.t > 1.08f) 0f else (b.t / 0.6f).coerceIn(0f, 1f)
             BState.LEAP -> (b.t / 0.7f).coerceIn(0f, 1f)
-            BState.COMBO -> if (b.comboStep == 0) (b.t / 0.6f).coerceIn(0f, 1f) else (b.t / 0.75f).coerceIn(0f, 1f)
+            BState.SKYFALL -> if (b.t > 3.4f) 1f else (b.t / 0.9f).coerceIn(0f, 1f)
             else -> 0f
+        }
+    }
+
+    /** Seconds until the boss's next blow lands (what a player reads from the animation). Used by the test bot. */
+    fun bossTimeToHit(): Float {
+        val b = boss; val p = player
+        var best = 99f
+        if (!b.hitDone) {
+            val sp = bossSpeed()
+            best = when (b.state) {
+                BState.CHAIN -> {
+                    val m = b.move; val hold = b.holds[b.comboStep]; val t = b.t
+                    val left = if (t < m.wind) (m.wind - t) + hold + (m.hit0 - m.wind) else if (t < m.wind + hold) (m.wind + hold - t) + (m.hit0 - m.wind) else m.hit0 - b.mt
+                    if (left < -0.25f) 99f else left / sp
+                }
+                BState.LUNGE -> if (b.t < 1.08f) (0.6f - b.t) / sp + max(0f, sqrt((p.x - b.x) * (p.x - b.x) + (p.z - b.z) * (p.z - b.z)) - 2.4f) / 14f else 99f
+                BState.LEAP -> (1.5f - b.t) / sp
+                BState.SKYFALL -> (3.75f - b.t) / sp
+                else -> 99f
+            }
+        }
+        for (st in stars) if (!st.done && (st.x - p.x) * (st.x - p.x) + (st.z - p.z) * (st.z - p.z) < 3.2f) best = min(best, STAR_FALL - st.t)
+        for (w in waves) {
+            val d = sqrt((p.x - w.x) * (p.x - w.x) + (p.z - w.z) * (p.z - w.z))
+            if (!w.hitDone && d > w.r) best = min(best, (d - w.r) / 9f)
+        }
+        return best
+    }
+
+    /** True while the boss is open to punishment (used by the test bot). */
+    fun bossOpen(): Boolean {
+        val b = boss
+        return when (b.state) {
+            BState.CHAIN -> b.comboStep >= b.chain.size - 1 && b.mt > b.move.hit1 + 0.15f
+            BState.LUNGE -> b.t > 1.15f
+            BState.LEAP -> b.t > 1.6f
+            BState.SKYFALL -> b.t > 3.85f
+            BState.STAGGER -> true
+            BState.PHASE -> b.t > 2.0f
+            else -> false
         }
     }
 }
 
 const val ROLL_TIME = 0.55f
+const val STAR_FALL = 1.15f

@@ -13,6 +13,7 @@ import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlin.random.Random
 
 /** How a body is posed this frame (angles in degrees). */
@@ -22,11 +23,19 @@ class Pose {
     var lift = 0f          // raise/lower the whole body
     var lean = 0f          // upper body leans forward
     var twist = 0f         // upper body turns
-    var legL = 0f; var legR = 0f
+    var sway = 0f          // upper body tips side to side
+    var headPitch = 0f
+    var legL = 0f; var legR = 0f       // thighs swing forward (+)
+    var kneeL = 0f; var kneeR = 0f     // knees bend (shin goes back)
     var kneel = 0f         // 0..1 drops to one knee
-    var armRYaw = 0f; var armRPitch = 0f; var wristR = -90f
-    var armLYaw = 0f; var armLPitch = 0f
-    fun reset() { rootPitch = 0f; rootRoll = 0f; lift = 0f; lean = 0f; twist = 0f; legL = 0f; legR = 0f; kneel = 0f; armRYaw = 0f; armRPitch = -20f; wristR = -90f; armLYaw = 0f; armLPitch = -30f }
+    var armRYaw = 0f; var armRPitch = 0f; var elbowR = 0f; var wristR = -90f
+    var armLYaw = 0f; var armLPitch = 0f; var elbowL = 0f
+    fun reset() {
+        rootPitch = 0f; rootRoll = 0f; lift = 0f; lean = 0f; twist = 0f; sway = 0f; headPitch = 0f
+        legL = 0f; legR = 0f; kneeL = 5f; kneeR = 5f; kneel = 0f
+        armRYaw = 0f; armRPitch = -20f; elbowR = 20f; wristR = -70f
+        armLYaw = 0f; armLPitch = -30f; elbowL = 40f
+    }
 }
 
 class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
@@ -105,75 +114,216 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
     private fun buildArena(): Mesh {
         val b = MeshBuilder()
         val r = Random(11)
+        val stone = rgb(0x6A6660)
+        val stoneDk = rgb(0x4A4743)
+        fun sh(c: FloatArray, k: Float) = floatArrayOf(c[0] * k, c[1] * k, c[2] * k)
         // Ground far below / around
-        b.annulus(0f, 60f, -0.05f, 32, rgb(0x14161C))
-        // Stone floor: rings of slabs with gaps between them
-        val rings = 9
-        for (ri in 0 until rings) {
+        b.annulus(0f, 70f, -0.05f, 32, rgb(0x14161C))
+        // Stone floor: rings of slabs with gaps, some cracked, some mossy
+        for (ri in 1 until 9) {
             val r0 = ri * 2f; val r1 = r0 + 2f
             val n = max(6, (r1 * 3.1f).toInt())
             for (i in 0 until n) {
                 val a0 = (i.toFloat() / n * 2 * PI).toFloat() + 0.02f; val a1 = ((i + 1).toFloat() / n * 2 * PI).toFloat() - 0.02f
                 val shade = 0.75f + r.nextFloat() * 0.35f
-                val base = if (r.nextFloat() < 0.12f) rgb(0x3B3A36) else rgb(0x55534D)
+                val roll = r.nextFloat()
+                val base = when { roll < 0.1f -> rgb(0x3B3A36); roll < 0.2f -> rgb(0x4A5440); else -> rgb(0x55534D) }
                 val c = floatArrayOf(base[0] * shade, base[1] * shade, base[2] * shade * 1.03f)
-                val y = r.nextFloat() * 0.03f
+                val y = r.nextFloat() * 0.035f
                 val ra = r0 + 0.06f; val rb = r1 - 0.06f
-                if (ri == 0 && i > 0) continue
-                if (ri == 0) { // centre seal
-                    b.cylinder(0f, 0f, 0f, 1.9f, 0.04f, 16, rgb(0x6B5A3A))
-                    continue
-                }
                 b.quad(arrayOf(
                     floatArrayOf(sin(a0) * ra, y, cos(a0) * ra), floatArrayOf(sin(a1) * ra, y, cos(a1) * ra),
                     floatArrayOf(sin(a1) * rb, y, cos(a1) * rb), floatArrayOf(sin(a0) * rb, y, cos(a0) * rb)
                 ), floatArrayOf(0f, 1f, 0f), c)
+                if (r.nextFloat() < 0.18f) { // a crack across the slab
+                    val am = (a0 + a1) / 2; val rm = (ra + rb) / 2
+                    b.box(sin(am) * rm, y + 0.006f, cos(am) * rm, 0.05f, 0.01f, 1.4f, rgb(0x1E1D1B), (am * 180 / PI).toFloat() + r.nextFloat() * 60f - 30f)
+                }
             }
         }
-        // Pillars: some whole, some broken
+        // Centre: a worn seal with rings carved into it
+        b.cylinder(0f, 0f, 0f, 2f, 0.05f, 24, rgb(0x5B4E36))
+        b.annulus(1.55f, 1.7f, 0.055f, 24, rgb(0x8A7444))
+        b.annulus(0.7f, 0.8f, 0.055f, 24, rgb(0x8A7444))
+        for (i in 0 until 8) { val a = (i / 8.0 * 2 * PI).toFloat(); b.box(sin(a) * 1.18f, 0.058f, cos(a) * 1.18f, 0.08f, 0.01f, 0.7f, rgb(0x8A7444), (a * 180 / PI).toFloat()) }
+        // Low curb around the fighting floor
+        for (i in 0 until 48) {
+            val a = (i / 48.0 * 2 * PI).toFloat()
+            b.box(sin(a) * 17.5f, 0.2f, cos(a) * 17.5f, 2.2f, 0.4f, 0.7f, sh(stoneDk, 0.9f + r.nextFloat() * 0.2f), (a * 180 / PI).toFloat())
+        }
+
+        // Pillars: fluted columns on stepped plinths; some whole, some broken
+        val whole = BooleanArray(Game.PILLARS.size)
         Game.PILLARS.forEachIndexed { i, p ->
             val broken = i % 3 == 1
+            whole[i] = !broken
             val h = if (broken) 2.5f + r.nextFloat() * 2.5f else 9f
-            val stone = rgb(0x6A6660)
-            b.box(p[0], 0.3f, p[1], 2.1f, 0.6f, 2.1f, rgb(0x5A5752))
-            b.cylinder(p[0], 0.6f, p[1], p[2], h, 10, stone, top = true, rTop = p[2] * 0.92f)
-            if (!broken) b.box(p[0], 0.6f + h + 0.35f, p[1], 2.2f, 0.7f, 2.2f, rgb(0x5E5A55))
-            else repeat(4) {
-                val a = r.nextFloat() * 6.28f; val d = 1.6f + r.nextFloat() * 1.5f
-                val s = 0.4f + r.nextFloat() * 0.6f
-                b.box(p[0] + sin(a) * d, s / 2, p[1] + cos(a) * d, s * 1.4f, s, s, stone, r.nextFloat() * 90f, r.nextFloat() * 20f)
+            b.box(p[0], 0.2f, p[1], 2.4f, 0.4f, 2.4f, rgb(0x55524D))
+            b.box(p[0], 0.5f, p[1], 2f, 0.3f, 2f, rgb(0x5E5A55))
+            b.cylinder(p[0], 0.65f, p[1], p[2] * 1.12f, 0.25f, 14, rgb(0x5E5A55))
+            b.cylinder(p[0], 0.9f, p[1], p[2], h - 0.3f, 14, stone, top = true, rTop = p[2] * 0.92f)
+            // Fluting: shallow grooves up the shaft
+            for (f in 0 until 7) {
+                val a = (f / 7.0 * 2 * PI).toFloat() + 0.2f
+                b.box(p[0] + sin(a) * p[2] * 0.97f, 0.9f + (h - 0.3f) / 2, p[1] + cos(a) * p[2] * 0.97f, 0.1f, h - 0.5f, 0.08f, sh(stone, 0.7f), (a * 180 / PI).toFloat())
+            }
+            // Bands
+            for (bh in floatArrayOf(2.6f, 5.8f)) if (bh < h) b.cylinder(p[0], bh, p[1], p[2] * 1.06f, 0.18f, 14, rgb(0x57534E))
+            if (!broken) {
+                b.cylinder(p[0], 0.6f + h, p[1], p[2] * 0.95f, 0.3f, 14, rgb(0x5E5A55), top = true, rTop = p[2] * 1.25f)
+                b.box(p[0], 0.6f + h + 0.5f, p[1], 2.3f, 0.45f, 2.3f, rgb(0x5E5A55))
+            } else {
+                // Jagged broken top and chunks around the base
+                b.box(p[0] + 0.2f, 0.9f + h - 0.1f, p[1], 0.9f, 0.5f, 0.7f, stone, r.nextFloat() * 90f, 18f)
+                repeat(5) {
+                    val a = r.nextFloat() * 6.28f; val d = 1.5f + r.nextFloat() * 1.8f
+                    val s = 0.4f + r.nextFloat() * 0.7f
+                    b.box(p[0] + sin(a) * d, s / 2, p[1] + cos(a) * d, s * 1.4f, s, s, stone, r.nextFloat() * 90f, r.nextFloat() * 20f)
+                }
+                // One fallen drum of the column lying on its side
+                val a = r.nextFloat() * 6.28f
+                b.box(p[0] + sin(a) * 2.4f, 0.75f, p[1] + cos(a) * 2.4f, 1.5f, 1.5f, 2.2f, stone, (a * 180 / PI).toFloat())
             }
         }
+        // Arches between neighbouring whole pillars
+        for (i in Game.PILLARS.indices) {
+            val j = (i + 1) % Game.PILLARS.size
+            if (!whole[i] || !whole[j]) continue
+            val p = Game.PILLARS[i]; val q = Game.PILLARS[j]
+            val mx = (p[0] + q[0]) / 2; val mz = (p[1] + q[1]) / 2
+            val dx = q[0] - p[0]; val dz = q[1] - p[1]
+            val len = sqrt(dx * dx + dz * dz)
+            val yaw = (kotlin.math.atan2(dx, dz) * 180 / PI).toFloat()
+            b.box(mx, 10.55f, mz, 1.3f, 0.7f, len, rgb(0x5A5651), yaw)
+            // A curve of stone blocks under the beam
+            val span = len - 2f
+            for (k in 0..10) {
+                val u = k / 10f
+                val ang = (u * PI).toFloat()
+                val along = -span / 2 + u * span
+                val y = 6.4f + sin(ang) * 3.4f
+                b.box(mx + dx / len * along, y, mz + dz / len * along, 1.1f, 0.6f, 0.9f, rgb(0x625E58), yaw, -(cos(ang) * 60f))
+            }
+        }
+
         // Braziers between the pillars: fire bowls on stands
         braziers.clear()
         for (i in 0 until 4) {
             val a = (i / 4.0 * 2 * PI).toFloat()
             val x = sin(a) * 15.3f; val z = cos(a) * 15.3f
-            b.cylinder(x, 0f, z, 0.35f, 1.1f, 8, rgb(0x3E3B37))
+            b.box(x, 0.15f, z, 1.1f, 0.3f, 1.1f, rgb(0x3E3B37), (a * 180 / PI).toFloat())
+            b.cylinder(x, 0.3f, z, 0.3f, 0.8f, 8, rgb(0x3E3B37))
+            for (leg in 0 until 3) { val la = leg * 2.094f + a; b.box(x + sin(la) * 0.35f, 0.7f, z + cos(la) * 0.35f, 0.08f, 0.8f, 0.08f, rgb(0x2C2A28), (la * 180 / PI).toFloat(), 15f) }
             b.cylinder(x, 1.1f, z, 0.35f, 0.4f, 10, rgb(0x2C2A28), top = true, rTop = 0.75f)
             b.cylinder(x, 1.45f, z, 0.6f, 0.06f, 10, rgb(0xC9561A))
             braziers.add(floatArrayOf(x, 1.9f, z))
         }
-        // Outer wall: tall ruined segments all around
+
+        // Kneeling stone knight statues by the wall, swords planted point-down
+        for (i in 0 until 4) {
+            val a = ((i + 0.5f) / 4.0 * 2 * PI).toFloat()
+            val x = sin(a) * 17.9f; val z = cos(a) * 17.9f
+            val yd = (a * 180 / PI).toFloat() + 180f // facing the centre
+            val fx = -sin(a); val fz = -cos(a)
+            val st = rgb(0x77736C)
+            b.box(x, 0.6f, z, 2f, 1.2f, 2f, rgb(0x55524D), yd)
+            b.box(x - fx * 0.3f, 1.65f, z - fz * 0.3f, 0.9f, 0.9f, 0.7f, st, yd)          // legs folded
+            b.box(x, 2.6f, z, 1f, 1.3f, 0.6f, st, yd, 8f)                                   // body
+            b.box(x + fx * 0.05f, 3.5f, z + fz * 0.05f, 0.5f, 0.55f, 0.5f, st, yd)         // helm
+            b.box(x + fx * 0.75f, 2.2f, z + fz * 0.75f, 0.14f, 2.6f, 0.3f, rgb(0x8A8780), yd) // sword
+            b.box(x + fx * 0.75f, 3.1f, z + fz * 0.75f, 0.7f, 0.12f, 0.14f, rgb(0x8A8780), yd) // crossguard
+            b.box(x + fx * 0.45f, 3.0f, z + fz * 0.45f, 0.9f, 0.25f, 0.3f, st, yd)          // hands on the hilt
+        }
+
+        // Outer wall: tall ruined segments with buttresses, battlements, windows and banners
         val segs = 36
         for (i in 0 until segs) {
             val a = (i.toFloat() / segs * 2 * PI).toFloat()
-            val h = if (r.nextFloat() < 0.2f) 1.5f + r.nextFloat() * 2f else 4.5f + r.nextFloat() * 3.5f
-            val x = sin(a) * 19.2f; val z = cos(a) * 19.2f
-            b.box(x, h / 2, z, 3.45f, h, 1.4f, rgb(0x4A4743), (a * 180 / PI).toFloat())
-            if (h > 4f && i % 2 == 0) b.box(x, h + 0.4f, z, 1.1f, 0.8f, 1.5f, rgb(0x4A4743), (a * 180 / PI).toFloat())
+            val yd = (a * 180 / PI).toFloat()
+            val ruined = r.nextFloat() < 0.18f
+            val h = if (ruined) 1.5f + r.nextFloat() * 2f else 5.5f + r.nextFloat() * 2.5f
+            val x = sin(a) * 19.4f; val z = cos(a) * 19.4f
+            val wc = sh(stoneDk, 0.9f + r.nextFloat() * 0.2f)
+            b.box(x, h / 2, z, 3.45f, h, 1.4f, wc, yd)
+            if (ruined) {
+                repeat(3) { val s = 0.5f + r.nextFloat() * 0.6f; b.box(x * 0.95f + (r.nextFloat() - 0.5f) * 2f, s / 2, z * 0.95f + (r.nextFloat() - 0.5f) * 2f, s * 1.3f, s, s, wc, r.nextFloat() * 90f, r.nextFloat() * 20f) }
+                continue
+            }
+            // Battlements along the top
+            for (m in -1..1) {
+                val ox = cos(a) * m * 1.15f; val oz = -sin(a) * m * 1.15f
+                b.box(x + ox, h + 0.35f, z + oz, 0.7f, 0.7f, 1.4f, wc, yd)
+            }
+            // Buttress on the inside every other segment
+            if (i % 2 == 0) {
+                b.box(sin(a) * 18.5f, h * 0.4f, cos(a) * 18.5f, 0.9f, h * 0.8f, 0.8f, sh(wc, 0.9f), yd)
+                b.box(sin(a) * 18.2f, 0.6f, cos(a) * 18.2f, 1.1f, 1.2f, 0.7f, sh(wc, 0.85f), yd)
+            } else if (h > 6f) {
+                // Narrow dark window
+                b.box(sin(a) * 18.68f, h * 0.62f, cos(a) * 18.68f, 0.45f, 1.5f, 0.05f, rgb(0x0B0C10), yd)
+                b.box(sin(a) * 18.68f, h * 0.62f + 0.85f, cos(a) * 18.68f, 0.6f, 0.2f, 0.06f, sh(wc, 1.1f), yd)
+            }
+            // Tattered banners hanging on some segments
+            if (i % 6 == 3) {
+                val bx = sin(a) * 18.6f; val bz = cos(a) * 18.6f
+                b.box(bx, h - 0.25f, bz, 1.5f, 0.12f, 0.12f, rgb(0x3A2A1A), yd)
+                b.box(bx, h - 1.9f, bz, 1.2f, 3.2f, 0.04f, rgb(0x5E1A1A), yd)
+                b.box(bx, h - 1.9f, bz - 0.0f, 0.3f, 2.4f, 0.05f, rgb(0x9A7A38), yd)
+                b.box(bx + cos(a) * 0.35f, h - 3.75f, bz - sin(a) * 0.35f, 0.4f, 0.6f, 0.04f, rgb(0x5E1A1A), yd)
+            }
         }
-        // Distant cliffs and ruined towers fading into the fog
+        // A great gate behind the player's start
+        run {
+            val gz = -19.4f
+            b.box(-2.6f, 4.5f, gz, 1.6f, 9f, 2f, rgb(0x46433F)); b.box(2.6f, 4.5f, gz, 1.6f, 9f, 2f, rgb(0x46433F))
+            b.box(0f, 8.6f, gz, 6.8f, 1.4f, 2f, rgb(0x46433F))
+            b.box(0f, 3.5f, gz - 0.2f, 3.6f, 7f, 0.3f, rgb(0x2A1E14))
+            for (k in -3..3) b.box(k * 0.5f, 3.5f, gz + 0.0f, 0.08f, 7f, 0.35f, rgb(0x1A1A1C))
+            b.box(-2.6f, 9.6f, gz, 1.9f, 0.8f, 2.3f, rgb(0x46433F)); b.box(2.6f, 9.6f, gz, 1.9f, 0.8f, 2.3f, rgb(0x46433F))
+        }
+        // Fallen warriors' swords stuck in the floor
+        repeat(14) {
+            val a = r.nextFloat() * 6.283f; val d = 6f + r.nextFloat() * 10.5f
+            val sx = sin(a) * d; val sz = cos(a) * d
+            val yd = r.nextFloat() * 360f; val tilt = 10f + r.nextFloat() * 25f
+            b.box(sx, 0.55f, sz, 0.05f, 1.1f, 0.12f, rgb(0x6C7078), yd, tilt)
+            b.box(sx + sin(yd * PI.toFloat() / 180) * sin(tilt * PI.toFloat() / 180) * 1.1f, 1.08f, sz + cos(yd * PI.toFloat() / 180) * sin(tilt * PI.toFloat() / 180) * 1.1f, 0.3f, 0.05f, 0.08f, rgb(0x4A3A28), yd, tilt)
+        }
+        // Scattered rubble and bones
+        repeat(55) {
+            val a = r.nextFloat() * 6.283f; val d = 3f + r.nextFloat() * 14f
+            val s = 0.1f + r.nextFloat() * 0.3f
+            val bone = r.nextFloat() < 0.25f
+            if (bone) b.box(sin(a) * d, 0.04f, cos(a) * d, 0.07f, 0.06f, 0.5f, rgb(0xB8B09A), r.nextFloat() * 180f)
+            else b.box(sin(a) * d, s / 2, cos(a) * d, s * 1.5f, s, s * 1.2f, rgb(0x4C4A45), r.nextFloat() * 180f, r.nextFloat() * 25f)
+        }
+        // Dead trees just outside the walls
+        repeat(10) {
+            val a = r.nextFloat() * 6.283f; val d = 22f + r.nextFloat() * 6f
+            val tx = sin(a) * d; val tz = cos(a) * d
+            val th = 6f + r.nextFloat() * 5f
+            b.cylinder(tx, 0f, tz, 0.35f, th, 6, rgb(0x2A221C), top = true, rTop = 0.12f)
+            repeat(4) { k ->
+                val ba = r.nextFloat() * 360f
+                b.box(tx, th * (0.45f + k * 0.13f), tz, 0.12f, 2.4f, 0.12f, rgb(0x2A221C), ba, 50f + r.nextFloat() * 20f)
+            }
+        }
+        // A ruined castle on the hills, fading into the fog
+        run {
+            val cx = 10f; val cz = 52f
+            b.box(cx, 6f, cz, 24f, 12f, 8f, rgb(0x262931))
+            for (k in -2..2) {
+                val tx = cx + k * 6f
+                val th = 18f + (if (k == 0) 10f else r.nextFloat() * 6f)
+                b.cylinder(tx, 0f, cz - 1f, 2.2f, th, 8, rgb(0x23262E))
+                b.cylinder(tx, th, cz - 1f, 2.6f, 4f, 8, rgb(0x1E2128), top = true, rTop = 0.1f)
+            }
+        }
+        // Distant cliffs
         repeat(26) {
-            val a = r.nextFloat() * 6.283f; val d = 32f + r.nextFloat() * 18f
-            val h = 8f + r.nextFloat() * 22f; val w = 4f + r.nextFloat() * 8f
+            val a = r.nextFloat() * 6.283f; val d = 34f + r.nextFloat() * 20f
+            val h = 8f + r.nextFloat() * 20f; val w = 4f + r.nextFloat() * 8f
             b.box(sin(a) * d, h / 2 - 1f, cos(a) * d, w, h, w * (0.6f + r.nextFloat()), rgb(0x23262E), r.nextFloat() * 90f)
-        }
-        // Scattered rubble on the floor
-        repeat(40) {
-            val a = r.nextFloat() * 6.283f; val d = 4f + r.nextFloat() * 13f
-            val s = 0.12f + r.nextFloat() * 0.3f
-            b.box(sin(a) * d, s / 2, cos(a) * d, s * 1.5f, s, s * 1.2f, rgb(0x4C4A45), r.nextFloat() * 180f, r.nextFloat() * 25f)
         }
         // The moon
         b.sphere(-38f, 34f, 62f, 5f, 8, 14, rgb(0xE8EEF8))
@@ -235,7 +385,14 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
         GLES20.glDepthMask(false)
         shadow(g.player.x, g.player.z, 0.6f, 0.5f)
-        if (g.boss.state != BState.DEAD || g.boss.t < 3f) shadow(g.boss.x, g.boss.z, 1.9f * (1f - min(0.6f, g.boss.y / 10f)), 0.55f)
+        if (g.boss.state != BState.DEAD || g.boss.t < 3f) {
+            val by = g.boss.y
+            // High up (sky-fall) the shadow grows as it comes down
+            val sr = if (by > 8f) 1.4f + 1.2f * (1f - by / 40f) else 1.9f * (1f - min(0.6f, by / 10f))
+            shadow(g.boss.x, g.boss.z, sr, if (by > 8f) 0.4f + 0.25f * sin(g.time * 10f) else 0.55f)
+        }
+        // Small shadows under falling stars
+        for (st in g.stars) if (st.t > 0f && !st.done) shadow(st.x, st.z, 0.3f + 0.7f * (st.t / STAR_FALL), 0.35f)
         GLES20.glDepthMask(true)
         GLES20.glDisable(GLES20.GL_BLEND)
 
@@ -290,60 +447,117 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
     private fun deg(rad: Float) = (rad * 180f / PI).toFloat()
     private fun ease(x: Float) = x.coerceIn(0f, 1f).let { it * it * (3 - 2 * it) }
     private fun lerp(a: Float, b: Float, k: Float) = a + (b - a) * k
+    /** Fast start, soft landing: good for swings that snap through. */
+    private fun snap(x: Float) = 1f - (1f - x.coerceIn(0f, 1f)).let { it * it * it }
+
+    /**
+     * A running / walking cycle. phase advances with distance travelled; s = 0 (still) .. 1 (full run).
+     * Thighs swing, the knee folds as the leg comes through, arms swing against the legs,
+     * the body bobs twice per stride and leans into the run.
+     */
+    private fun gait(q: Pose, phase: Float, s: Float, stride: Float, heavy: Boolean) {
+        val sn = sin(phase); val cs = cos(phase)
+        q.legL = sn * stride * s
+        q.legR = -sn * stride * s
+        // The knee folds most while that leg swings forward, and stays soft while planted
+        q.kneeL = 8f + s * (12f + 70f * max(0f, cs))
+        q.kneeR = 8f + s * (12f + 70f * max(0f, -cs))
+        q.lift = -0.05f * s + 0.07f * s * kotlin.math.abs(sn) - (if (heavy) 0.02f * s else 0f)
+        q.lean = (if (heavy) 8f else 14f) * s
+        q.twist = -sn * 9f * s
+        q.sway = sn * (if (heavy) 4f else 2f) * s
+        q.rootRoll = if (heavy) sn * 2.5f * s else 0f
+        q.armLPitch = -20f + sn * 40f * s
+        q.armRPitch = -22f - sn * 32f * s
+        q.elbowL = 30f + 45f * s
+        q.elbowR = 25f + 40f * s
+        q.headPitch = -q.lean * 0.5f
+    }
 
     private fun knightPose(p: Player) {
         val q = pose; q.reset()
-        val walk = sin(p.walkPhase * 2f) * min(1f, p.speedNow / 5f)
-        q.legL = walk * 35f; q.legR = -walk * 35f
-        q.armLPitch = -30f - walk * 12f
-        q.armRPitch = -25f + walk * 15f
-        q.wristR = -70f
+        val s = min(1f, p.speedNow / 5.2f)
+        // Breathing while standing
+        val breathe = sin(game.time * 2.2f) * (1f - s)
+        gait(q, p.walkPhase * 0.85f, s, 46f, heavy = false)
+        q.lift += breathe * 0.012f
+        q.armLPitch += breathe * 2f
+        // Guard stance when locked on and standing still: shield up, sword ready
+        if (game.locked && s < 0.3f) {
+            val k = 1f - s / 0.3f
+            q.armLPitch = lerp(q.armLPitch, -60f, k); q.elbowL = lerp(q.elbowL, 70f, k); q.armLYaw = lerp(0f, 20f, k)
+            q.armRPitch = lerp(q.armRPitch, -35f, k); q.elbowR = lerp(q.elbowR, 45f, k)
+            q.kneeL += 14f * k; q.kneeR += 14f * k; q.legL += 10f * k; q.legR -= 8f * k; q.lift -= 0.04f * k
+        }
+        q.wristR = -80f + q.elbowR
         when (p.state) {
             PState.ATTACK -> {
                 val len = if (p.combo == 2) 0.72f else 0.52f
                 val k = p.t / len
+                q.legL = 22f; q.legR = -18f; q.kneeL = 25f; q.kneeR = 15f; q.lift = -0.06f
                 when (p.combo) {
                     0, 1 -> {
-                        // Horizontal slash: wind to one side, cut across to the other
-                        val from = if (p.combo == 0) -110f else 80f
-                        val to = if (p.combo == 0) 80f else -110f
-                        val swing = if (k < 0.3f) ease(k / 0.3f) * 0.15f else 0.15f + ease((k - 0.3f) / 0.25f) * 0.85f
-                        q.armRYaw = lerp(from, to, swing); q.armRPitch = -88f; q.wristR = -8f
-                        q.twist = lerp(-25f, 25f, swing) * (if (p.combo == 0) 1f else -1f)
-                        q.lean = 10f
+                        // Horizontal slash: gather to one side, snap across, follow through
+                        val dir = if (p.combo == 0) 1f else -1f
+                        val wind = ease(k / 0.3f)
+                        val cut = snap((k - 0.3f) / 0.24f)
+                        val yaw = lerp(lerp(-20f * dir, -115f * dir, wind), 95f * dir, cut)
+                        q.armRYaw = if (dir > 0) yaw else -yaw - 15f
+                        q.armRPitch = lerp(-60f, -85f, wind); q.elbowR = lerp(40f, 5f, wind); q.wristR = lerp(-60f, -10f, wind)
+                        q.twist = lerp(lerp(0f, -30f, wind), 30f, cut) * dir
+                        q.lean = 10f + 8f * cut
+                        q.armLPitch = -45f; q.elbowL = 60f
                     }
                     else -> {
-                        // Overhead finisher
+                        // Overhead finisher: rise up, then crash down with the whole body
                         val up = ease(k / 0.42f)
-                        val down = ease((k - 0.42f) / 0.18f)
-                        q.armRPitch = lerp(lerp(-30f, -175f, up), -45f, down); q.wristR = lerp(-90f, -15f, down)
-                        q.lean = lerp(-8f, 20f, down)
+                        val down = snap((k - 0.42f) / 0.16f)
+                        q.armRPitch = lerp(lerp(-30f, -170f, up), -40f, down); q.elbowR = lerp(lerp(30f, 40f, up), 5f, down)
+                        q.wristR = lerp(-80f, -15f, down)
+                        q.armLPitch = lerp(-30f, -140f, up * (1f - down)); q.elbowL = 30f
+                        q.lean = lerp(-10f * up, 26f, down)
+                        q.lift = lerp(0.02f * up, -0.12f, down)
+                        q.kneeL = lerp(15f, 45f, down); q.kneeR = lerp(15f, 30f, down)
                     }
                 }
             }
             PState.HEAVY -> {
                 val up = ease(p.t / 0.48f)
-                val down = ease((p.t - 0.5f) / 0.14f)
-                q.armRPitch = lerp(lerp(-25f, -190f, up), -40f, down); q.wristR = lerp(-90f, -10f, down)
-                q.armLPitch = lerp(-30f, -150f, up * (1f - down))
-                q.lean = lerp(-12f * up, 28f, down)
-                q.lift = -0.12f * down
+                val down = snap((p.t - 0.5f) / 0.13f)
+                q.armRPitch = lerp(lerp(-25f, -195f, up), -38f, down); q.elbowR = lerp(lerp(20f, 50f, up), 0f, down)
+                q.wristR = lerp(-90f, -10f, down)
+                q.armLPitch = lerp(-30f, -165f, up * (1f - down)); q.elbowL = lerp(40f, 50f, up)
+                q.lean = lerp(-14f * up, 32f, down)
+                q.lift = lerp(-0.05f * up, -0.18f, down)
+                q.legL = lerp(10f, 32f, down); q.legR = lerp(-5f, -25f, down)
+                q.kneeL = lerp(20f, 55f, down); q.kneeR = lerp(20f, 35f, down)
             }
             PState.ROLL -> {
                 val k = p.t / ROLL_TIME
                 q.rootPitch = 360f * ease(k)
                 q.lift = -0.45f * sin(k * PI.toFloat())
-                q.legL = -60f; q.legR = -60f; q.armRPitch = -60f; q.armLPitch = -60f
+                // Tucked up tight
+                q.legL = 80f; q.legR = 70f; q.kneeL = 120f; q.kneeR = 115f
+                q.armRPitch = -70f; q.armLPitch = -70f; q.elbowR = 80f; q.elbowL = 90f
+                q.lean = 30f; q.headPitch = 20f
             }
             PState.HEAL -> {
                 val k = ease(p.t / 0.5f) * (1f - ease((p.t - 0.85f) / 0.3f))
-                q.armLPitch = lerp(-30f, -130f, k); q.armLYaw = 30f * k
+                q.armLPitch = lerp(q.armLPitch, -60f, k); q.armLYaw = lerp(0f, -25f, k); q.elbowL = lerp(q.elbowL, 120f, k)
+                q.headPitch = -18f * k
             }
-            PState.STAGGER -> { q.lean = -22f * (1f - p.t / 0.5f); q.armRPitch = -50f; q.armLPitch = -60f }
-            PState.DEAD -> { val k = ease(p.t / 0.7f); q.rootPitch = -88f * k; q.lift = -0.05f * k; q.armRPitch = -150f * k }
-            PState.IDLE -> {
-                if (game.locked && p.speedNow < 0.5f) { q.armRPitch = -40f; q.armLPitch = -55f }
+            PState.STAGGER -> {
+                val k = 1f - ease(p.t / 0.5f)
+                q.lean = -24f * k; q.headPitch = -15f * k; q.armRPitch = -55f * k - 15f; q.armLPitch = -70f * k - 15f
+                q.legL = 18f * k; q.kneeL = 30f * k; q.kneeR = 20f * k; q.lift = -0.06f * k
             }
+            PState.DEAD -> {
+                val k = ease(p.t / 0.8f)
+                q.kneeL = 60f * k; q.kneeR = 40f * k
+                q.rootPitch = -85f * k; q.lift = -0.25f * k; q.armRPitch = -150f * k; q.armLPitch = -120f * k
+                q.headPitch = -20f * k
+            }
+            PState.IDLE -> {}
         }
     }
 
@@ -359,7 +573,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         // Healing glow
         if (p.state == PState.HEAL) {
             emitR = 0.9f; emitG = 0.6f; emitB = 0.2f
-            push(); tr(0.25f, 1.55f, 0.35f); scl(0.12f, 0.12f, 0.12f); drawMesh(ball, 1f, 0.8f, 0.4f); pop()
+            push(); tr(0.1f, 1.45f, 0.38f); scl(0.12f, 0.12f, 0.12f); drawMesh(ball, 1f, 0.8f, 0.4f); pop()
         }
         emitR = 0f; emitG = 0f; emitB = 0f
     }
@@ -370,21 +584,27 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         val armorDk = if (isBoss) rgb(0x22252B) else steelDark
         val cape = if (isBoss) rgb(0x2B1D18) else cloth
         // Hips are the pivot for rolling and falling
-        tr(0f, 0.92f + q.lift - q.kneel * 0.4f, 0f)
+        tr(0f, 0.92f + q.lift - q.kneel * 0.42f, 0f)
         rot(q.rootPitch, 1f, 0f, 0f)
         rot(q.rootRoll, 0f, 0f, 1f)
-        // Legs
+        // Legs: thigh, knee, shin, boot
         for (side in intArrayOf(-1, 1)) {
             push()
-            tr(side * 0.14f, 0f, 0f)
-            // Kneeling: right knee down on the ground, left foot planted in front
-            val a = if (side < 0) q.legR - q.kneel * 10f else q.legL + q.kneel * 80f
+            tr(side * 0.13f, 0f, 0f)
+            val right = side < 0
+            val a = if (right) q.legR - q.kneel * 10f else q.legL + q.kneel * 80f
             rot(-a, 1f, 0f, 0f)
-            part(0f, -0.24f, 0f, 0.17f, 0.48f, 0.19f, armorDk)
-            push(); tr(0f, -0.48f, 0f)
-            rot(q.kneel * (if (side < 0) 85f else 80f), 1f, 0f, 0f)
-            part(0f, -0.2f, 0.02f, 0.16f, 0.42f, 0.18f, armor)
-            part(0f, -0.41f, 0.06f, 0.17f, 0.08f, 0.26f, armorDk)
+            part(0f, -0.23f, 0f, 0.18f, 0.48f, 0.2f, armorDk)
+            push(); tr(0f, -0.47f, 0f)
+            part(0f, 0f, 0.05f, 0.15f, 0.12f, 0.1f, armor)                           // knee guard
+            val kneeA = (if (right) q.kneeR else q.kneeL) + q.kneel * (if (right) 85f else 80f)
+            rot(kneeA, 1f, 0f, 0f)
+            part(0f, -0.2f, 0f, 0.16f, 0.42f, 0.18f, armor)
+            // Boot stays roughly level with the ground (toes point down a little when the foot lifts)
+            push(); tr(0f, -0.41f, 0f)
+            rot((a - kneeA) * 0.8f, 1f, 0f, 0f)
+            part(0f, -0.02f, 0.05f, 0.17f, 0.09f, 0.28f, armorDk)
+            pop()
             pop()
             pop()
         }
@@ -392,64 +612,83 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         push()
         rot(q.lean, 1f, 0f, 0f)
         rot(q.twist, 0f, 1f, 0f)
+        rot(q.sway, 0f, 0f, 1f)
         part(0f, 0.08f, 0f, 0.42f, 0.2f, 0.26f, rgb(0x3A2E26))               // belt / tassets
+        part(0f, -0.04f, 0.1f, 0.34f, 0.18f, 0.06f, armorDk)                  // front tasset
         part(0f, 0.4f, 0f, 0.5f, 0.48f, 0.3f, armor)                            // chest
         part(0f, 0.42f, 0.16f, 0.36f, 0.3f, 0.04f, armorDk)                     // breastplate ridge
-        // Cape hanging behind
-        push(); tr(0f, 0.6f, -0.17f); rot(8f + (if (isBoss) 4f else 0f), 1f, 0f, 0f)
-        part(0f, -0.42f, 0f, 0.46f, 0.9f, 0.04f, cape); pop()
+        part(0f, 0.55f, 0.17f, 0.12f, 0.08f, 0.03f, if (isBoss) rgb(0x55331C) else gold) // crest
+        // Cape hanging behind, flowing back when moving
+        push(); tr(0f, 0.62f, -0.17f); rot(8f + q.lean * 0.4f + (if (isBoss) 4f else 0f) + kotlin.math.abs(q.legL) * 0.25f, 1f, 0f, 0f)
+        part(0f, -0.44f, 0f, 0.48f, 0.92f, 0.04f, cape)
+        if (isBoss) { part(0.12f, -0.95f, 0f, 0.14f, 0.18f, 0.04f, cape); part(-0.16f, -0.92f, 0f, 0.1f, 0.12f, 0.04f, cape) }
+        pop()
         // Head / helm
-        push(); tr(0f, 0.78f, 0f)
-        part(0f, 0.04f, 0f, 0.27f, 0.3f, 0.29f, armor)
+        push(); tr(0f, 0.72f, 0f); rot(q.headPitch, 1f, 0f, 0f)
+        part(0f, 0.04f, 0f, 0.09f, 0.08f, 0.09f, armorDk)                       // neck
+        part(0f, 0.15f, 0f, 0.27f, 0.3f, 0.29f, armor)
         if (isBoss) {
             // Horned crown and burning eyes
-            part(0.13f, 0.24f, 0f, 0.05f, 0.22f, 0.05f, rgb(0x1A1A1E))
-            part(-0.13f, 0.24f, 0f, 0.05f, 0.22f, 0.05f, rgb(0x1A1A1E))
+            part(0.13f, 0.36f, 0.02f, 0.05f, 0.24f, 0.05f, rgb(0x1A1A1E))
+            part(-0.13f, 0.36f, 0.02f, 0.05f, 0.24f, 0.05f, rgb(0x1A1A1E))
+            part(0f, 0.33f, 0.02f, 0.24f, 0.05f, 0.24f, rgb(0x2A2A30))
             val e = eyeGlow
             val sr = emitR; val sg = emitG; val sb = emitB
             emitR = 0.6f + 1.4f * e; emitG = 0.12f + 0.25f * e; emitB = 0.05f
-            part(0.06f, 0.06f, 0.145f, 0.06f, 0.03f, 0.02f, rgb(0xFF5A2A))
-            part(-0.06f, 0.06f, 0.145f, 0.06f, 0.03f, 0.02f, rgb(0xFF5A2A))
+            part(0.06f, 0.17f, 0.145f, 0.06f, 0.03f, 0.02f, rgb(0xFF5A2A))
+            part(-0.06f, 0.17f, 0.145f, 0.06f, 0.03f, 0.02f, rgb(0xFF5A2A))
             emitR = sr; emitG = sg; emitB = sb
         } else {
-            part(0f, 0.06f, 0.15f, 0.2f, 0.03f, 0.02f, rgb(0x0A0A0C))           // visor slit
-            part(0f, 0.22f, -0.02f, 0.04f, 0.1f, 0.22f, cloth)                    // plume
+            part(0f, 0.17f, 0.15f, 0.2f, 0.03f, 0.02f, rgb(0x0A0A0C))           // visor slit
+            part(0f, 0.1f, 0.15f, 0.03f, 0.12f, 0.02f, rgb(0x0A0A0C))
+            part(0f, 0.33f, -0.03f, 0.04f, 0.1f, 0.24f, cloth)                    // plume
         }
         pop()
         // Shoulders
-        part(-0.31f, 0.6f, 0f, 0.2f, 0.12f, 0.3f, armorDk)
-        part(0.31f, 0.6f, 0f, 0.2f, 0.12f, 0.3f, armorDk)
+        part(-0.31f, 0.6f, 0f, 0.22f, 0.13f, 0.32f, armorDk)
+        part(0.31f, 0.6f, 0f, 0.22f, 0.13f, 0.32f, armorDk)
         // Right arm + weapon (the character's right is local -X)
         push(); tr(-0.32f, 0.56f, 0f)
         rot(q.armRYaw, 0f, 1f, 0f); rot(q.armRPitch, 1f, 0f, 0f)
-        part(0f, -0.2f, 0f, 0.13f, 0.42f, 0.14f, armor)
-        push(); tr(0f, -0.44f, 0f); rot(q.wristR, 1f, 0f, 0f)
-        part(0f, 0f, 0f, 0.13f, 0.12f, 0.13f, rgb(0x2A2622))                    // gauntlet
+        part(0f, -0.12f, 0f, 0.13f, 0.25f, 0.14f, armor)
+        push(); tr(0f, -0.24f, 0f); rot(-q.elbowR, 1f, 0f, 0f)
+        part(0f, -0.1f, 0f, 0.12f, 0.22f, 0.13f, armorDk)
+        push(); tr(0f, -0.22f, 0f); rot(q.wristR, 1f, 0f, 0f)
+        part(0f, 0f, 0f, 0.13f, 0.11f, 0.13f, rgb(0x2A2622))                    // gauntlet
         if (isBoss) {
             // Huge cleaver-like greatsword
             part(0f, -0.1f, 0f, 0.06f, 0.22f, 0.06f, leather)
             part(0f, -0.24f, 0f, 0.44f, 0.06f, 0.1f, rgb(0x2B2B30))
-            val sr = emitR
-            if (game.boss.phase2) { emitR = sr + 0.5f; emitG = 0.15f }
+            val sr = emitR; val sg = emitG
+            if (game.boss.phase2) { emitR = sr + 0.5f; emitG = sg + 0.15f }
             part(0f, -1.15f, 0.02f, 0.13f, 1.8f, 0.26f, rgb(0x5F636B))
-            emitR = sr; emitG = 0f
+            part(0f, -1.15f, 0.15f, 0.04f, 1.7f, 0.02f, rgb(0x3A3D44))
+            emitR = sr; emitG = sg
         } else {
             part(0f, -0.08f, 0f, 0.04f, 0.18f, 0.04f, leather)                   // grip
             part(0f, -0.2f, 0f, 0.3f, 0.04f, 0.06f, gold)                         // crossguard
             part(0f, -0.72f, 0f, 0.025f, 0.98f, 0.08f, blade)                     // blade
         }
-        pop(); pop()
+        pop(); pop(); pop()
         // Left arm + shield (knight) / bare claw (boss)
         push(); tr(0.32f, 0.56f, 0f)
         rot(q.armLYaw, 0f, 1f, 0f); rot(q.armLPitch, 1f, 0f, 0f)
-        part(0f, -0.2f, 0f, 0.13f, 0.42f, 0.14f, armor)
+        part(0f, -0.12f, 0f, 0.13f, 0.25f, 0.14f, armor)
+        push(); tr(0f, -0.24f, 0f); rot(-q.elbowL, 1f, 0f, 0f)
+        part(0f, -0.1f, 0f, 0.12f, 0.22f, 0.13f, armorDk)
         if (!isBoss) {
-            push(); tr(0.1f, -0.3f, 0.05f); rot(-q.armLPitch * 0.6f, 1f, 0f, 0f)
-            part(0f, 0f, 0f, 0.05f, 0.55f, 0.42f, rgb(0x5A4128))
-            part(0.03f, 0f, 0f, 0.03f, 0.12f, 0.12f, gold)
+            push(); tr(0.09f, -0.12f, 0.02f)
+            part(0f, 0f, 0f, 0.05f, 0.56f, 0.44f, rgb(0x5A4128))
+            part(0.02f, 0f, 0f, 0.03f, 0.6f, 0.05f, rgb(0x7A7F88))
+            part(0.02f, 0f, 0f, 0.03f, 0.05f, 0.48f, rgb(0x7A7F88))
+            part(0.04f, 0f, 0f, 0.03f, 0.11f, 0.11f, gold)
             pop()
-        } else part(0f, -0.48f, 0f, 0.16f, 0.14f, 0.16f, rgb(0x1E1E22))
-        pop()
+        } else {
+            part(0f, -0.26f, 0f, 0.16f, 0.13f, 0.16f, rgb(0x1E1E22))
+            part(0.04f, -0.36f, 0.04f, 0.03f, 0.1f, 0.03f, rgb(0x1E1E22))
+            part(-0.04f, -0.36f, 0.04f, 0.03f, 0.1f, 0.03f, rgb(0x1E1E22))
+        }
+        pop(); pop()
         pop()
     }
 
@@ -458,57 +697,148 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
     private fun bossPose(g: Game) {
         val b = g.boss
         val q = pose; q.reset()
-        val walk = sin(b.walkPhase * 1.6f) * b.moving
-        q.legL = walk * 28f; q.legR = -walk * 28f
-        q.armRPitch = -35f + walk * 10f; q.wristR = -60f
-        q.armLPitch = -20f - walk * 10f
+        // Heavy, swaying stride
+        gait(q, b.walkPhase * 1.6f, b.moving, 30f, heavy = true)
+        val breathe = sin(g.time * 1.4f) * (1f - b.moving)
+        q.lift += breathe * 0.015f; q.lean += 6f + breathe * 2f
+        q.armRPitch = -35f - sin(b.walkPhase * 1.6f) * 10f * b.moving; q.elbowR = 25f; q.wristR = -60f
+        q.armLPitch -= 5f
         val t = b.t
         when (b.state) {
-            BState.INTRO -> { val k = ease(t / 1.4f); q.kneel = 1f - k; q.lean = 25f * (1f - k) }
-            BState.SLAM, BState.COMBO -> {
-                if (b.state == BState.COMBO && b.comboStep == 0) sweepPose(q, t, 0.6f, 0.82f)
-                else {
-                    val wind = if (b.state == BState.SLAM) 0.75f else 0.55f
-                    val hit = if (b.state == BState.SLAM) 0.95f else 0.75f
-                    val up = ease(t / wind)
-                    val down = ease((t - (hit - 0.12f)) / 0.12f)
-                    val rec = ease((t - hit - 0.6f) / 0.5f)
-                    q.armRPitch = lerp(lerp(-30f, -185f, up), -40f, down); q.wristR = lerp(-90f, -12f, down)
-                    q.armLPitch = lerp(-20f, -170f, up * (1f - down))
-                    q.lean = lerp(-15f * up, 32f, down) * (1f - rec)
-                    q.lift = -0.15f * down * (1f - rec)
-                    if (rec > 0f) { q.armRPitch = lerp(q.armRPitch, -35f, rec); q.wristR = lerp(q.wristR, -60f, rec) }
+            BState.INTRO -> {
+                // Rises from a kneel and squares up
+                val k = ease(t / 1.4f)
+                q.kneel = 1f - k; q.lean = lerp(35f, 6f, k); q.headPitch = lerp(30f, 0f, ease((t - 0.8f) / 0.6f))
+            }
+            BState.CHAIN -> {
+                val mt = b.mt
+                val m = b.move
+                when (m) {
+                    Move.SWEEP -> sweepPose(q, mt, m.wind, m.hit1, -135f, 115f, if (b.comboStep < b.chain.size - 1) 0f else 1f)
+                    Move.BACKHAND -> sweepPose(q, mt, m.wind, m.hit1, 125f, -120f, if (b.comboStep < b.chain.size - 1) 0f else 1f)
+                    Move.SLAM -> slamPose(q, mt, m.wind, m.hit0, b.comboStep < b.chain.size - 1)
+                    Move.THRUST -> {
+                        val w = ease(mt / m.wind)
+                        val go = snap((mt - m.wind) / (m.hit0 - m.wind + 0.05f))
+                        val rec = if (b.comboStep < b.chain.size - 1) 0f else ease((mt - m.hit1 - 0.25f) / 0.6f)
+                        // Draw the blade back at the hip, then drive it forward with a long lunge
+                        q.armRPitch = lerp(lerp(-35f, -70f, w), -92f, go); q.armRYaw = lerp(lerp(0f, -40f, w), -8f, go)
+                        q.elbowR = lerp(lerp(25f, 100f, w), 0f, go); q.wristR = lerp(lerp(-60f, -5f, w), 0f, go)
+                        q.twist = lerp(lerp(0f, -30f, w), 15f, go)
+                        q.lean = lerp(lerp(6f, 4f, w), 30f, go); q.lift = lerp(-0.1f * w, -0.22f, go)
+                        q.legL = lerp(10f * w, 45f, go); q.legR = lerp(-5f * w, -30f, go)
+                        q.kneeL = lerp(20f * w, 55f, go); q.kneeR = lerp(15f * w, 20f, go)
+                        q.armLPitch = lerp(-25f, 10f, go); q.armLYaw = lerp(0f, 30f, go)
+                        if (rec > 0f) {
+                            q.armRPitch = lerp(q.armRPitch, -35f, rec); q.armRYaw *= 1f - rec; q.elbowR = lerp(q.elbowR, 25f, rec); q.wristR = lerp(q.wristR, -60f, rec)
+                            q.twist *= 1f - rec; q.lean = lerp(q.lean, 6f, rec); q.lift *= 1f - rec
+                            q.legL *= 1f - rec; q.legR *= 1f - rec; q.kneeL = lerp(q.kneeL, 8f, rec); q.kneeR = lerp(q.kneeR, 8f, rec)
+                        }
+                    }
                 }
             }
-            BState.SWEEP -> sweepPose(q, t, 0.7f, 0.95f)
+            BState.SKYFALL -> {
+                when {
+                    t < 0.9f -> { val k = ease(t / 0.9f); q.kneeL = 95f * k; q.kneeR = 95f * k; q.legL = 50f * k; q.legR = 45f * k; q.lift = -0.4f * k; q.lean = 30f * k; q.armRPitch = lerp(-35f, 10f, k); q.armLPitch = lerp(-25f, 15f, k) }
+                    t < 3.75f -> {
+                        // Both hands on the hilt, blade pointing straight down
+                        q.armRPitch = -150f; q.elbowR = 70f; q.wristR = -150f
+                        q.armLPitch = -150f; q.elbowL = 70f; q.armLYaw = -25f
+                        q.legL = 30f; q.legR = -10f; q.kneeL = 70f; q.kneeR = 40f; q.lean = 10f
+                    }
+                    else -> {
+                        val r = ease((t - 4.4f) / 0.8f)
+                        q.kneel = 1f - r; q.lean = lerp(40f, 6f, r); q.headPitch = 20f * (1f - r)
+                        q.armRPitch = lerp(-10f, -35f, r); q.elbowR = lerp(10f, 25f, r); q.wristR = lerp(-30f, -60f, r)
+                    }
+                }
+            }
             BState.LUNGE -> {
                 val wind = ease(t / 0.6f)
-                q.armRPitch = lerp(-30f, -70f, wind); q.armRYaw = lerp(0f, -50f, wind); q.wristR = lerp(-60f, 0f, wind)
-                q.lean = 20f * wind; q.lift = -0.25f * wind
-                if (t > 0.6f && t < 1.15f) { q.armRYaw = -10f; q.armRPitch = -90f; q.wristR = 0f; q.lean = 30f; q.lift = -0.1f }
-                if (t >= 1.15f) { val r = ease((t - 1.15f) / 0.6f); q.lean = 30f * (1f - r); q.armRPitch = lerp(-90f, -35f, r); q.wristR = lerp(0f, -60f, r) }
+                q.armRPitch = lerp(-30f, -75f, wind); q.armRYaw = lerp(0f, -55f, wind); q.elbowR = lerp(25f, 60f, wind); q.wristR = lerp(-60f, -20f, wind)
+                q.lean = 22f * wind; q.lift = -0.22f * wind; q.kneeL = 50f * wind; q.kneeR = 35f * wind; q.legL = 28f * wind; q.legR = -15f * wind
+                if (t > 0.6f && t < 1.12f) {
+                    // Charging: thrust the blade forward, legs pumping
+                    gait(q, b.walkPhase * 1.6f, 1f, 45f, heavy = false)
+                    q.armRYaw = -10f; q.armRPitch = -90f; q.elbowR = 0f; q.wristR = 0f; q.lean = 32f
+                }
+                if (t >= 1.12f) {
+                    val r = ease((t - 1.12f) / 0.7f)
+                    q.lean = lerp(32f, 6f, r); q.armRPitch = lerp(-90f, -35f, r); q.wristR = lerp(0f, -60f, r); q.elbowR = lerp(0f, 25f, r)
+                    q.kneeL = lerp(40f, 8f, r); q.legL = lerp(30f, 0f, r); q.lift = lerp(-0.15f, 0f, r)
+                }
             }
             BState.LEAP -> {
-                if (t < 0.7f) { val k = ease(t / 0.7f); q.kneel = 0.6f * k; q.lean = 20f * k; q.armRPitch = lerp(-30f, -120f, k) }
-                else if (t < 1.5f) { q.armRPitch = -190f; q.wristR = -90f; q.armLPitch = -160f; q.legL = -40f; q.legR = 20f }
-                else { val r = ease((t - 2f) / 0.6f); q.armRPitch = lerp(-40f, -35f, r); q.wristR = lerp(-10f, -60f, r); q.lean = 35f * (1f - r); q.kneel = 0.4f * (1f - r) }
+                when {
+                    t < 0.7f -> { val k = ease(t / 0.7f); q.kneeL = 80f * k; q.kneeR = 80f * k; q.legL = 40f * k; q.legR = 35f * k; q.lift = -0.35f * k; q.lean = 25f * k; q.armRPitch = lerp(-30f, -60f, k); q.armLPitch = lerp(-25f, 20f, k) }
+                    t < 1.5f -> {
+                        val k = (t - 0.7f) / 0.8f
+                        q.armRPitch = lerp(-150f, -200f, k); q.elbowR = 40f; q.wristR = -90f; q.armLPitch = -160f
+                        q.legL = lerp(-20f, 50f, k); q.legR = lerp(10f, 30f, k); q.kneeL = 60f; q.kneeR = lerp(20f, 70f, k); q.lean = lerp(-10f, 10f, k)
+                    }
+                    else -> {
+                        val r = ease((t - 1.9f) / 0.7f)
+                        q.armRPitch = lerp(-38f, -35f, r); q.elbowR = lerp(0f, 25f, r); q.wristR = lerp(-10f, -60f, r)
+                        q.lean = lerp(40f, 6f, r); q.kneel = 0.5f * (1f - r); q.lift = lerp(-0.1f, 0f, r)
+                    }
+                }
             }
-            BState.STAGGER -> { val k = ease(t / 0.3f) * (1f - ease((t - 1.8f) / 0.4f)); q.kneel = k; q.lean = 35f * k; q.armRPitch = -10f; q.armLPitch = -10f }
-            BState.PHASE -> { val k = ease(t / 0.8f) * (1f - ease((t - 1.9f) / 0.5f)); q.armRPitch = -40f; q.armRYaw = -60f * k; q.armLPitch = -100f * k; q.armLYaw = 60f * k; q.lean = -25f * k }
-            BState.DEAD -> { val k = ease(t / 1.2f); q.kneel = k; q.lean = 45f * k; q.armRPitch = -5f; q.armLPitch = -5f; q.rootRoll = 6f * k }
+            BState.STAGGER -> {
+                val k = ease(t / 0.3f) * (1f - ease((t - 1.8f) / 0.4f))
+                q.kneel = k; q.lean = 38f * k; q.headPitch = 25f * k
+                q.armRPitch = lerp(q.armRPitch, -5f, k); q.armLPitch = lerp(q.armLPitch, 15f, k); q.elbowR = 10f; q.elbowL = 10f
+            }
+            BState.PHASE -> {
+                val k = ease(t / 0.8f) * (1f - ease((t - 1.9f) / 0.5f))
+                q.armRPitch = -40f; q.armRYaw = -70f * k; q.armLPitch = -100f * k; q.armLYaw = 70f * k; q.elbowL = 20f
+                q.lean = -28f * k; q.headPitch = -30f * k; q.kneeL = 25f * k; q.kneeR = 25f * k; q.lift = -0.08f * k
+            }
+            BState.DEAD -> {
+                val k = ease(t / 1.2f)
+                q.kneel = k; q.lean = 48f * k; q.headPitch = 30f * k; q.armRPitch = -5f; q.armLPitch = -5f; q.rootRoll = 6f * k
+            }
             BState.IDLE -> {}
         }
     }
 
-    private fun sweepPose(q: Pose, t: Float, wind: Float, end: Float) {
+    /** A big horizontal cut: coil the whole body to one side, then unwind through the swing. */
+    private fun sweepPose(q: Pose, t: Float, wind: Float, end: Float, from: Float, to: Float, recover: Float) {
         val w = ease(t / wind)
-        val s = ease((t - wind) / (end - wind))
-        val rec = ease((t - end - 0.3f) / 0.5f)
-        q.armRPitch = lerp(-35f, -88f, w); q.wristR = lerp(-60f, -5f, w)
-        q.armRYaw = lerp(lerp(0f, -130f, w), 110f, s)
-        q.twist = lerp(lerp(0f, -35f, w), 35f, s)
-        q.lean = 12f * w
-        if (rec > 0f) { q.armRYaw *= 1f - rec; q.twist *= 1f - rec; q.armRPitch = lerp(q.armRPitch, -35f, rec); q.wristR = lerp(q.wristR, -60f, rec) }
+        val s = snap((t - wind) / (end - wind))
+        val rec = recover * ease((t - end - 0.3f) / 0.5f)
+        val dir = if (to > from) 1f else -1f
+        q.armRPitch = lerp(-35f, -86f, w); q.elbowR = lerp(25f, 5f, w); q.wristR = lerp(-60f, -5f, w)
+        q.armRYaw = lerp(lerp(0f, from, w), to, s)
+        q.twist = lerp(lerp(0f, -40f * dir, w), 40f * dir, s)
+        q.lean = 12f * w + 6f * s
+        q.lift = -0.12f * w
+        q.legL = 22f * w; q.legR = -18f * w; q.kneeL = 10f + 40f * w; q.kneeR = 10f + 30f * w
+        q.armLPitch = lerp(-25f, -70f, w); q.armLYaw = lerp(0f, 40f * dir, w) - 50f * dir * s
+        if (rec > 0f) {
+            q.armRYaw *= 1f - rec; q.twist *= 1f - rec; q.armRPitch = lerp(q.armRPitch, -35f, rec); q.wristR = lerp(q.wristR, -60f, rec)
+            q.elbowR = lerp(q.elbowR, 25f, rec); q.lift *= 1f - rec; q.kneeL = lerp(q.kneeL, 8f, rec); q.kneeR = lerp(q.kneeR, 8f, rec)
+            q.legL *= 1f - rec; q.legR *= 1f - rec; q.armLYaw *= 1f - rec
+        }
+    }
+
+    /** Overhead smash: rear back on the toes, then the whole body drives the blade into the floor. */
+    private fun slamPose(q: Pose, t: Float, wind: Float, hit: Float, chained: Boolean) {
+        val up = ease(t / wind)
+        val down = snap((t - (hit - 0.1f)) / 0.1f)
+        val rec = if (chained) 0f else ease((t - hit - 0.5f) / 0.55f)
+        q.armRPitch = lerp(lerp(-30f, -190f, up), -38f, down); q.elbowR = lerp(lerp(25f, 45f, up), 0f, down)
+        q.wristR = lerp(-85f, -10f, down)
+        q.armLPitch = lerp(-25f, -175f, up * (1f - down)); q.elbowL = 30f
+        q.lean = lerp(lerp(6f, -16f, up), 36f, down)
+        q.lift = lerp(0.04f * up, -0.22f, down)
+        q.legL = lerp(0f, 30f, down); q.legR = lerp(-5f, -28f, down)
+        q.kneeL = lerp(10f, 60f, down); q.kneeR = lerp(15f, 40f, down)
+        q.headPitch = lerp(-10f * up, 15f, down)
+        if (rec > 0f) {
+            q.armRPitch = lerp(q.armRPitch, -35f, rec); q.wristR = lerp(q.wristR, -60f, rec); q.elbowR = lerp(q.elbowR, 25f, rec)
+            q.lean = lerp(q.lean, 6f, rec); q.lift = lerp(q.lift, 0f, rec); q.kneeL = lerp(q.kneeL, 8f, rec); q.kneeR = lerp(q.kneeR, 8f, rec)
+            q.legL = lerp(q.legL, 0f, rec); q.legR = lerp(q.legR, 0f, rec)
+        }
     }
 
     private fun drawBoss(g: Game) {
@@ -542,17 +872,19 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
             emitR = 1.2f; emitG = 0.5f; emitB = 0.15f
             drawMesh(ring, 0f, 0f, 0f)
         }
-        // Danger marker where the slam / leap will land
-        val b = g.boss
-        val w = g.bossWindup()
-        if (w > 0f && (b.state == BState.SLAM || b.state == BState.LEAP || (b.state == BState.COMBO && b.comboStep == 1))) {
-            val hx: Float; val hz: Float; val r: Float
-            if (b.state == BState.LEAP) { hx = b.leapToX; hz = b.leapToZ; r = 2.4f } else { hx = b.x + sin(b.yaw) * 3.2f; hz = b.z + cos(b.yaw) * 3.2f; r = 2.0f }
+        // Falling stars of light
+        for (st in g.stars) {
+            if (st.t < 0f || st.done) continue
+            val k = st.t / STAR_FALL
             sp = 0; Matrix.setIdentityM(stack, 0)
-            tr(hx, 0.07f, hz); scl(r, 1f, r)
-            GLES20.glUniform1f(uAlpha, 0.15f + 0.35f * w)
-            emitR = 0.9f; emitG = 0.15f; emitB = 0.05f
-            drawMesh(ring, 0f, 0f, 0f)
+            tr(st.x, 14f * (1f - k), st.z); scl(0.32f, 0.55f, 0.32f)
+            GLES20.glUniform1f(uAlpha, 0.9f)
+            emitR = 1.4f; emitG = 1.25f; emitB = 0.8f
+            drawMesh(ball, 0f, 0f, 0f)
+            sp = 0; Matrix.setIdentityM(stack, 0)
+            tr(st.x, 14f * (1f - k) + 1.1f, st.z); scl(0.12f, 1.4f, 0.12f)
+            GLES20.glUniform1f(uAlpha, 0.35f)
+            drawMesh(ball, 0f, 0f, 0f)
         }
         // Brazier flames
         val t = g.time

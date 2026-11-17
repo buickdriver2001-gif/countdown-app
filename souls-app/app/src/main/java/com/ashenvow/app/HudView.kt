@@ -113,7 +113,7 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
                         game.input.moveX = dx / max; game.input.moveY = -dy / max
                     } else if (id == camId) {
                         val x = e.getX(i)
-                        game.input.addDrag((x - camLastX) / d * 0.009f)
+                        game.input.addDrag(-(x - camLastX) / d * 0.009f) // swipe left = turn left
                         camLastX = x
                     }
                 }
