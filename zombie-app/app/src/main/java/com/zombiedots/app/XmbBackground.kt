@@ -21,6 +21,21 @@ class XmbBackground(context: Context, private val opacity: Float = 1f) : View(co
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val ribbonLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
 
+    /**
+     * The ribbons are drawn ONCE into images (with a real blur for the glow), then each frame
+     * those images just slide sideways at different speeds. That's almost free for the GPU,
+     * so it runs at the screen's full refresh rate.
+     */
+    private class Layer(val bmp: android.graphics.Bitmap, val speed: Float, val bobAmp: Float, val bobSpeed: Float, val phase: Float)
+
+    private val layers = ArrayList<Layer>()
+    private var bandTop = 0f
+    private var bandHeight = 0f
+    private val blit = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+    private val src = android.graphics.Rect()
+    private val dst = android.graphics.RectF()
+    private val res = 0.75f // layers are rendered at 75% size and scaled up smoothly
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         if (w <= 0 || h <= 0) return
         val a = (opacity * 255).toInt()
@@ -33,16 +48,70 @@ class XmbBackground(context: Context, private val opacity: Float = 1f) : View(co
             w * 0.5f, h * 0.45f, maxOf(w, h) * 0.6f,
             Color.argb((70 * opacity).toInt(), 90, 140, 255), Color.TRANSPARENT, Shader.TileMode.CLAMP
         )
+        buildLayers(w, h)
     }
 
-    // Ribbon geometry, reused every frame (no allocations while animating)
-    private var xs = FloatArray(0)
-    private var ys = FloatArray(0)
-    private var stripUp = FloatArray(0)
-    private var stripDown = FloatArray(0)
-    private var stripColors = IntArray(0)
-    private val linePath = android.graphics.Path()
-    private val vertPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private fun buildLayers(w: Int, h: Int) {
+        bandTop = h * 0.38f
+        bandHeight = h * 0.55f
+        // All menus share one set of wave images
+        val key = "${w}x$h"
+        if (sharedKey == key && sharedLayers.isNotEmpty()) {
+            layers.clear(); layers.addAll(sharedLayers)
+            return
+        }
+        for (l in sharedLayers) l.bmp.recycle()
+        sharedLayers.clear()
+        layers.clear()
+        val bw = (w * res).toInt().coerceAtLeast(1)
+        val bh = (bandHeight * res).toInt().coerceAtLeast(1)
+        // Two layers drifting in opposite directions, so the ribbons keep weaving across each other
+        val specs = listOf(
+            Triple(intArrayOf(0, 2, 4), 26f * d, 1),
+            Triple(intArrayOf(1, 3, 5), -38f * d, 2)
+        )
+        for ((ribbons, speed, cycles) in specs) {
+            val bmp = try {
+                android.graphics.Bitmap.createBitmap(bw, bh, android.graphics.Bitmap.Config.ARGB_8888)
+            } catch (e: OutOfMemoryError) { continue }
+            val c = Canvas(bmp)
+            val k = res
+            for (i in ribbons) {
+                val amp = bandHeight * (0.09f + 0.035f * i) * k
+                val mid = (h * (0.58f + 0.02f * i) - bandTop) * k
+                val phase = i * 0.9f
+                val path = android.graphics.Path()
+                val step = 3f
+                var x = 0f
+                // Exactly whole waves across the width, so the image tiles seamlessly as it slides
+                val f1 = 2f * PI.toFloat() * cycles / bw
+                path.moveTo(0f, mid + sin(phase) * amp + sin(phase * 2f) * amp * 0.45f)
+                while (x <= bw) {
+                    x += step
+                    val y = mid + sin(x * f1 + phase) * amp + sin(x * f1 * 2f + phase * 2f) * amp * 0.45f
+                    path.lineTo(x, y)
+                }
+                val bright = i == 2 || i == 3
+                if (bright || i == 4) {
+                    val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        style = Paint.Style.STROKE; strokeWidth = 14f * d * k
+                        color = Color.argb(60, 160, 200, 255)
+                        maskFilter = android.graphics.BlurMaskFilter(9f * d * k, android.graphics.BlurMaskFilter.Blur.NORMAL)
+                    }
+                    c.drawPath(path, glow)
+                }
+                val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE; strokeJoin = Paint.Join.ROUND; strokeCap = Paint.Cap.ROUND
+                    strokeWidth = (if (bright) 2.2f else 1.2f) * d * k
+                    color = Color.argb(if (bright) 175 else 80, 220, 235, 255)
+                }
+                c.drawPath(path, line)
+            }
+            layers.add(Layer(bmp, speed, bandHeight * 0.03f, 0.25f + layers.size * 0.12f, layers.size * 1.7f))
+        }
+        sharedLayers.clear(); sharedLayers.addAll(layers)
+        sharedKey = key
+    }
 
     override fun onDraw(canvas: Canvas) {
         val w = width.toFloat()
@@ -51,55 +120,16 @@ class XmbBackground(context: Context, private val opacity: Float = 1f) : View(co
         canvas.drawRect(0f, 0f, w, h, glowPaint)
 
         val t = SystemClock.uptimeMillis() / 1000f
-        val step = 4f * d
-        val n = (w / step).toInt() + 3
-        if (xs.size < n) {
-            xs = FloatArray(n); ys = FloatArray(n)
-            stripUp = FloatArray(n * 4); stripDown = FloatArray(n * 4); stripColors = IntArray(n * 2)
-        }
-
-        // Several thin ribbons weaving over each other, like the PS3 home screen.
-        // Each one is a single smooth stroke, so there are no bumps where pieces overlap.
-        for (i in 0 until 6) {
-            val phase = i * 0.9f
-            val speed = 0.18f + i * 0.04f
-            val amp = h * (0.05f + 0.025f * i)
-            val baseY = h * (0.58f + 0.02f * i)
-            val freq = (1.2f + i * 0.15f) * PI.toFloat() / w
-            for (j in 0 until n) {
-                val x = -step + j * step
-                xs[j] = x
-                ys[j] = baseY + sin(x * freq + t * speed + phase) * amp +
-                    sin(x * freq * 0.5f - t * speed * 0.7f + phase * 2f) * amp * 0.5f
-            }
-
-            // Soft glow under the brightest ribbons: a seamless band that fades at its edges
-            if ((i == 2 || i == 4) && android.os.Build.VERSION.SDK_INT >= 29) {
-                val half = 9f * d
-                val glowA = (34 * opacity).toInt()
-                for (j in 0 until n) {
-                    val j0 = maxOf(0, j - 1); val j1 = minOf(n - 1, j + 1)
-                    var tx = xs[j1] - xs[j0]; var ty = ys[j1] - ys[j0]
-                    val len = kotlin.math.sqrt(tx * tx + ty * ty).coerceAtLeast(0.001f)
-                    tx /= len; ty /= len
-                    val nx = -ty * half; val ny = tx * half
-                    stripUp[j * 4] = xs[j]; stripUp[j * 4 + 1] = ys[j]
-                    stripUp[j * 4 + 2] = xs[j] + nx; stripUp[j * 4 + 3] = ys[j] + ny
-                    stripDown[j * 4] = xs[j]; stripDown[j * 4 + 1] = ys[j]
-                    stripDown[j * 4 + 2] = xs[j] - nx; stripDown[j * 4 + 3] = ys[j] - ny
-                    stripColors[j * 2] = Color.argb(glowA, 170, 205, 255)
-                    stripColors[j * 2 + 1] = Color.argb(0, 170, 205, 255)
-                }
-                canvas.drawVertices(Canvas.VertexMode.TRIANGLE_STRIP, n * 4, stripUp, 0, null, 0, stripColors, 0, null, 0, 0, vertPaint)
-                canvas.drawVertices(Canvas.VertexMode.TRIANGLE_STRIP, n * 4, stripDown, 0, null, 0, stripColors, 0, null, 0, 0, vertPaint)
-            }
-
-            linePath.rewind()
-            linePath.moveTo(xs[0], ys[0])
-            for (j in 1 until n) linePath.lineTo(xs[j], ys[j])
-            ribbonLine.strokeWidth = (if (i == 2) 2.2f else 1.1f) * d
-            ribbonLine.color = Color.argb(((if (i == 2) 160 else 75) * opacity).toInt(), 220, 235, 255)
-            canvas.drawPath(linePath, ribbonLine)
+        for (l in layers) {
+            // Slide sideways (wrapping) and bob gently up and down
+            var off = (t * l.speed) % w
+            if (off < 0f) off += w
+            val bob = sin(t * l.bobSpeed + l.phase) * l.bobAmp
+            src.set(0, 0, l.bmp.width, l.bmp.height)
+            dst.set(off - w, bandTop + bob, off, bandTop + bob + bandHeight)
+            canvas.drawBitmap(l.bmp, src, dst, blit)
+            dst.set(off, bandTop + bob, off + w, bandTop + bob + bandHeight)
+            canvas.drawBitmap(l.bmp, src, dst, blit)
         }
         if (isShown) postInvalidateOnAnimation()
     }
@@ -110,6 +140,9 @@ class XmbBackground(context: Context, private val opacity: Float = 1f) : View(co
     }
 
     companion object {
+        private val sharedLayers = ArrayList<Layer>()
+        private var sharedKey = ""
+
         /** Glassy panel background used across the UI. */
         fun glass(d: Float, radius: Float = 18f, strong: Boolean = false): GradientDrawable =
             GradientDrawable(
