@@ -96,12 +96,86 @@ class World(private val rnd: Random = Random.Default) {
         const val MAX_HUNTERS = 8
         const val ZOMBIE_R = 3.2f
         const val HUMAN_R = 4.5f
+        const val NUKE_BREATHER = 10f
+        const val AIRSTRIKE_COOLDOWN = 20f
+        const val BOMB_RADIUS = 24f
+        const val BOMB_SPACING = 16f
+        const val PLANE_SPEED = 300f
+        const val MIN_STRIKE_LENGTH = 50f
+    }
+
+    val nextWaveIn: Float get() = WAVE_TIME - waveTimer
+
+    // ------------------------------------------------------------------ airstrikes
+
+    class Bomb(val x: Float, val y: Float, val along: Float, var dropped: Boolean = false)
+
+    /** A plane flying a straight line, dropping bombs along the swiped stretch. */
+    class Airstrike(
+        val sx: Float, val sy: Float, val dx: Float, val dy: Float,
+        val length: Float, val bombs: List<Bomb>
+    ) {
+        var travelled = 0f
+        val planeX get() = sx + dx * travelled
+        val planeY get() = sy + dy * travelled
+        val done get() = travelled > length
+    }
+
+    class Blast(val x: Float, val y: Float, var age: Float)
+
+    val airstrikes = ArrayList<Airstrike>()
+    val blasts = ArrayList<Blast>()
+    var airstrikeCooldown = 0f
+    val airstrikeReady get() = airstrikeCooldown <= 0f
+
+    /** Swipe from (x1,y1) to (x2,y2): carpet-bomb that line. Returns false if not ready. */
+    fun airstrike(x1: Float, y1: Float, x2: Float, y2: Float): Boolean {
+        if (phase != Phase.RUNNING || !airstrikeReady) return false
+        var dx = x2 - x1
+        var dy = y2 - y1
+        val len = sqrt(dx * dx + dy * dy)
+        if (len < MIN_STRIKE_LENGTH) return false
+        dx /= len; dy /= len
+        // Plane comes in from off-screen behind the start point and leaves past the end
+        val lead = max(width, height) * 0.6f + 40f
+        val sx = x1 - dx * lead
+        val sy = y1 - dy * lead
+        val bombs = ArrayList<Bomb>()
+        var t = 0f
+        while (t <= len) {
+            bombs.add(Bomb(x1 + dx * t, y1 + dy * t, lead + t))
+            t += BOMB_SPACING
+        }
+        airstrikes.add(Airstrike(sx, sy, dx, dy, lead + len + lead, bombs))
+        airstrikeCooldown = AIRSTRIKE_COOLDOWN
+        return true
+    }
+
+    private fun updateAirstrikes(dt: Float) {
+        if (airstrikeCooldown > 0f) airstrikeCooldown -= dt
+        for (a in airstrikes) {
+            a.travelled += PLANE_SPEED * dt
+            for (b in a.bombs) {
+                if (b.dropped || b.along > a.travelled) continue
+                b.dropped = true
+                blasts.add(Blast(b.x, b.y, 0f))
+                val r2 = BOMB_RADIUS * BOMB_RADIUS
+                var n = 0
+                for (z in zombies) {
+                    if (z.dead) continue
+                    val ex = z.x - b.x; val ey = z.y - b.y
+                    if (ex * ex + ey * ey < r2) { killZombie(z, quiet = true); n++ }
+                }
+            }
+        }
+        airstrikes.removeAll { it.done }
     }
 
     // ------------------------------------------------------------------ setup
 
     fun reset() {
         zombies.clear(); humans.clear(); tracers.clear(); splats.clear(); nukes.clear(); texts.clear()
+        airstrikes.clear(); blasts.clear(); airstrikeCooldown = 0f
         phase = Phase.SETUP
         time = 0f; kills = 0; wave = 0; waveTimer = 0f
         strayTimer = 15f // first stray after ~15s
@@ -176,7 +250,8 @@ class World(private val rnd: Random = Random.Default) {
         nukes.add(Nuke(x, y, 0f))
         var n = 0
         for (z in zombies) { if (!z.dead) { killZombie(z, quiet = true); n++ } }
-        waveTimer = 0f // a full breather before the next wave
+        waveTimer = WAVE_TIME - NUKE_BREATHER // short breather, then the next wave
+        texts.add(FloatText(width / 2f, height / 2f + 80f, "next wave in ${NUKE_BREATHER.toInt()}s", 2.5f))
         texts.add(FloatText(width / 2f, height / 2f + 40f, "+$n", 2f))
         return true
     }
@@ -213,6 +288,8 @@ class World(private val rnd: Random = Random.Default) {
         tracers.removeAll { it.life <= 0f }
         for (s in splats) s.life -= dt * 0.25f
         splats.removeAll { it.life <= 0f }
+        for (b in blasts) b.age += dt
+        blasts.removeAll { it.age > 0.7f }
         for (n in nukes) n.age += dt
         nukes.removeAll { it.age > 6f }
         for (t in texts) { t.life -= dt; t.y -= dt * 14f }
@@ -229,6 +306,7 @@ class World(private val rnd: Random = Random.Default) {
         strayTimer += dt
         if (strayTimer >= 30f) { strayTimer = 0f; maybeSpawnStray() }
 
+        updateAirstrikes(dt)
         buildGrid()
         updateZombies(dt)
         thinkSquad(dt)

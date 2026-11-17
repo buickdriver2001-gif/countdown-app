@@ -48,6 +48,21 @@ class GameView(context: Context) : View(context) {
         color = Color.parseColor("#3DA5FF"); textSize = 12 * d; letterSpacing = 0.08f
         typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
     }
+    private val blastPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val planePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#D8DEE8") }
+    private val planeShadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#66000000") }
+    private val aimLine = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = 2.5f * d; strokeCap = Paint.Cap.ROUND
+        pathEffect = android.graphics.DashPathEffect(floatArrayOf(10 * d, 7 * d), 0f)
+    }
+    private val aimHead = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val aimBand = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
+    private val aimText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 13 * d; textAlign = Paint.Align.CENTER
+        typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+    }
+    private val path = android.graphics.Path()
+    private val airReadyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#7FE0FF"); textSize = 12 * d }
     private val btnPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#CC1A1F27") }
     private val btnText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE; textSize = 15 * d; textAlign = Paint.Align.CENTER
@@ -147,8 +162,51 @@ class GameView(context: Context) : View(context) {
     private fun inButton(e: MotionEvent) =
         btnPause.contains(e.x, e.y) || btnSpeed.contains(e.x, e.y) || btnReset.contains(e.x, e.y)
 
+    // Airstrike aiming (screen px)
+    private var aiming = false
+    private var aimSX = 0f
+    private var aimSY = 0f
+    private var aimEX = 0f
+    private var aimEY = 0f
+    private var downX = 0f
+    private var downY = 0f
+    private var multiTouch = false
+
     @SuppressLint("ClickableViewAccessibility")
-    override fun onTouchEvent(event: MotionEvent): Boolean = gestures.onTouchEvent(event)
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = event.x; downY = event.y
+                aiming = false
+                multiTouch = false
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> { multiTouch = true; aiming = false }
+            MotionEvent.ACTION_MOVE -> {
+                if (!multiTouch && world.phase == Phase.RUNNING && !paused) {
+                    val dx = event.x - downX; val dy = event.y - downY
+                    if (!aiming && dx * dx + dy * dy > (22 * d) * (22 * d) && !inButtonAt(downX, downY)) {
+                        aiming = true
+                        aimSX = downX; aimSY = downY
+                    }
+                    if (aiming) { aimEX = event.x; aimEY = event.y }
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                if (aiming) {
+                    aiming = false
+                    if (world.airstrike(aimSX / d, aimSY / d, aimEX / d, aimEY / d)) {
+                        performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+                    }
+                }
+            }
+            MotionEvent.ACTION_CANCEL -> aiming = false
+        }
+        gestures.onTouchEvent(event)
+        return true
+    }
+
+    private fun inButtonAt(x: Float, y: Float) =
+        btnPause.contains(x, y) || btnSpeed.contains(x, y) || btnReset.contains(x, y)
 
     // ---------- loop
 
@@ -247,6 +305,20 @@ class GameView(context: Context) : View(context) {
             }
         }
 
+        for (b in world.blasts) {
+            val p = (b.age / 0.7f).coerceIn(0f, 1f)
+            val r = World.BOMB_RADIUS * d * (0.35f + 0.65f * kotlin.math.sqrt(p))
+            blastPaint.style = Paint.Style.FILL
+            blastPaint.color = Color.argb(((1f - p) * 200).toInt(), 255, 140, 40)
+            c.drawCircle(b.x * d, b.y * d, r, blastPaint)
+            blastPaint.color = Color.argb(((1f - p) * 255).toInt().coerceAtLeast(0), 255, 240, 200)
+            c.drawCircle(b.x * d, b.y * d, r * 0.4f * (1f - p), blastPaint)
+        }
+
+        for (a in world.airstrikes) drawPlane(c, a.planeX * d, a.planeY * d, a.dx, a.dy)
+
+        if (aiming) drawAim(c)
+
         for (t in world.texts) {
             when {
                 t.text.startsWith("WAVE") -> { floatPaint.color = Color.parseColor("#FF3B3B"); floatPaint.textSize = 28 * d }
@@ -272,11 +344,18 @@ class GameView(context: Context) : View(context) {
         val top = topInset + 26 * d
         if (world.phase != Phase.SETUP) {
             val alive = world.humans.count { it.role != Role.STRAY }
+            val nw = world.nextWaveIn.toInt().coerceAtLeast(0) + 1
             c.drawText("WAVE ${world.wave}   ⏱ ${fmt(world.time)}", left, top, hud)
+            val waveLabelX = left + hud.measureText("WAVE ${world.wave}   ⏱ ${fmt(world.time)}   ")
+            c.drawText("next wave ${nw}s", waveLabelX, top, if (nw <= 5) nukeReadyPaint else hudDim)
             c.drawText("☠ ${world.kills}   ● ${world.zombies.size}   👥 $alive", left, top + 20 * d, hudDim)
             c.drawText(if (world.nukeReady) "☢ NUKE READY (double-tap)" else "☢ NUKE USED", left, top + 38 * d,
                 if (world.nukeReady) nukeReadyPaint else hudDim)
-            if (world.phase == Phase.RUNNING) c.drawText("SQUAD: ${world.tactic.label}", left, top + 56 * d, tacticPaint)
+            c.drawText(
+                if (world.airstrikeReady) "✈ AIRSTRIKE READY (drag to aim)" else "✈ AIRSTRIKE in ${world.airstrikeCooldown.toInt() + 1}s",
+                left, top + 56 * d, if (world.airstrikeReady) airReadyPaint else hudDim
+            )
+            if (world.phase == Phase.RUNNING) c.drawText("SQUAD: ${world.tactic.label}", left, top + 76 * d, tacticPaint)
         }
         drawButton(c, btnPause, if (paused) "▶" else "❚❚")
         drawButton(c, btnSpeed, "${speed}x")
@@ -294,8 +373,9 @@ class GameView(context: Context) : View(context) {
         c.drawText("ZOMBIE DOTS", cx, cy - 40 * d, title)
         c.drawText("Tap anywhere to drop your survivor + hunter", cx, cy + 4 * d, center)
         c.drawText("Then watch them try to survive.", cx, cy + 28 * d, centerDim)
-        c.drawText("Tap = drop zombies   ·   Double-tap = your one nuke", cx, cy + 50 * d, centerDim)
-        if (best > 0f) c.drawText("Best survival: ${fmt(best)}", cx, cy + 82 * d, centerDim)
+        c.drawText("Double-tap = your one nuke   ·   Drag = airstrike", cx, cy + 50 * d, centerDim)
+        c.drawText("Tap = drop more zombies", cx, cy + 68 * d, centerDim)
+        if (best > 0f) c.drawText("Best survival: ${fmt(best)}", cx, cy + 100 * d, centerDim)
     }
 
     private fun drawOver(c: Canvas) {
@@ -308,6 +388,78 @@ class GameView(context: Context) : View(context) {
         val newBest = world.time >= best && best > 0f
         c.drawText(if (newBest) "New best!" else "Best: ${fmt(best)}", cx, cy + 26 * d, centerDim)
         c.drawText("Tap to play again", cx, cy + 80 * d, center)
+    }
+
+    private fun drawPlane(c: Canvas, x: Float, y: Float, dx: Float, dy: Float) {
+        val angle = Math.toDegrees(kotlin.math.atan2(dy, dx).toDouble()).toFloat()
+        val s = 1.4f * d
+        path.reset()
+        // Simple jet silhouette pointing along +x
+        path.moveTo(12f * s, 0f)
+        path.lineTo(2f * s, -1.6f * s)
+        path.lineTo(-1f * s, -10f * s)
+        path.lineTo(-4f * s, -10f * s)
+        path.lineTo(-3f * s, -1.6f * s)
+        path.lineTo(-8f * s, -1.4f * s)
+        path.lineTo(-10f * s, -4.5f * s)
+        path.lineTo(-12f * s, -4.5f * s)
+        path.lineTo(-11f * s, 0f)
+        path.lineTo(-12f * s, 4.5f * s)
+        path.lineTo(-10f * s, 4.5f * s)
+        path.lineTo(-8f * s, 1.4f * s)
+        path.lineTo(-3f * s, 1.6f * s)
+        path.lineTo(-4f * s, 10f * s)
+        path.lineTo(-1f * s, 10f * s)
+        path.lineTo(2f * s, 1.6f * s)
+        path.close()
+        c.save()
+        c.translate(x + 10 * d, y + 14 * d)
+        c.rotate(angle)
+        c.drawPath(path, planeShadow)
+        c.restore()
+        c.save()
+        c.translate(x, y)
+        c.rotate(angle)
+        c.drawPath(path, planePaint)
+        c.restore()
+    }
+
+    private fun drawAim(c: Canvas) {
+        val dx = aimEX - aimSX; val dy = aimEY - aimSY
+        val len = kotlin.math.hypot(dx, dy)
+        val ready = world.airstrikeReady
+        val longEnough = len / d >= World.MIN_STRIKE_LENGTH
+        val col = when {
+            !ready -> Color.parseColor("#8A93A3")
+            !longEnough -> Color.parseColor("#BFA070")
+            else -> Color.parseColor("#FFB13B")
+        }
+        // Bomb corridor
+        aimBand.color = col
+        aimBand.alpha = 40
+        aimBand.strokeWidth = World.BOMB_RADIUS * 2 * d
+        c.drawLine(aimSX, aimSY, aimEX, aimEY, aimBand)
+        // Dashed flight line + arrow head
+        aimLine.color = col
+        c.drawLine(aimSX, aimSY, aimEX, aimEY, aimLine)
+        if (len > 1f) {
+            val ux = dx / len; val uy = dy / len
+            val hs = 14 * d
+            path.reset()
+            path.moveTo(aimEX + ux * hs * 0.6f, aimEY + uy * hs * 0.6f)
+            path.lineTo(aimEX - ux * hs - uy * hs * 0.6f, aimEY - uy * hs + ux * hs * 0.6f)
+            path.lineTo(aimEX - ux * hs + uy * hs * 0.6f, aimEY - uy * hs - ux * hs * 0.6f)
+            path.close()
+            aimHead.color = col
+            c.drawPath(path, aimHead)
+        }
+        aimText.color = col
+        val label = when {
+            !ready -> "airstrike in ${world.airstrikeCooldown.toInt() + 1}s"
+            !longEnough -> "drag farther"
+            else -> "let go to call the airstrike"
+        }
+        c.drawText(label, (aimSX + aimEX) / 2f, (aimSY + aimEY) / 2f - 22 * d, aimText)
     }
 
     private fun drawPaused(c: Canvas) {
