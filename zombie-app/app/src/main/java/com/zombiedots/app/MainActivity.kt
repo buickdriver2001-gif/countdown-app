@@ -351,12 +351,11 @@ class MainActivity : Activity(), GameView.Listener {
         if (!w.cureReady) game.cureMode = false
         cureBtn.text = when {
             !w.cureReady -> "💊 CURE\n${w.cureCooldown.toInt() + 1}s"
-            game.cureMode -> "💊 CURE\ntap a dot"
-            sick > 0 -> "💊 CURE\n$sick infected"
-            else -> "💊 CURE\nReady"
+            sick > 0 -> "💊 CURE ×${w.cureCharges}\n$sick infected"
+            else -> "💊 CURE ×${w.cureCharges}\nReady"
         }
         cureBtn.alpha = if (w.cureReady) 1f else 0.45f
-        cureBtn.contentDescription = if (w.cureReady) "Cure ready. $sick survivors are infected. Tap to cure everyone."
+        cureBtn.contentDescription = if (w.cureReady) "Cure. ${w.cureCharges} charges left. $sick survivors are infected. Each tap heals the whole team by a third."
             else "Cure comes back in ${w.cureCooldown.toInt() + 1} seconds."
         planeBtn.alpha = if (w.airstrikeReady) 1f else 0.4f
         planeBtn.contentDescription = planeBtn.text.toString().replace("\n", ". ")
@@ -401,15 +400,12 @@ class MainActivity : Activity(), GameView.Listener {
     private fun onCurePressed() {
         val w = game.world
         if (w.phase != Phase.RUNNING) { onAnnounce("Tap the map to put your team down first."); return }
-        if (!w.cureReady) { onAnnounce("The cure comes back in ${w.cureCooldown.toInt() + 1} seconds."); return }
-        if (game.cureMode) {
-            // Second tap: cure whoever is closest to turning
-            w.mostInfected()?.let { onCureTarget(it) } ?: run { game.cureMode = false }
-        } else {
-            if (w.mostInfected() == null) { onAnnounce("Nobody is infected right now."); return }
-            game.planeAimRequested = false
-            game.cureMode = true
-            onAnnounce("Tap a survivor to cure them, or tap cure again to cure the most infected.")
+        if (!w.cureReady) { onAnnounce("Cures refill in ${w.cureCooldown.toInt() + 1} seconds."); return }
+        if (w.mostInfected() == null) { onAnnounce("Nobody is infected right now. Save the cure for later!"); return }
+        if (w.cureAll()) {
+            game.vibe(Haptics.Kind.CURE)
+            onAnnounce(if (w.cureCharges > 0) "Team healed by a third. ${w.cureCharges} cure charges left."
+                else "Team healed by a third. That was the last charge. Cures refill in 2 minutes.")
         }
         updateHud()
     }
@@ -543,7 +539,7 @@ class MainActivity : Activity(), GameView.Listener {
             card("☢  NUKE: tap it to open the safety case, then press and HOLD the red button. 3… 2… 1… every zombie disappears! You only get ONE."),
             card("✈  PLANE: tap it, then drag your finger across the map. A plane drops bombs along your line. Comes back after 20 seconds."),
             card("❤  HEALTH: makes your whole team tougher and faster. Use it every time it's ready. No limit!"),
-            card("💊  CURE: the game slows down. Tap a survivor to heal them, or tap CURE again to heal the one who is most infected.")
+            card("💊  CURE: you have 3 charges. Each tap heals your WHOLE team by a third (3 taps = fully cured). When all 3 are used up, they come back after 2 minutes.")
         )
         tutorialPage("Rounds and bosses",
             card("🔁  Kill every zombie to finish a round. Each round brings more zombies, and they get tougher."),

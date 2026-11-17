@@ -128,7 +128,9 @@ class World(private val rnd: Random = Random.Default) {
         const val STRAY_TIME = 18f
         const val SHOTGUN_RANGE = 85f
         const val SHOTGUN_PELLETS = 7
-        const val CURE_COOLDOWN = 15f
+        const val CURE_COOLDOWN = 120f
+        const val CURE_CHARGES = 3
+        const val CURE_AMOUNT = 1f / 3f
         const val MAX_HEALTH_LEVEL = Int.MAX_VALUE
         const val ROUND_MAX = 90f
         const val AIRSTRIKE_COOLDOWN = 20f
@@ -251,7 +253,7 @@ class World(private val rnd: Random = Random.Default) {
         nukeReady = true; turned = 0
         waveSize = 0; waveGrowth = 0; speedBase = 25f
         spawnQueue = 0; intermission = 0f; waveAge = 0f; spawnIndex = 0
-        healthLevel = 0; healthCooldown = 0f; cureCooldown = 0f; behemothsPending = 0
+        healthLevel = 0; healthCooldown = 0f; cureCooldown = 0f; cureCharges = CURE_CHARGES; behemothsPending = 0
         nextBossRound = 6; bossesSpawned = 0; bossesKilled = 0
         tactic = Tactic.SQUAD_UP; tacticTimer = 0f
     }
@@ -432,7 +434,7 @@ class World(private val rnd: Random = Random.Default) {
     var healthCooldown = 0f
     var cureCooldown = 0f
     val healthReady get() = healthCooldown <= 0f
-    val cureReady get() = cureCooldown <= 0f
+    val cureReady get() = cureCharges > 0
     /** Each health level makes bites infect less (diminishing, never fully immune). */
     val biteResist get() = 0.3f + 0.7f * Math.pow(0.9, healthLevel.toDouble()).toFloat()
     /** And makes hunters hit harder, up to +50%. */
@@ -451,10 +453,28 @@ class World(private val rnd: Random = Random.Default) {
     /** The survivor closest to turning, if anyone is infected. */
     fun mostInfected(): Human? = humans.filter { !it.dead && it.infection > 0.01f }.maxByOrNull { it.infection }
 
+    /** Cure charges left (3 max). When all are used, they refill together after a long wait. */
+    var cureCharges = CURE_CHARGES
+
+    /** Uses one charge: removes a third of a full infection from everyone on the team. */
+    fun cureAll(): Boolean {
+        if (phase != Phase.RUNNING || !cureReady) return false
+        cureCharges--
+        if (cureCharges <= 0) cureCooldown = CURE_COOLDOWN
+        for (h in humans) {
+            if (h.dead) continue
+            if (h.infection > 0.01f) texts.add(FloatText(h.x, h.y - 12f, if (h.infection <= CURE_AMOUNT) "cured!" else "-33%", 1.4f))
+            h.infection = max(0f, h.infection - CURE_AMOUNT)
+            h.hurtFlash = 0f
+        }
+        return true
+    }
+
     /** Cures one survivor completely. */
     fun cureOne(h: Human): Boolean {
         if (phase != Phase.RUNNING || !cureReady || h.dead) return false
-        cureCooldown = CURE_COOLDOWN
+        cureCharges--
+        if (cureCharges <= 0) cureCooldown = CURE_COOLDOWN
         h.infection = 0f
         h.hurtFlash = 0f
         texts.add(FloatText(h.x, h.y - 12f, "cured!", 1.4f))
@@ -543,7 +563,10 @@ class World(private val rnd: Random = Random.Default) {
 
         updateRounds(dt)
         if (healthCooldown > 0f) healthCooldown -= dt
-        if (cureCooldown > 0f) cureCooldown -= dt
+        if (cureCooldown > 0f) {
+            cureCooldown -= dt
+            if (cureCooldown <= 0f) cureCharges = CURE_CHARGES // all three come back together
+        }
 
         strayTimer += dt
         if (strayTimer >= STRAY_TIME) { strayTimer = 0f; maybeSpawnStray() }
