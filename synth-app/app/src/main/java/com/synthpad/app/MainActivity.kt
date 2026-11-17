@@ -52,18 +52,18 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // A crash report from before the latest update is out of date: drop it
+        try {
+            val updated = packageManager.getPackageInfo(packageName, 0).lastUpdateTime
+            if (App.crashFile(this).lastModified() < updated) App.crashFile(this).delete()
+        } catch (_: Exception) {
+        }
         if (App.crashFile(this).exists()) {
             startActivity(Intent(this, CrashActivity::class.java))
             finish()
             return
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        if (Build.VERSION.SDK_INT >= 30) {
-            window.insetsController?.hide(WindowInsets.Type.statusBars())
-        } else {
-            @Suppress("DEPRECATION")
-            window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-        }
 
         engine = SynthEngine(this)
         engine.onError = { error ->
@@ -74,6 +74,16 @@ class MainActivity : Activity() {
             }
         }
         setContentView(buildUi())
+        // Hide the status bar only once the screen exists (doing it earlier crashes on Android 16)
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                window.decorView.post { window.insetsController?.hide(WindowInsets.Type.statusBars()) }
+            } else {
+                @Suppress("DEPRECATION")
+                window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            }
+        } catch (_: Exception) {
+        }
         applyPreset(0)
         ready = true
     }
