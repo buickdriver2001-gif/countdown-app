@@ -11,8 +11,10 @@ android {
         applicationId = "com.gamehub.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // Each GitHub build gets a higher number, so updates install cleanly and show their version
+        val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "1.$build"
     }
 
     signingConfigs {

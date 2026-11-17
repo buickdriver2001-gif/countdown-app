@@ -269,7 +269,8 @@ class MainActivity : Activity() {
     /** The gear: NEXUS settings. */
     private fun homeSettings() {
         val isHome = HomeMode.isDefault(this)
-        NexusUi.panel(this, "NEXUS settings", null, listOf(
+        val version = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Exception) { "" }
+        NexusUi.panel(this, "NEXUS settings", "Version $version", listOf(
             NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
             NexusUi.Option("Choose my normal home screen") { chooseNormalHome() },
             NexusUi.Option("Open apps (square button)") { openAppsSettings() },

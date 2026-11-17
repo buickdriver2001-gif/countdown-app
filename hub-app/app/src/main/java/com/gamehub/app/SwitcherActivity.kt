@@ -103,6 +103,27 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
     private val helperRect = RectF()
     private val restrictRect = RectF()
 
+    private var bg: Bitmap? = null
+
+    private fun backdrop(): Bitmap {
+        val cur = bg
+        if (cur != null && cur.width == width && cur.height == height) return cur
+        cur?.recycle()
+        val w = width.toFloat(); val h = height.toFloat()
+        val b = Bitmap.createBitmap(width.coerceAtLeast(1), height.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val c = Canvas(b)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(Color.rgb(3, 6, 18), Color.rgb(8, 16, 42), Color.rgb(2, 4, 12)), null, Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p); p.shader = null
+        p.strokeWidth = 1f; p.color = Color.argb(14, 140, 190, 255)
+        var gx = 0f; while (gx < w) { c.drawLine(gx, 0f, gx, h, p); gx += 40 * d }
+        var gy = 0f; while (gy < h) { c.drawLine(0f, gy, w, gy, p); gy += 40 * d }
+        p.shader = RadialGradient(w / 2, h * 0.46f, w * 0.8f, intArrayOf(Color.argb(70, 50, 100, 230), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p)
+        bg = b
+        return b
+    }
+
     fun load() {
         val pm = a.packageManager
         val list = ArrayList<Card>()
@@ -131,14 +152,8 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         lastNs = now; t += dt; enter = min(1f, enter + dt * 3.5f)
         val w = width.toFloat(); val h = height.toFloat()
 
-        // Backdrop: deep blue with a faint grid and a glow behind the cards
-        fill.shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(Color.rgb(3, 6, 18), Color.rgb(8, 16, 42), Color.rgb(2, 4, 12)), null, Shader.TileMode.CLAMP)
-        c.drawRect(0f, 0f, w, h, fill); fill.shader = null
-        line.strokeWidth = 1f; line.color = Color.argb(14, 140, 190, 255)
-        var gx = 0f; while (gx < w) { c.drawLine(gx, 0f, gx, h, line); gx += 40 * d }
-        var gy = 0f; while (gy < h) { c.drawLine(0f, gy, w, gy, line); gy += 40 * d }
-        fill.shader = RadialGradient(w / 2, h * 0.46f, w * 0.8f, intArrayOf(Color.argb(70, 50, 100, 230), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-        c.drawRect(0f, 0f, w, h, fill); fill.shader = null
+        // Backdrop: deep blue with a faint grid and a glow behind the cards (drawn once, reused)
+        c.drawBitmap(backdrop(), 0f, 0f, null)
 
         // Title
         text.textAlign = Paint.Align.CENTER
@@ -302,7 +317,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
                         if (card != null) {
                             if (card.lift > height * 0.18f || vy < -1500f) {
                                 // Swiped away: close it
-                                card.gone = true; sfx.tick(); a.closeApp(card.pkg)
+                                card.gone = true; sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY); a.closeApp(card.pkg)
                                 pos = pos.coerceAtMost((live().size - 1).coerceAtLeast(0).toFloat())
                             } else card.lift = 0f
                         }
@@ -334,7 +349,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         val idx = (pos + off).roundToInt()
         val centre = pos.roundToInt()
         if (abs(off) < 0.45f && y > height * 0.15f && y < height * 0.8f) {
-            l.getOrNull(centre)?.let { sfx.confirm(); a.openApp(it.pkg) }
+            l.getOrNull(centre)?.let { sfx.confirm(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY); a.openApp(it.pkg) }
         } else if (idx in l.indices && idx != centre && y > height * 0.15f && y < height * 0.8f) {
             sfx.tick(); vel = 0f; pos = pos + (idx - pos) * 0.001f; animateTo(idx)
         }

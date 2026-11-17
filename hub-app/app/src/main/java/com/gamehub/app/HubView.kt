@@ -114,14 +114,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val w = width.toFloat(); val h = height.toFloat()
         val intro = min(1f, t / 2.5f)
 
-        // Deep blue-black void
-        fill.shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(Color.rgb(2, 3, 10), Color.rgb(6, 12, 34), Color.rgb(1, 2, 6)), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
-        c.drawRect(0f, 0f, w, h, fill)
-        fill.shader = null
-        // A soft glow on the horizon
-        fill.shader = RadialGradient(w / 2, h * 0.45f, w * 0.9f, intArrayOf(Color.argb((70 * intro).toInt(), 40, 90, 220), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-        c.drawRect(0f, 0f, w, h, fill)
-        fill.shader = null
+        // Deep blue-black void with a soft horizon glow (drawn once, then reused)
+        c.drawBitmap(backdrop(), 0f, 0f, null)
 
         drawGrid(c, intro)
         drawOrbit(c, intro)
@@ -245,7 +239,52 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         while (e < edges.size) { c.drawLine(bx[edges[e]], by[edges[e]], bx[edges[e + 1]], by[edges[e + 1]], line); e += 2 }
     }
 
+    private var bgBmp: android.graphics.Bitmap? = null
+
+    private fun backdrop(): android.graphics.Bitmap {
+        val cur = bgBmp
+        if (cur != null && cur.width == width && cur.height == height) return cur
+        cur?.recycle()
+        val w = width.toFloat(); val h = height.toFloat()
+        val b = android.graphics.Bitmap.createBitmap(width.coerceAtLeast(1), height.coerceAtLeast(1), android.graphics.Bitmap.Config.ARGB_8888)
+        val c = Canvas(b)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(Color.rgb(2, 3, 10), Color.rgb(6, 12, 34), Color.rgb(1, 2, 6)), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p)
+        p.shader = RadialGradient(w / 2, h * 0.45f, w * 0.9f, intArrayOf(Color.argb(70, 40, 90, 220), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p)
+        bgBmp = b
+        return b
+    }
+
     private val order = ArrayList<Int>()
+
+    // Batched drawing buffers (reused every frame, so nothing is created while animating)
+    private var vtx = FloatArray(6 * 2 * 5 * 12)
+    private var vcol = IntArray(6 * 5 * 12 * 2)
+    private var vn = 0
+    private val lineBuf = Array(3) { FloatArray(4 * 12 * 12) }
+    private val lineN = IntArray(3)
+    private val useVertices = android.os.Build.VERSION.SDK_INT >= 29
+
+    /** A soft round glow, drawn once and reused (scaled) for every glow on screen. */
+    private val glowBmp: android.graphics.Bitmap by lazy {
+        val s = 128
+        val b = android.graphics.Bitmap.createBitmap(s, s, android.graphics.Bitmap.Config.ARGB_8888)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.shader = RadialGradient(s / 2f, s / 2f, s / 2f, intArrayOf(Color.argb(255, 120, 170, 255), Color.argb(90, 80, 140, 255), Color.TRANSPARENT), floatArrayOf(0f, 0.35f, 1f), Shader.TileMode.CLAMP)
+        Canvas(b).drawCircle(s / 2f, s / 2f, s / 2f, p)
+        b
+    }
+    private val glowPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val glowDst = RectF()
+
+    private fun glow(c: Canvas, x: Float, y: Float, r: Float, alpha: Int) {
+        if (alpha <= 0 || r < 1f) return
+        glowPaint.alpha = alpha.coerceIn(0, 255)
+        glowDst.set(x - r, y - r, x + r, y + r)
+        c.drawBitmap(glowBmp, null, glowDst, glowPaint)
+    }
 
     private fun drawTowers(c: Canvas, intro: Float) {
         // Draw far towers first
@@ -254,36 +293,56 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         order.sortByDescending { val tw = towers[it]; tw.x * sy + tw.z * cy }
         for (i in order) {
             val tw = towers[i]
+            // Glow pooled at the tower's base
+            if (project(tw.x, -3.3f, tw.z)) glow(c, px, py, tw.size * width * 0.95f / pz * 1.6f, (90 * fogK(pz)).toInt())
             val bob = sin(t * 0.5f + tw.phase) * 0.15f
             val built = (intro * 1.4f * tw.cubes).toInt().coerceAtMost(tw.cubes)
+            vn = 0; lineN.fill(0)
+            var fogT = 1f
             for (k in 0 until built) {
                 val y0 = -3.2f + k * tw.size * 1.08f + bob
-                drawCube(c, tw.x, y0, tw.z, tw.size, k, tw)
+                fogT = addCube(tw.x, y0, tw.z, tw.size, k, tw)
             }
-            // Glow pooled at the tower's base
-            if (project(tw.x, -3.3f, tw.z)) {
-                val r = tw.size * width * 0.95f / pz * 1.6f
-                val a = (60 * fogK(pz)).toInt()
-                fill.shader = RadialGradient(px, py, max(1f, r), intArrayOf(Color.argb(a, 70, 130, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-                c.drawCircle(px, py, max(1f, r), fill)
-                fill.shader = null
+            flushTower(c, fogT)
+        }
+    }
+
+    private fun flushTower(c: Canvas, fog: Float) {
+        if (vn > 0) {
+            if (useVertices) {
+                c.drawVertices(Canvas.VertexMode.TRIANGLES, vn * 2, vtx, 0, null, 0, vcol, 0, null, 0, 0, fill.apply { color = Color.WHITE; shader = null })
+            } else {
+                // Older Android: draw the triangles as small paths
+                var v = 0
+                while (v < vn) {
+                    path.reset(); path.moveTo(vtx[v * 2], vtx[v * 2 + 1]); path.lineTo(vtx[v * 2 + 2], vtx[v * 2 + 3]); path.lineTo(vtx[v * 2 + 4], vtx[v * 2 + 5]); path.close()
+                    fill.color = vcol[v]; c.drawPath(path, fill); v += 3
+                }
             }
+        }
+        line.strokeWidth = max(0.6f, 1.2f * d * fog)
+        for (b in 0 until 3) {
+            if (lineN[b] == 0) continue
+            line.color = Color.argb(((70 + 60 * b) * fog).toInt(), 150 + 30 * b, 195 + 20 * b, 255)
+            c.drawLines(lineBuf[b], 0, lineN[b], line)
         }
     }
 
     private fun fogK(z: Float) = (1f - (z - 4f) / 16f).coerceIn(0.12f, 1f)
 
-    private val cx = FloatArray(8); private val cyA = FloatArray(8); private val vis = BooleanArray(8)
+    private val cx = FloatArray(8); private val cyA = FloatArray(8)
+    private val faces = arrayOf(intArrayOf(4, 5, 7, 6), intArrayOf(0, 1, 5, 4), intArrayOf(2, 3, 7, 6), intArrayOf(0, 2, 6, 4), intArrayOf(1, 3, 7, 5))
+    private val edges = intArrayOf(0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7)
 
-    private fun drawCube(c: Canvas, x: Float, y: Float, z: Float, s: Float, k: Int, tw: Tower) {
+    /** Adds one glass cube's faces and edges to the batch. Returns its fog amount. */
+    private fun addCube(x: Float, y: Float, z: Float, s: Float, k: Int, tw: Tower): Float {
         val h = s / 2
         var i = 0
         for (dy in 0..1) for (dz in 0..1) for (dx in 0..1) {
-            vis[i] = project(x + (dx * 2 - 1) * h, y + dy * s, z + (dz * 2 - 1) * h)
+            if (!project(x + (dx * 2 - 1) * h, y + dy * s, z + (dz * 2 - 1) * h)) return 1f
             cx[i] = px; cyA[i] = py
             i++
         }
-        if (!vis.all { it }) return
         project(x, y + h, z)
         val fog = fogK(pz)
         // Some cubes shimmer brighter now and then
@@ -294,38 +353,50 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val sweep = if (pass <= 1f) kotlin.math.exp(-((px - bandX) / (70 * d)).let { it * it }) else 0f
         val twinkle = min(1f, twinkle0 + sweep * 1.2f)
         val base = 26 + (40 * twinkle).toInt()
-        // Faces: bottom(0,1,3,2) top(4,5,7,6) front(0,1,5,4) back(2,3,7,6) left(0,2,6,4) right(1,3,7,5)
-        val faces = arrayOf(intArrayOf(4, 5, 7, 6), intArrayOf(0, 1, 5, 4), intArrayOf(2, 3, 7, 6), intArrayOf(0, 2, 6, 4), intArrayOf(1, 3, 7, 5))
+        if (vtx.size < (vn + 30) * 2) { vtx = vtx.copyOf(vtx.size * 2); vcol = vcol.copyOf(vcol.size * 2) }
         for ((fi, f) in faces.withIndex()) {
-            path.reset()
-            path.moveTo(cx[f[0]], cyA[f[0]])
-            for (j in 1..3) path.lineTo(cx[f[j]], cyA[f[j]])
-            path.close()
             val top = fi == 0
-            fill.color = Color.argb(((if (top) base + 20 else base) * fog).toInt(), if (top) 120 else 60, if (top) 170 else 115, 255)
-            c.drawPath(path, fill)
+            val col = Color.argb(((if (top) base + 20 else base) * fog).toInt(), if (top) 120 else 60, if (top) 170 else 115, 255)
+            for (j in intArrayOf(0, 1, 2, 0, 2, 3)) {
+                vtx[vn * 2] = cx[f[j]]; vtx[vn * 2 + 1] = cyA[f[j]]; vcol[vn] = col; vn++
+            }
         }
-        // Bright glassy edges
-        line.strokeWidth = max(0.6f, 1.2f * d * fog)
-        line.color = Color.argb(((70 + 120 * twinkle) * fog).toInt(), 150, 195, 255)
-        val edges = intArrayOf(0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7)
+        // Edges go into one of three brightness groups
+        val b = (twinkle * 2.99f).toInt().coerceIn(0, 2)
+        var buf = lineBuf[b]
+        if (buf.size < lineN[b] + 48) { buf = buf.copyOf(buf.size * 2); lineBuf[b] = buf }
         var e = 0
-        while (e < edges.size) { c.drawLine(cx[edges[e]], cyA[edges[e]], cx[edges[e + 1]], cyA[edges[e + 1]], line); e += 2 }
+        while (e < edges.size) {
+            buf[lineN[b]++] = cx[edges[e]]; buf[lineN[b]++] = cyA[edges[e]]
+            buf[lineN[b]++] = cx[edges[e + 1]]; buf[lineN[b]++] = cyA[edges[e + 1]]
+            e += 2
+        }
+        return fog
     }
 
     private val PASS_EVERY = 6.5f
     private val PASS_LEN = 2.2f
 
     /** A faint grid far below, with a scan ring pulsing out from the middle. */
+    private val gridBuf = Array(4) { FloatArray(1024) }
+    private val gridN = IntArray(4)
+
     private fun drawGrid(c: Canvas, intro: Float) {
         val gy = -3.6f
         val span = 22f
-        line.strokeWidth = 1f * d
+        gridN.fill(0)
         var gx = -span
         while (gx <= span) {
-            gridLine(c, gx, gy, -span, gx, gy, span, intro)
-            gridLine(c, -span, gy, gx, span, gy, gx, intro)
+            gridLine(gx, gy, -span, gx, gy, span)
+            gridLine(-span, gy, gx, span, gy, gx)
             gx += 2.75f
+        }
+        // Nearer lines are brighter: four brightness groups, one draw call each
+        line.strokeWidth = 1f * d
+        for (b in 0 until 4) {
+            if (gridN[b] == 0) continue
+            line.color = Color.argb(((8 + b * 8) * intro).toInt(), 110, 160, 255)
+            c.drawLines(gridBuf[b], 0, gridN[b], line)
         }
         // Scan ring
         val k = (t % 5f) / 5f
@@ -341,7 +412,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         }
     }
 
-    private fun gridLine(c: Canvas, x0: Float, y: Float, z0: Float, x1: Float, y1: Float, z1: Float, intro: Float) {
+    private fun gridLine(x0: Float, y: Float, z0: Float, x1: Float, y1: Float, z1: Float) {
         // Short pieces so the far end can fade and pieces behind the camera are skipped
         val n = 6
         var prevOk = false; var lx = 0f; var ly = 0f; var lz = 0f
@@ -349,8 +420,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             val u = i.toFloat() / n
             val ok = project(x0 + (x1 - x0) * u, y + (y1 - y) * u, z0 + (z1 - z0) * u)
             if (ok && prevOk) {
-                line.color = Color.argb((26 * fogK((pz + lz) / 2) * intro).toInt(), 110, 160, 255)
-                c.drawLine(lx, ly, px, py, line)
+                val b = (fogK((pz + lz) / 2) * 3.99f).toInt().coerceIn(0, 3)
+                var buf = gridBuf[b]
+                if (buf.size < gridN[b] + 4) { buf = buf.copyOf(buf.size * 2); gridBuf[b] = buf }
+                buf[gridN[b]++] = lx; buf[gridN[b]++] = ly; buf[gridN[b]++] = px; buf[gridN[b]++] = py
             }
             prevOk = ok; lx = px; ly = py; lz = pz
         }
@@ -372,8 +445,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val ang = t * 0.35f
         if (project(sin(ang) * r, 1.2f + sin(ang + 1f) * r * tilt, cos(ang) * r)) {
             val rad = max(2f, 30 * d / pz)
-            fill.shader = RadialGradient(px, py, rad * 3f, intArrayOf(Color.argb((200 * intro).toInt(), 210, 230, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-            c.drawCircle(px, py, rad * 3f, fill); fill.shader = null
+            glow(c, px, py, rad * 3f, (230 * intro).toInt())
         }
     }
 
@@ -607,7 +679,13 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         c.drawLine(x, y, x + sx * l, y, line); c.drawLine(x, y, x, y + sy * l, line)
     }
 
-    private fun drawRow(c: Canvas, g: GameEntry, r: RectF, sel: Boolean, a: Float) {
+    private var selIndex = -2
+    private var selSince = 0f
+
+    private fun drawRow(c: Canvas, g: GameEntry, r: RectF, sel: Boolean, a0: Float) {
+        // Fade the highlight in rather than snapping it on
+        if (selected != selIndex) { selIndex = selected; selSince = t }
+        val a = if (sel) a0 * (0.55f + 0.45f * min(1f, (t - selSince) / 0.18f)) else a0
         val pulse = 0.5f + 0.5f * sin(t * 3f)
         // Dark glass panel
         fill.color = Color.argb(((if (sel) 80 else 30) * a).toInt(), 40, 80, 200)
@@ -801,9 +879,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 } else if (!longFired && launchFlash <= 0f && t > 1.2f) {
                     val r = rowAt(e.x, e.y)
                     if (r >= 0 && r == downRow) {
-                        if (r != selected) { selected = r; sfx.tick() }
+                        if (r != selected) { selected = r; sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK) }
                         else {
                             sfx.confirm()
+                            performHapticFeedback(if (android.os.Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.CONFIRM else android.view.HapticFeedbackConstants.VIRTUAL_KEY)
                             if (r == games.size) onAdd()
                             else { pending = games[r]; launchFlash = LAUNCH_LEN }
                         }
