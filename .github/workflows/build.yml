@@ -5,6 +5,7 @@ on:
       - 'notes-app/**'
       - 'synth-app/**'
       - 'zombie-app/**'
+      - 'media-app/**'
       - '.github/workflows/**'
       - '*.md'
   workflow_dispatch:
