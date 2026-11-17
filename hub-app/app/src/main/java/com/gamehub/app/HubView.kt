@@ -34,7 +34,8 @@ class GameEntry(val name: String, val pkg: String, val tagline: String, val acce
  */
 @SuppressLint("ViewConstructor")
 class HubView(context: Context, var games: List<GameEntry>, private val onPick: (GameEntry) -> Unit,
-              private val onAdd: () -> Unit, private val onRemove: (GameEntry) -> Unit, private val sfx: Sfx) : View(context) {
+              private val onAdd: () -> Unit, private val onRemove: (GameEntry) -> Unit, private val sfx: Sfx,
+              private val onSettings: () -> Unit) : View(context) {
 
     private val d = resources.displayMetrics.density
     private val rnd = Random(3)
@@ -438,6 +439,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.color = Color.argb((170 * a).toInt(), 190, 210, 245)
         text.textAlign = Paint.Align.LEFT; c.drawText(dateFmt.format(Date()).uppercase(), 20 * d, 32 * d, text)
         text.textAlign = Paint.Align.RIGHT; c.drawText(clock.format(Date()), w - 20 * d, 32 * d, text)
+        // Settings gear under the clock
+        gearRect.set(w - 50 * d, 40 * d, w - 14 * d, 76 * d)
+        drawGear(c, gearRect.centerX(), gearRect.centerY(), 8 * d, Color.argb((150 * a).toInt(), 180, 205, 245))
         line.strokeWidth = 1f * d; line.color = Color.argb((70 * a).toInt(), 140, 190, 255)
         bracket(c, 12 * d, 12 * d, 1, 1); bracket(c, w - 12 * d, 12 * d, -1, 1)
         bracket(c, 12 * d, h - 12 * d, 1, -1); bracket(c, w - 12 * d, h - 12 * d, -1, -1)
@@ -498,6 +502,18 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.color = Color.argb((110 * a).toInt(), 160, 185, 230)
         val hint = if (selected in games.indices) "TAP AGAIN TO OPEN" else "TAP TO SELECT"
         c.drawText(if (games.any { it.custom }) "$hint  ·  HOLD AN ADDED APP FOR OPTIONS" else hint, w / 2, h - 26 * d, text)
+    }
+
+    private val gearRect = RectF()
+
+    private fun drawGear(c: Canvas, cx: Float, cy: Float, r: Float, color: Int) {
+        line.color = color; line.strokeWidth = 1.6f * d
+        c.drawCircle(cx, cy, r * 0.62f, line)
+        c.drawCircle(cx, cy, r * 0.25f, line)
+        for (k in 0 until 8) {
+            val a = k / 8f * 6.283f
+            c.drawLine(cx + cos(a) * r * 0.62f, cy + sin(a) * r * 0.62f, cx + cos(a) * r, cy + sin(a) * r, line)
+        }
     }
 
     /** Thin L-shaped corner mark. */
@@ -659,6 +675,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 if (dragging) {
                     tracker?.computeCurrentVelocity(1000)
                     scrollVel = -(tracker?.yVelocity ?: 0f)
+                } else if (!longFired && launchFlash <= 0f && t > 1.2f && gearRect.contains(e.x, e.y)) {
+                    sfx.tick(); onSettings()
                 } else if (!longFired && launchFlash <= 0f && t > 1.2f) {
                     val r = rowAt(e.x, e.y)
                     if (r >= 0 && r == downRow) {

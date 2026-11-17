@@ -135,14 +135,92 @@ class MainActivity : Activity() {
             finish()
             return
         }
-        hub = HubView(this, builtIn, { open(it) }, { pickGame() }, { appOptions(it) }, sfx)
+        hub = HubView(this, builtIn, { open(it) }, { pickGame() }, { appOptions(it) }, sfx, { homeSettings() })
         setContentView(hub)
         // Full screen: no status bar, no navigation buttons (swipe from an edge to peek at them)
         if (android.os.Build.VERSION.SDK_INT >= 28) window.attributes.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         window.decorView.post { hideBars() }
         val fromApp = intent?.getBooleanExtra("fromApp", false) == true
         if (fromApp) { hub.booting = false; leftForApp = true }
-        else if (savedInstanceState == null) Thread { playChime() }.start()
+        else if (isHomeIntent(intent) && !HomeMode.showNexus && HomeMode.goNormalHome(this)) {
+            // Home pressed but NEXUS already showed since the screen came on: straight to the normal home screen
+            hub.booting = false
+        } else {
+            if (isHomeIntent(intent)) HomeMode.showNexus = false
+            if (savedInstanceState == null) Thread { playChime() }.start()
+            // Offer once to make NEXUS the phone's Home app
+            if (!HomeMode.isDefault(this) && !prefs.getBoolean("offeredHome", false)) {
+                prefs.edit().putBoolean("offeredHome", true).apply()
+                hub.postDelayed({ if (!isFinishing) offerHome() }, 6000)
+            }
+        }
+    }
+
+    private fun isHomeIntent(i: Intent?) = i?.hasCategory(Intent.CATEGORY_HOME) == true
+
+    private var pausedAt = 0L
+
+    override fun onPause() {
+        super.onPause()
+        pausedAt = android.os.SystemClock.uptimeMillis()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        // As the Home app, Back leaves NEXUS for the normal home screen
+        if (HomeMode.isDefault(this) && HomeMode.goNormalHome(this)) return
+        @Suppress("DEPRECATION") super.onBackPressed()
+    }
+
+    private fun dialog() = android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+
+    private fun offerHome() {
+        dialog().setTitle("Make NEXUS your home screen?")
+            .setMessage("After you turn your screen on, pressing Home shows NEXUS first. Press Back or Home to go to your normal home screen; it stays there until the screen goes off and on again.\n\nOn the next screen, choose NEXUS as your Home app.")
+            .setPositiveButton("Set it up") { _, _ -> openHomeSettings() }
+            .setNegativeButton("Not now", null)
+            .show()
+    }
+
+    private fun openHomeSettings() {
+        try { startActivity(Intent(android.provider.Settings.ACTION_HOME_SETTINGS)) }
+        catch (_: Exception) {
+            try { startActivity(Intent(android.provider.Settings.ACTION_SETTINGS)) } catch (_: Exception) {}
+        }
+    }
+
+    private fun chooseNormalHome() {
+        val homes = HomeMode.otherHomes(this)
+        if (homes.isEmpty()) { Toast.makeText(this, "No other home screen found", Toast.LENGTH_SHORT).show(); return }
+        val current = HomeMode.normalHome(this)
+        dialog().setTitle("Your normal home screen")
+            .setSingleChoiceItems(homes.map { it.first }.toTypedArray(), homes.indexOfFirst { it.second == current }) { d, which ->
+                HomeMode.setNormalHome(this, homes[which].second); d.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** The gear: home screen options. */
+    private fun homeSettings() {
+        val isHome = HomeMode.isDefault(this)
+        val items = arrayOf(
+            if (isHome) "NEXUS is your home screen ✓ (change)" else "Make NEXUS my home screen",
+            "Choose my normal home screen",
+            "How it works"
+        )
+        dialog().setTitle("NEXUS settings")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> openHomeSettings()
+                    1 -> chooseNormalHome()
+                    else -> dialog().setTitle("How it works")
+                        .setMessage("• Turn your screen on and press Home: NEXUS appears.\n• Press Back or Home in NEXUS to go to your normal home screen.\n• Home keeps going to your normal home screen until the screen turns off and on again.\n• Tapping the NEXUS icon always opens NEXUS.\n\nTo stop, choose your old home screen in Settings → Apps → Default apps → Home app.")
+                        .setPositiveButton("OK", null).show()
+                }
+            }
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     private fun hideBars() {
@@ -168,6 +246,17 @@ class MainActivity : Activity() {
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
+        setIntent(intent)
+        if (isHomeIntent(intent) && intent?.getBooleanExtra("fromApp", false) != true) {
+            // Home pressed. Was NEXUS already on screen? Then this means "leave".
+            val wasOnScreen = android.os.SystemClock.uptimeMillis() - pausedAt < 700
+            when {
+                wasOnScreen -> { if (!HomeMode.goNormalHome(this)) leftForApp = true }
+                HomeMode.showNexus -> { HomeMode.showNexus = false; leftForApp = true }
+                !HomeMode.goNormalHome(this) -> leftForApp = true
+            }
+            return
+        }
         leftForApp = true // brought back from one of the apps
     }
 

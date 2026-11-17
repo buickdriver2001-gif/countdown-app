@@ -9,6 +9,7 @@ import java.io.File
 class App : Application() {
     override fun onCreate() {
         super.onCreate()
+        try { HomeMode.watchScreen(this) } catch (_: Exception) {}
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             saveCrash(this, "thread ${thread.name}", error)
