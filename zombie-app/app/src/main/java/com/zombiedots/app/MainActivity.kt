@@ -112,8 +112,7 @@ class MainActivity : Activity(), GameView.Listener {
         updateHud()
         if (!prefs.getBoolean("seenHelp", false)) {
             prefs.edit().putBoolean("seenHelp", true).apply()
-            returnTo = null
-            show(howPanel)
+            openTutorial(null)
         }
         handler.post(hudTick)
     }
@@ -450,7 +449,7 @@ class MainActivity : Activity(), GameView.Listener {
         speedRow = menuRow("") { cycleSpeed() }
         col.addView(speedRow)
         updateSpeedRow()
-        col.addView(menuRow("❓   How to play") { returnTo = menuPanel; show(howPanel) })
+        col.addView(menuRow("❓   How to play") { openTutorial(menuPanel) })
         col.addView(menuRow("⚙   Settings") { returnTo = menuPanel; show(settingsPanel) })
         col.addView(menuRow("✕   Close menu") { closeMenu() })
         return frame
@@ -486,37 +485,121 @@ class MainActivity : Activity(), GameView.Listener {
         return box
     }
 
+    // ------------------------------------------------------------------ tutorial (paged)
+
+    private val tutorialPages = ArrayList<View>()
+    private lateinit var pageDots: TextView
+    private lateinit var pageBack: TextView
+    private lateinit var pageNext: TextView
+    private lateinit var pageTitle: TextView
+    private var page = 0
+    private val pageTitles = ArrayList<String>()
+
+    private fun tutorialPage(title: String, vararg cards: View) {
+        pageTitles.add(title)
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        for (cd in cards) box.addView(cd)
+        tutorialPages.add(box)
+    }
+
     private fun buildHowPanel(): View {
         val (frame, col) = panel()
-        col.addView(title("How to play"))
-        col.addView(card("👆  Tap anywhere on the map to put your team down."))
-        col.addView(card("👀  Your team moves and fights all by themselves. You just watch… and help!"))
-        col.addView(card(
-            "Who is who:",
-            dot(game.playerColor, "Yellow = your survivor, the leader"),
-            dot(game.hunterColor, "Blue = hunters. They shoot zombies."),
-            dot(game.strayColor, "Gray = lost survivors. They run over and join your team!"),
-            dot(game.zombieColor, "Red = zombies. They chase your team.")
-        ))
-        col.addView(card("🟢  When a zombie bites someone, a green ring fills up around them. When the ring is full, they turn into a zombie!"))
-        col.addView(card("☢  NUKE: tap the NUKE button to open the clear safety case. Then press and HOLD the red button: 3… 2… 1… every zombie disappears! Let go early to cancel. You only get ONE, so save it for an emergency."))
-        col.addView(card(
-            "Zombie types:",
-            dot(game.zombieColor, "Red = normal zombie"),
-            dot(game.runnerColor, "Orange = fast runner"),
-            dot(game.fatColor, "Big dark red = fat zombie. Slow, but takes lots of hits."),
-            dot(Color.parseColor("#C9D1DC"), "Steel ring = armored zombie. Shoot off the armor first!"),
-            dot(Color.parseColor("#7A1018"), "HUGE circle = BEHEMOTH! Super slow, but has a giant health bar. From round 10 they wear armor.")
-        ))
-        col.addView(card("🧟  Clear every zombie to finish a round. Each round brings more zombies, and they get tougher."))
-        col.addView(card("✈  PLANE: press PLANE, then drag your finger across the map. A plane flies that way and drops bombs. It comes back after 20 seconds."))
-        col.addView(card("❤  HEALTH: makes all your survivors tougher AND faster, so bites infect them less and they can outrun more zombies. Use it again every time the timer runs out. No limit!"))
-        col.addView(card("⚠  A yellow warning sign over a survivor means they're about to turn into a zombie!"))
-        col.addView(card("💊  CURE: press it and the game goes into slow motion. Tap the survivor you want to heal, or press CURE again to heal the one who is most infected. Comes back after 15 seconds."))
-        col.addView(card("⏩  The 1x button at the top changes the game speed. ❚❚ pauses."))
-        col.addView(card("🏆  There's no last round. Keep upgrading, curing and bombing, and see how far your team can go!"))
-        col.addView(menuRow("✔   Got it!", highlight = true) { show(returnTo) })
+        pageTitle = title("")
+        col.addView(pageTitle)
+
+        tutorialPage("Welcome!",
+            card("🧟  Zombies are coming! Your little team of dots has to survive as long as possible."),
+            card("👆  To start, tap anywhere on the map to put your team down."),
+            card("👀  After that, your team moves, runs and fights all by themselves. You just watch… and help them with your buttons!")
+        )
+        tutorialPage("Who is who",
+            card(
+                "Your team:",
+                dot(game.playerColor, "Yellow = your survivor, the leader"),
+                dot(game.hunterColor, "Blue = hunters. They shoot zombies."),
+                dot(game.strayColor, "Gray = lost survivors. They run over and join your team!")
+            ),
+            card("🪖  The top bar shows how many survivors you have, the round, and how many zombies are left.")
+        )
+        tutorialPage("The zombies",
+            card(
+                "Zombie types:",
+                dot(game.zombieColor, "Red = normal zombie"),
+                dot(game.runnerColor, "Orange = fast runner"),
+                dot(game.fatColor, "Big dark red = fat zombie. Slow, but takes lots of hits."),
+                dot(Color.parseColor("#C9D1DC"), "Steel ring = armored. Shoot the armor off first!")
+            )
+        )
+        tutorialPage("Getting bitten",
+            card("🟢  When a zombie bites someone, a green ring starts filling up around them."),
+            card("⚠  A yellow warning sign means they are about to turn!"),
+            card("🧟  When the ring is full, they turn into a zombie and chase their old team.")
+        )
+        tutorialPage("Your buttons",
+            card("☢  NUKE: tap it to open the safety case, then press and HOLD the red button. 3… 2… 1… every zombie disappears! You only get ONE."),
+            card("✈  PLANE: tap it, then drag your finger across the map. A plane drops bombs along your line. Comes back after 20 seconds."),
+            card("❤  HEALTH: makes your whole team tougher and faster. Use it every time it's ready. No limit!"),
+            card("💊  CURE: the game slows down. Tap a survivor to heal them, or tap CURE again to heal the one who is most infected.")
+        )
+        tutorialPage("Rounds and bosses",
+            card("🔁  Kill every zombie to finish a round. Each round brings more zombies, and they get tougher."),
+            card(
+                "☠  The BOSS:",
+                dot(Color.parseColor("#7A1018"), "The behemoth is a GIANT, super slow zombie with a boss health bar at the bottom."),
+                dot(Color.parseColor("#7A1018"), "The first one comes in round 6. A new one comes the round after you beat it. Every second one wears armor!")
+            )
+        )
+        tutorialPage("Last tips",
+            card("⏩  The 1x button at the top changes the game speed. ❚❚ pauses the game."),
+            card("⚙  In Settings you can turn on bigger text and shapes (for colorblind players)."),
+            card("🏆  There's no last round. See how far your team can go!")
+        )
+
+        val holder = FrameLayout(this)
+        for (pg in tutorialPages) { pg.visibility = View.GONE; holder.addView(pg) }
+        col.addView(holder)
+
+        pageDots = text("", 16f, Color.parseColor("#C8D6FF")).apply {
+            gravity = Gravity.CENTER; setPadding(0, dp(14f), 0, 0)
+        }
+        col.addView(pageDots, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        val nav = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        pageBack = menuRow("◀  Back") { showPage(page - 1) }.apply { gravity = Gravity.CENTER }
+        pageNext = menuRow("Next  ▶", highlight = true) {
+            if (page < tutorialPages.size - 1) showPage(page + 1) else show(returnTo)
+        }.apply { gravity = Gravity.CENTER }
+        nav.addView(pageBack, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6f); topMargin = dp(10f) })
+        nav.addView(pageNext, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(6f); topMargin = dp(10f) })
+        col.addView(nav)
+        col.addView(text("Skip", 15f, Color.parseColor("#9FB4E0")).apply {
+            gravity = Gravity.CENTER
+            setPadding(0, dp(16f), 0, dp(4f))
+            isClickable = true
+            contentDescription = "Skip the tutorial"
+            setOnClickListener { show(returnTo) }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        showPage(0)
         return frame
+    }
+
+    private fun showPage(i: Int) {
+        page = i.coerceIn(0, tutorialPages.size - 1)
+        tutorialPages.forEachIndexed { idx, v -> v.visibility = if (idx == page) View.VISIBLE else View.GONE }
+        pageTitle.text = pageTitles[page]
+        pageDots.text = (0 until tutorialPages.size).joinToString("  ") { if (it == page) "●" else "○" }
+        pageDots.contentDescription = "Page ${page + 1} of ${tutorialPages.size}"
+        pageBack.visibility = if (page == 0) View.INVISIBLE else View.VISIBLE
+        val last = page == tutorialPages.size - 1
+        pageNext.text = if (last) "Let's play!  ✔" else "Next  ▶"
+        pageNext.contentDescription = if (last) "Finish tutorial" else "Next page"
+        onAnnounce("${pageTitles[page]}. Page ${page + 1} of ${tutorialPages.size}.")
+    }
+
+    private fun openTutorial(from: View?) {
+        returnTo = from
+        showPage(0)
+        show(howPanel)
     }
 
     private fun toggle(label: String, key: String, initial: Boolean, onChange: (Boolean) -> Unit): View =
@@ -568,7 +651,7 @@ class MainActivity : Activity(), GameView.Listener {
         col.addView(menuRow("▶   Play again", highlight = true) { game.world.reset(); show(null) }.apply {
             (layoutParams as LinearLayout.LayoutParams).topMargin = dp(24f)
         })
-        col.addView(menuRow("❓   How to play") { returnTo = overPanel; show(howPanel) })
+        col.addView(menuRow("❓   How to play") { openTutorial(overPanel) })
         return frame
     }
 

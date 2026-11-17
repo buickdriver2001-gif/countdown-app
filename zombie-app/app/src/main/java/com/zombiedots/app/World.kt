@@ -22,7 +22,7 @@ class Zombie(var x: Float, var y: Float, val speed: Float, val type: ZType = ZTy
     var maxHp = hp
     val runner get() = type == ZType.RUNNER
     val radius get() = when (type) {
-        ZType.BEHEMOTH -> 16f
+        ZType.BEHEMOTH -> 48f
         ZType.FAT -> 6f
         ZType.ARMORED -> 3.8f
         else -> 3.2f
@@ -136,7 +136,8 @@ class World(private val rnd: Random = Random.Default) {
                 val (x, y) = edgePoint(waveEdges[spawnIndex++ % waveEdges.size])
                 if (spawnQueue <= behemothsPending) {
                     // The boss arrives at the end of the round
-                    addBehemoth(x, y, armored = wave >= 10)
+                    addBehemoth(x, y, armored = bossesSpawned % 2 == 1) // every second boss is armored
+                    bossesSpawned++
                     behemothsPending--
                 } else addZombie(x, y)
                 spawnQueue--
@@ -237,6 +238,7 @@ class World(private val rnd: Random = Random.Default) {
         waveSize = 0; waveGrowth = 0; speedBase = 25f
         spawnQueue = 0; intermission = 0f; waveAge = 0f; spawnIndex = 0
         healthLevel = 0; healthCooldown = 0f; cureCooldown = 0f; behemothsPending = 0
+        nextBossRound = 6; bossesSpawned = 0; bossesKilled = 0
         tactic = Tactic.SQUAD_UP; tacticTimer = 0f
     }
 
@@ -292,6 +294,11 @@ class World(private val rnd: Random = Random.Default) {
     // Black Ops-style rounds: zombies trickle in; the next round starts once this one is cleared
     var spawnQueue = 0
     private var behemothsPending = 0
+    private var nextBossRound = 6
+    private var bossesSpawned = 0
+
+    /** The behemoth currently on the map, if any (for the boss bar). */
+    val boss: Zombie? get() = zombies.firstOrNull { it.type == ZType.BEHEMOTH && !it.dead }
     private var spawnTimer = 0f
     private var waveEdges = listOf(0)
     private var spawnIndex = 0
@@ -306,12 +313,11 @@ class World(private val rnd: Random = Random.Default) {
         growRound()
         val edges = 1 + rnd.nextInt(if (wave > 3) 3 else 2)
         waveEdges = (0 until 4).shuffled(rnd).take(edges)
-        val alive = zombies.count { it.type == ZType.BEHEMOTH }
-        behemothsPending = (when {
-            wave >= 13 -> 2
-            wave >= 6 -> 1
-            else -> 0
-        }).coerceAtMost(max(0, 2 - alive)) // never more than 2 roaming at once
+        // Boss rule: the first behemoth comes in round 6; the next one only arrives in the
+        // round after the previous one is killed. Never more than one at a time.
+        val bossAlive = zombies.any { it.type == ZType.BEHEMOTH && !it.dead }
+        behemothsPending = if (!bossAlive && wave >= nextBossRound) 1 else 0
+        if (behemothsPending > 0) nextBossRound = Int.MAX_VALUE
         spawnQueue = waveSize + behemothsPending
         spawnTimer = 0f
         waveAge = 0f
@@ -393,12 +399,12 @@ class World(private val rnd: Random = Random.Default) {
     /** Huge, painfully slow, with an enormous amount of health (and armor from round 10). */
     private fun addBehemoth(x0: Float, y0: Float, armored: Boolean) {
         // Start a bit further out so it lumbers in from off-screen
-        val x = if (x0 < 0f) x0 - 20f else if (x0 > width) x0 + 20f else x0
-        val y = if (y0 < 0f) y0 - 20f else if (y0 > height) y0 + 20f else y0
+        val x = if (x0 < 0f) x0 - 50f else if (x0 > width) x0 + 50f else x0
+        val y = if (y0 < 0f) y0 - 50f else if (y0 > height) y0 + 50f else y0
         val base = zombieHp()
-        val z = Zombie(x, y, max(5f, zombieBaseSpeed() * 0.17f), ZType.BEHEMOTH, base * 80f)
+        val z = Zombie(x, y, max(5f, zombieBaseSpeed() * 0.17f), ZType.BEHEMOTH, base * 800f)
         z.maxHp = z.hp
-        if (armored) { z.armorMax = base * 50f; z.armor = z.armorMax }
+        if (armored) { z.armorMax = base * 450f; z.armor = z.armorMax }
         z.retarget = 0f
         z.attackCd = 1f
         zombies.add(z)
@@ -441,6 +447,8 @@ class World(private val rnd: Random = Random.Default) {
         return true
     }
 
+    var bossesKilled = 0
+
     /** Counts behemoth arrivals (for announcements). */
     var behemothArrived = 0
 
@@ -473,6 +481,12 @@ class World(private val rnd: Random = Random.Default) {
         if (z.dead) return
         z.dead = true
         kills++
+        if (z.type == ZType.BEHEMOTH) {
+            nextBossRound = wave + 1 // the next boss comes with the next round
+            bossesKilled++
+            texts.add(FloatText(z.x, z.y, "BEHEMOTH DOWN!", 2.6f))
+            repeat(12) { if (splats.size < 500) splats.add(Splat(z.x + (rnd.nextFloat() - 0.5f) * 60f, z.y + (rnd.nextFloat() - 0.5f) * 60f, 6f, 4f + rnd.nextFloat() * 6f)) }
+        }
         if (splats.size < 500) splats.add(Splat(z.x, z.y, if (quiet) 3f else 5f, 2.5f + rnd.nextFloat() * 3f))
     }
 
@@ -874,7 +888,7 @@ class World(private val rnd: Random = Random.Default) {
                         val f = huntFocus
                         if (f != null) {
                             // Close in to shooting range, but stay out of reach (behemoths: keep well back)
-                            val keep = if (f.type == ZType.BEHEMOTH) 85f else 70f
+                            val keep = if (f.type == ZType.BEHEMOTH) f.radius + 55f else 70f
                             val dx = f.x - h.x; val dy = f.y - h.y
                             val dist = sqrt(dx * dx + dy * dy).coerceAtLeast(0.01f)
                             goalX = f.x - dx / dist * keep
