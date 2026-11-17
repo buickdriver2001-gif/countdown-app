@@ -39,6 +39,14 @@ class GameView(context: Context, private val listener: Listener) : View(context)
     var vibrate = true
     /** Set when the PLANE button was pressed, so the next drag is clearly an airstrike. */
     var planeAimRequested = false
+    var best = 0f
+
+    /** True while a menu covers the map: stop redrawing so the menu stays smooth. */
+    var covered = false
+        set(value) {
+            field = value
+            if (!value) { lastFrame = 0L; postInvalidateOnAnimation() }
+        }
 
     private var flash = 0f
     private var lastPhase = Phase.SETUP
@@ -206,7 +214,8 @@ class GameView(context: Context, private val listener: Listener) : View(context)
 
         checkEvents()
         drawWorld(canvas)
-        postInvalidateOnAnimation()
+        if (world.phase == Phase.SETUP) drawSetupHint(canvas)
+        if (!covered) postInvalidateOnAnimation()
     }
 
     private fun checkEvents() {
@@ -314,6 +323,29 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         }
 
         if (flash > 0f) c.drawColor(Color.argb((flash * 140).toInt(), 255, 240, 210))
+    }
+
+    private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE; textAlign = Paint.Align.CENTER
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        setShadowLayer(6f, 0f, 1f, Color.BLACK)
+    }
+    private val hintRing = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+
+    /** Before the game starts: a pulsing "tap here" hint right on the map. */
+    private fun drawSetupHint(c: Canvas) {
+        val cx = width / 2f
+        val cy = height / 2f
+        val t = (System.currentTimeMillis() % 1600L) / 1600f
+        hintRing.strokeWidth = 2.5f * d
+        hintRing.color = Color.argb(((1f - t) * 200).toInt(), 255, 224, 102)
+        c.drawCircle(cx, cy - 40 * d, (14f + 36f * t) * d, hintRing)
+        corePaint.color = playerColor
+        c.drawCircle(cx, cy - 40 * d, World.HUMAN_R * 1.4f * d, corePaint)
+        hintPaint.textSize = 20 * d
+        c.drawText("👆 Tap anywhere on the map", cx, cy + 30 * d, hintPaint)
+        hintPaint.textSize = 16 * d
+        c.drawText("to put your team down", cx, cy + 56 * d, hintPaint)
     }
 
     private fun blend(a: Int, b: Int, t: Float): Int {

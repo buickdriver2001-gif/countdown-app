@@ -33,34 +33,36 @@ class MainActivity : Activity(), GameView.Listener {
     private var textScale = 1f
     private val scaled = ArrayList<Pair<TextView, Float>>()
 
-    // HUD
-    private lateinit var hudTop: LinearLayout
-    private lateinit var waveText: TextView
-    private lateinit var infoText: TextView
-    private lateinit var tacticText: TextView
-    private lateinit var bottomBar: LinearLayout
+    // HUD (top strip) and action buttons (bottom strip), both outside the playing area
+    private lateinit var line1: TextView
+    private lateinit var line2: TextView
+    private lateinit var line3: TextView
+    private lateinit var speedBtn: TextView
+    private lateinit var menuBtn: TextView
     private lateinit var nukeBtn: TextView
     private lateinit var planeBtn: TextView
     private lateinit var aimBanner: TextView
 
-    // Panels
-    private lateinit var setupPanel: View
-    private lateinit var pausePanel: View
+    // Menus
+    private lateinit var menuPanel: View
     private lateinit var howPanel: View
     private lateinit var settingsPanel: View
     private lateinit var overPanel: View
-    private lateinit var overTitle: TextView
+    private lateinit var menuTitle: TextView
+    private lateinit var menuSubtitle: TextView
+    private lateinit var resumeRow: View
+    private lateinit var restartRow: View
+    private lateinit var speedRow: TextView
     private lateinit var overDetail: TextView
     private lateinit var overBest: TextView
-    private lateinit var setupBest: TextView
-    private lateinit var speedRow: TextView
     private var shown: View? = null
     private var returnTo: View? = null
 
     private var nukeArmedUntil = 0L
     private val handler = Handler(Looper.getMainLooper())
 
-    private val speeds = listOf(0.5f to "🐢 Slow", 1f to "Normal", 2f to "🐇 Fast", 4f to "🚀 Super fast")
+    private val speeds = listOf(0.5f to "½x", 1f to "1x", 2f to "2x", 4f to "4x")
+    private val speedNames = mapOf(0.5f to "Slow", 1f to "Normal", 2f to "Fast", 4f to "Super fast")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,22 +79,39 @@ class MainActivity : Activity(), GameView.Listener {
         game.tapAddsZombies = prefs.getBoolean("tapZombies", false)
         game.vibrate = prefs.getBoolean("vibrate", true)
         game.speed = prefs.getFloat("speed", 1f)
+        game.best = prefs.getFloat("best", 0f)
 
         val root = FrameLayout(this)
-        root.addView(game)
-        buildHud(root)
-        setupPanel = buildSetupPanel().also { root.addView(it) }
-        pausePanel = buildPausePanel().also { root.addView(it) }
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#06070A"))
+        }
+        column.addView(buildTopBar(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        val gameFrame = FrameLayout(this)
+        gameFrame.addView(game)
+        aimBanner = text("✈ Drag your finger across the map to aim the plane. Tap PLANE again to cancel.", 13f, light = false).apply {
+            background = XmbBackground.tinted(d, Color.parseColor("#3DA5FF"), 12f)
+            setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
+            visibility = View.GONE
+        }
+        gameFrame.addView(aimBanner, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP).apply {
+            setMargins(dp(10f), dp(8f), dp(10f), 0)
+        })
+        column.addView(gameFrame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        column.addView(buildBottomBar(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(column)
+
+        menuPanel = buildMenuPanel().also { root.addView(it) }
         howPanel = buildHowPanel().also { root.addView(it) }
         settingsPanel = buildSettingsPanel().also { root.addView(it) }
         overPanel = buildOverPanel().also { root.addView(it) }
         setContentView(root)
         applyScale()
 
-        onPhaseChanged(Phase.SETUP)
+        updateHud()
         if (!prefs.getBoolean("seenHelp", false)) {
             prefs.edit().putBoolean("seenHelp", true).apply()
-            returnTo = setupPanel
+            returnTo = null
             show(howPanel)
         }
         handler.post(hudTick)
@@ -101,7 +120,7 @@ class MainActivity : Activity(), GameView.Listener {
     override fun onPause() {
         super.onPause()
         if (!::game.isInitialized) return
-        if (game.world.phase == Phase.RUNNING && !game.paused) pauseGame()
+        if (game.world.phase == Phase.RUNNING && !game.paused) openMenu()
     }
 
     override fun onDestroy() {
@@ -113,8 +132,8 @@ class MainActivity : Activity(), GameView.Listener {
     override fun onBackPressed() {
         when {
             shown === howPanel || shown === settingsPanel -> show(returnTo)
-            shown === pausePanel -> resumeGame()
-            game.world.phase == Phase.RUNNING -> pauseGame()
+            shown === menuPanel -> closeMenu()
+            game.world.phase == Phase.RUNNING -> openMenu()
             else -> @Suppress("DEPRECATION") super.onBackPressed()
         }
     }
@@ -134,12 +153,27 @@ class MainActivity : Activity(), GameView.Listener {
         for ((tv, sp) in scaled) tv.textSize = sp * textScale
     }
 
+    private fun pressable(normal: android.graphics.drawable.Drawable) = StateListDrawable().apply {
+        addState(intArrayOf(android.R.attr.state_pressed), XmbBackground.glass(d, 12f, strong = true))
+        addState(intArrayOf(), normal)
+    }
+
+    /** Small square glass button for the top strip. */
+    private fun iconButton(label: String, desc: String, onClick: () -> Unit) = text(label, 16f, light = false).apply {
+        gravity = Gravity.CENTER
+        background = pressable(XmbBackground.glass(d, 12f))
+        contentDescription = desc
+        isClickable = true
+        isFocusable = true
+        setOnClickListener { onClick() }
+    }
+
     /** A PS3-style menu row: glassy, glows when pressed or highlighted. */
     private fun menuRow(label: String, highlight: Boolean = false, onClick: () -> Unit): TextView =
-        text(label, 20f).apply {
+        text(label, 19f).apply {
             gravity = Gravity.CENTER_VERTICAL
-            minHeight = dp(60f)
-            setPadding(dp(22f), dp(12f), dp(22f), dp(12f))
+            minHeight = dp(56f)
+            setPadding(dp(20f), dp(10f), dp(20f), dp(10f))
             background = StateListDrawable().apply {
                 addState(intArrayOf(android.R.attr.state_pressed), XmbBackground.glass(d, 14f, strong = true))
                 addState(intArrayOf(), XmbBackground.glass(d, 14f, strong = highlight))
@@ -154,11 +188,11 @@ class MainActivity : Activity(), GameView.Listener {
         }
 
     /** Full-screen menu: XMB backdrop with a centred, scrollable column. */
-    private fun panel(blocking: Boolean = true, opacity: Float = 0.95f): Pair<FrameLayout, LinearLayout> {
+    private fun panel(opacity: Float = 0.95f): Pair<FrameLayout, LinearLayout> {
         val frame = FrameLayout(this).apply {
             visibility = View.GONE
-            isClickable = blocking
-            isFocusable = blocking
+            isClickable = true
+            isFocusable = true
         }
         frame.addView(XmbBackground(this, opacity))
         val column = LinearLayout(this).apply {
@@ -166,117 +200,75 @@ class MainActivity : Activity(), GameView.Listener {
             setPadding(dp(24f), dp(28f), dp(24f), dp(28f))
         }
         val colWidth = minOf(resources.displayMetrics.widthPixels, dp(480f))
-        if (blocking) {
-            // Menus scroll, in case of big text or small screens
-            val scroll = ScrollView(this).apply {
-                isFillViewport = true
-                addView(FrameLayout(this@MainActivity).apply {
-                    addView(column, FrameLayout.LayoutParams(colWidth, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
-                })
-            }
-            frame.addView(scroll)
-        } else {
-            frame.addView(column, FrameLayout.LayoutParams(colWidth, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(FrameLayout(this@MainActivity).apply {
+                addView(column, FrameLayout.LayoutParams(colWidth, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+            })
         }
+        frame.addView(scroll)
         return frame to column
     }
 
-    private fun title(s: String) = text(s, 34f).apply {
+    private fun title(s: String) = text(s, 32f).apply {
         letterSpacing = 0.06f
-        setPadding(0, 0, 0, dp(6f))
+        setPadding(0, 0, 0, dp(4f))
     }
 
     private fun show(p: View?) {
-        for (v in listOf(setupPanel, pausePanel, howPanel, settingsPanel, overPanel)) {
+        for (v in listOf(menuPanel, howPanel, settingsPanel, overPanel)) {
             v.visibility = if (v === p) View.VISIBLE else View.GONE
         }
         shown = p
-        p?.let {
-            it.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-            it.sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_VIEW_FOCUSED)
-        }
-        updateHudVisibility()
+        game.covered = p != null
+        p?.sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_VIEW_FOCUSED)
+        updateHud()
     }
 
-    // ------------------------------------------------------------------ HUD
+    // ------------------------------------------------------------------ top & bottom strips
 
-    private fun buildHud(root: FrameLayout) {
-        val top = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12f), dp(10f), dp(12f), 0)
-        }
-        hudTop = LinearLayout(this).apply {
+    private fun buildTopBar(): View {
+        val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = XmbBackground.glass(d, 16f)
-            setPadding(dp(14f), dp(8f), dp(8f), dp(8f))
+            background = XmbBackground.glass(d, 0f)
+            setPadding(dp(14f), dp(6f), dp(8f), dp(6f))
         }
         val stats = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        waveText = text("", 18f, light = false)
-        infoText = text("", 14f, Color.parseColor("#D6E2FF"))
-        stats.addView(waveText)
-        stats.addView(infoText)
-        hudTop.addView(stats, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val pauseBtn = text("❚❚", 20f, light = false).apply {
-            gravity = Gravity.CENTER
-            background = StateListDrawable().apply {
-                addState(intArrayOf(android.R.attr.state_pressed), XmbBackground.glass(d, 14f, strong = true))
-                addState(intArrayOf(), XmbBackground.glass(d, 14f))
-            }
-            contentDescription = "Pause"
-            isClickable = true
-            setOnClickListener { pauseGame() }
-        }
-        hudTop.addView(pauseBtn, LinearLayout.LayoutParams(dp(58f), dp(58f)))
-        top.addView(hudTop)
+        line1 = text("", 15f, light = false)
+        line2 = text("", 12f, Color.parseColor("#D6E2FF"))
+        line3 = text("", 12f, Color.parseColor("#9FD0FF"), light = false)
+        stats.addView(line1)
+        stats.addView(line2)
+        stats.addView(line3)
+        bar.addView(stats, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        tacticText = text("", 15f, Color.parseColor("#9FD0FF"), light = false).apply {
-            background = XmbBackground.glass(d, 14f)
-            setPadding(dp(14f), dp(6f), dp(14f), dp(6f))
-        }
-        top.addView(tacticText, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(8f)
-        })
+        speedBtn = iconButton("1x", "Game speed") { cycleSpeed() }
+        bar.addView(speedBtn, LinearLayout.LayoutParams(dp(50f), dp(44f)).apply { marginEnd = dp(6f) })
+        menuBtn = iconButton("❚❚", "Pause") { if (game.world.phase == Phase.RUNNING) openMenu() else openMenu() }
+        bar.addView(menuBtn, LinearLayout.LayoutParams(dp(50f), dp(44f)))
+        return bar
+    }
 
-        aimBanner = text("✈ Now drag your finger across the map to show the plane where to fly.\nTap PLANE again to cancel.", 16f, light = false).apply {
-            background = XmbBackground.tinted(d, Color.parseColor("#3DA5FF"), 14f)
-            setPadding(dp(14f), dp(10f), dp(14f), dp(10f))
-            visibility = View.GONE
-        }
-        top.addView(aimBanner, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(8f)
-        })
-        root.addView(top, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
-
-        bottomBar = LinearLayout(this).apply {
+    private fun buildBottomBar(): View {
+        val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(12f), 0, dp(12f), dp(12f))
+            background = XmbBackground.glass(d, 0f)
+            setPadding(dp(10f), dp(8f), dp(10f), dp(8f))
         }
         nukeBtn = actionButton(Color.parseColor("#FF8A3D")) { onNukePressed() }
         planeBtn = actionButton(Color.parseColor("#3DA5FF")) { onPlanePressed() }
-        bottomBar.addView(nukeBtn, LinearLayout.LayoutParams(0, dp(76f), 1f).apply { marginEnd = dp(6f) })
-        bottomBar.addView(planeBtn, LinearLayout.LayoutParams(0, dp(76f), 1f).apply { marginStart = dp(6f) })
-        root.addView(bottomBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+        bar.addView(nukeBtn, LinearLayout.LayoutParams(0, dp(52f), 1f).apply { marginEnd = dp(5f) })
+        bar.addView(planeBtn, LinearLayout.LayoutParams(0, dp(52f), 1f).apply { marginStart = dp(5f) })
+        return bar
     }
 
-    private fun actionButton(color: Int, onClick: () -> Unit) = text("", 17f, light = false).apply {
+    private fun actionButton(color: Int, onClick: () -> Unit) = text("", 13f, light = false).apply {
         gravity = Gravity.CENTER
-        background = StateListDrawable().apply {
-            addState(intArrayOf(android.R.attr.state_pressed), XmbBackground.glass(d, 18f, strong = true))
-            addState(intArrayOf(), XmbBackground.tinted(d, color, 18f))
-        }
+        background = pressable(XmbBackground.tinted(d, color, 14f))
         isClickable = true
         isFocusable = true
         setOnClickListener { onClick() }
-    }
-
-    private fun updateHudVisibility() {
-        val running = game.world.phase == Phase.RUNNING
-        val vis = if (running) View.VISIBLE else View.GONE
-        hudTop.visibility = vis
-        tacticText.visibility = vis
-        bottomBar.visibility = vis
-        if (!running) { aimBanner.visibility = View.GONE; game.planeAimRequested = false }
     }
 
     private fun fmt(t: Float): String {
@@ -292,37 +284,70 @@ class MainActivity : Activity(), GameView.Listener {
     }
 
     private fun updateHud() {
+        if (!::line1.isInitialized) return
         val w = game.world
-        if (w.phase != Phase.RUNNING) return
+        speedBtn.text = speeds.firstOrNull { it.first == game.speed }?.second ?: "1x"
+        speedBtn.contentDescription = "Game speed: ${speedNames[game.speed] ?: "Normal"}. Tap to change."
+        val running = w.phase == Phase.RUNNING
+        menuBtn.text = if (running) "❚❚" else "☰"
+        menuBtn.contentDescription = if (running) "Pause" else "Menu"
+
+        if (!running) {
+            line1.text = "ZOMBIE DOTS"
+            line1.setTextColor(Color.WHITE)
+            line2.text = if (w.phase == Phase.SETUP) "👆 Tap the map to put your team down" else "Game over"
+            line3.text = if (game.best > 0f) "🏆 Best: ${fmt(game.best)}" else ""
+            nukeBtn.text = "☢ NUKE"
+            planeBtn.text = "✈ PLANE"
+            nukeBtn.alpha = 0.4f
+            planeBtn.alpha = 0.4f
+            nukeBtn.contentDescription = "Nuke. Place your team first."
+            planeBtn.contentDescription = "Plane. Place your team first."
+            aimBanner.visibility = View.GONE
+            game.planeAimRequested = false
+            return
+        }
+
         val next = w.nextWaveIn.toInt().coerceAtLeast(0) + 1
-        waveText.text = "Wave ${w.wave}   ·   next wave in ${next}s"
-        waveText.setTextColor(if (next <= 5) Color.parseColor("#FFB13B") else Color.WHITE)
-        infoText.text = "⏱ ${fmt(w.time)}     🙂 Team ${game.teamSize()}     🧟 ${w.zombies.size}"
-        hudTop.contentDescription = "Wave ${w.wave}. Next wave in $next seconds. Time ${fmt(w.time)}. " +
-            "Team ${game.teamSize()}. Zombies ${w.zombies.size}."
-        tacticText.text = "Team is: ${w.tactic.label}"
+        line1.text = "Wave ${w.wave}  ·  next wave in ${next}s"
+        line1.setTextColor(if (next <= 5) Color.parseColor("#FFB13B") else Color.WHITE)
+        line2.text = "⏱ ${fmt(w.time)}    🪖 Team ${game.teamSize()}    🧟 ${w.zombies.size}"
+        line3.text = "Team is: ${w.tactic.label}"
+        line1.contentDescription = "Wave ${w.wave}. Next wave in $next seconds."
+        line2.contentDescription = "Time ${fmt(w.time)}. Team ${game.teamSize()}. Zombies ${w.zombies.size}."
 
         val armed = SystemClock.uptimeMillis() < nukeArmedUntil && w.nukeReady
         nukeBtn.text = when {
             !w.nukeReady -> "☢ NUKE\nUsed up"
-            armed -> "☢ TAP AGAIN\nto launch the nuke!"
-            else -> "☢ NUKE\nReady · 1 left"
+            armed -> "☢ TAP AGAIN\nto launch!"
+            else -> "☢ NUKE\nReady · tap twice"
         }
-        nukeBtn.alpha = if (w.nukeReady) 1f else 0.45f
+        nukeBtn.alpha = if (w.nukeReady) 1f else 0.4f
         nukeBtn.contentDescription = nukeBtn.text.toString().replace("\n", ". ")
 
         planeBtn.text = when {
             !w.airstrikeReady -> "✈ PLANE\nBack in ${w.airstrikeCooldown.toInt() + 1}s"
             game.planeAimRequested -> "✈ PLANE\nNow drag a line!"
-            else -> "✈ PLANE\nReady!"
+            else -> "✈ PLANE\nReady"
         }
-        planeBtn.alpha = if (w.airstrikeReady) 1f else 0.45f
+        planeBtn.alpha = if (w.airstrikeReady) 1f else 0.4f
         planeBtn.contentDescription = planeBtn.text.toString().replace("\n", ". ")
         aimBanner.visibility = if (game.planeAimRequested && w.airstrikeReady) View.VISIBLE else View.GONE
     }
 
+    private fun cycleSpeed() {
+        val i = speeds.indexOfFirst { it.first == game.speed }
+        val next = speeds[(i + 1).mod(speeds.size)]
+        game.speed = next.first
+        prefs.edit().putFloat("speed", next.first).apply()
+        if (::speedRow.isInitialized) updateSpeedRow()
+        onAnnounce("Game speed: ${speedNames[next.first]}")
+        updateHud()
+    }
+
     private fun onNukePressed() {
         val w = game.world
+        if (w.phase != Phase.RUNNING) { onAnnounce("Tap the map to put your team down first."); return }
         if (!w.nukeReady) { onAnnounce("The nuke is used up. You only get one each game."); return }
         if (SystemClock.uptimeMillis() < nukeArmedUntil) {
             nukeArmedUntil = 0L
@@ -336,59 +361,38 @@ class MainActivity : Activity(), GameView.Listener {
 
     private fun onPlanePressed() {
         val w = game.world
+        if (w.phase != Phase.RUNNING) { onAnnounce("Tap the map to put your team down first."); return }
         if (!w.airstrikeReady) { onAnnounce("The plane comes back in ${w.airstrikeCooldown.toInt() + 1} seconds."); return }
         game.planeAimRequested = !game.planeAimRequested
         if (game.planeAimRequested) onAnnounce("Now drag your finger across the map to aim the plane.")
         updateHud()
     }
 
-    // ------------------------------------------------------------------ panels
+    // ------------------------------------------------------------------ menus
 
-    private fun buildSetupPanel(): View {
-        val (frame, col) = panel(blocking = false, opacity = 0.72f)
-        col.gravity = Gravity.CENTER_HORIZONTAL
-        col.addView(text("ZOMBIE DOTS", 40f).apply { letterSpacing = 0.12f; gravity = Gravity.CENTER })
-        col.addView(text("👆  Tap anywhere to put your team down", 21f, light = false).apply {
-            gravity = Gravity.CENTER; setPadding(0, dp(18f), 0, dp(4f))
-        })
-        col.addView(text("Then watch them try to survive!", 16f, Color.parseColor("#C8D6FF")).apply { gravity = Gravity.CENTER })
-        setupBest = text("", 15f, Color.parseColor("#FFD27A")).apply { gravity = Gravity.CENTER; setPadding(0, dp(12f), 0, 0) }
-        col.addView(setupBest)
-        col.addView(menuRow("❓   How to play") { returnTo = setupPanel; show(howPanel) }.apply {
-            (layoutParams as LinearLayout.LayoutParams).topMargin = dp(26f)
-        })
-        col.addView(menuRow("⚙   Settings") { returnTo = setupPanel; show(settingsPanel) })
-        return frame
-    }
-
-    private fun buildPausePanel(): View {
+    private fun buildMenuPanel(): View {
         val (frame, col) = panel()
-        col.addView(title("Paused"))
-        col.addView(text("The game is stopped. Pick what to do:", 16f, Color.parseColor("#C8D6FF")))
-        col.addView(menuRow("▶   Keep playing", highlight = true) { resumeGame() })
-        col.addView(menuRow("↺   Start over") {
-            game.world.reset(); game.paused = false
-        })
+        menuTitle = title("Paused")
+        menuSubtitle = text("The game is stopped. Pick what to do:", 15f, Color.parseColor("#C8D6FF"))
+        col.addView(menuTitle)
+        col.addView(menuSubtitle)
+        resumeRow = menuRow("▶   Keep playing", highlight = true) { closeMenu() }
+        col.addView(resumeRow)
+        restartRow = menuRow("↺   Start over") { game.world.reset(); game.paused = false; show(null) }
+        col.addView(restartRow)
         speedRow = menuRow("") { cycleSpeed() }
         col.addView(speedRow)
         updateSpeedRow()
-        col.addView(menuRow("❓   How to play") { returnTo = pausePanel; show(howPanel) })
-        col.addView(menuRow("⚙   Settings") { returnTo = pausePanel; show(settingsPanel) })
+        col.addView(menuRow("❓   How to play") { returnTo = menuPanel; show(howPanel) })
+        col.addView(menuRow("⚙   Settings") { returnTo = menuPanel; show(settingsPanel) })
+        col.addView(menuRow("✕   Close menu") { closeMenu() })
         return frame
     }
 
-    private fun cycleSpeed() {
-        val i = speeds.indexOfFirst { it.first == game.speed }
-        val next = speeds[(i + 1).mod(speeds.size)]
-        game.speed = next.first
-        prefs.edit().putFloat("speed", next.first).apply()
-        updateSpeedRow()
-    }
-
     private fun updateSpeedRow() {
-        val name = speeds.firstOrNull { it.first == game.speed }?.second ?: "Normal"
+        val name = speedNames[game.speed] ?: "Normal"
         speedRow.text = "⏩   Game speed: $name"
-        speedRow.contentDescription = "Game speed: ${name.replace(Regex("[^\\p{L} ]"), "").trim()}. Tap to change."
+        speedRow.contentDescription = "Game speed: $name. Tap to change."
     }
 
     private fun dot(color: Int, rest: String): CharSequence {
@@ -407,7 +411,7 @@ class MainActivity : Activity(), GameView.Listener {
             }
         }
         lines.forEachIndexed { i, l ->
-            box.addView(text(l, 17f, light = i != 0 || lines.size == 1).apply {
+            box.addView(text(l, 16f, light = i != 0 || lines.size == 1).apply {
                 setLineSpacing(dp(3f).toFloat(), 1f)
                 if (i > 0) setPadding(0, dp(4f), 0, 0)
             })
@@ -430,7 +434,7 @@ class MainActivity : Activity(), GameView.Listener {
         col.addView(card("🟢  When a zombie bites someone, a green ring fills up around them. When the ring is full, they turn into a zombie!"))
         col.addView(card("☢  NUKE: press the NUKE button two times. Every zombie disappears! You only get ONE, so save it for an emergency."))
         col.addView(card("✈  PLANE: press PLANE, then drag your finger across the map. A plane flies that way and drops bombs. It comes back after 20 seconds."))
-        col.addView(card("❚❚  Press the pause button any time to stop the game."))
+        col.addView(card("⏩  The 1x button at the top changes the game speed. ❚❚ pauses."))
         col.addView(card("🏆  How long can your team survive?"))
         col.addView(menuRow("✔   Got it!", highlight = true) { show(returnTo) })
         return frame
@@ -442,10 +446,10 @@ class MainActivity : Activity(), GameView.Listener {
             isChecked = initial
             setTextColor(Color.WHITE)
             typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
-            scaled.add(this to 19f)
+            scaled.add(this to 18f)
             background = XmbBackground.glass(d, 14f)
-            setPadding(dp(18f), dp(14f), dp(18f), dp(14f))
-            minHeight = dp(64f)
+            setPadding(dp(18f), dp(12f), dp(18f), dp(12f))
+            minHeight = dp(60f)
             switchPadding = dp(12f)
             setOnCheckedChangeListener { _, checked ->
                 prefs.edit().putBoolean(key, checked).apply()
@@ -477,13 +481,12 @@ class MainActivity : Activity(), GameView.Listener {
     private fun buildOverPanel(): View {
         val (frame, col) = panel(opacity = 0.9f)
         col.gravity = Gravity.CENTER_HORIZONTAL
-        overTitle = text("Game over", 36f).apply { gravity = Gravity.CENTER; letterSpacing = 0.06f }
-        overDetail = text("", 17f, Color.parseColor("#C8D6FF")).apply { gravity = Gravity.CENTER; setPadding(0, dp(10f), 0, 0) }
-        overBest = text("", 18f, Color.parseColor("#FFD27A"), light = false).apply { gravity = Gravity.CENTER; setPadding(0, dp(10f), 0, 0) }
-        col.addView(overTitle)
+        col.addView(text("Game over", 34f).apply { gravity = Gravity.CENTER; letterSpacing = 0.06f })
+        overDetail = text("", 16f, Color.parseColor("#C8D6FF")).apply { gravity = Gravity.CENTER; setPadding(0, dp(10f), 0, 0) }
+        overBest = text("", 17f, Color.parseColor("#FFD27A"), light = false).apply { gravity = Gravity.CENTER; setPadding(0, dp(10f), 0, 0) }
         col.addView(overDetail)
         col.addView(overBest)
-        col.addView(menuRow("▶   Play again", highlight = true) { game.world.reset() }.apply {
+        col.addView(menuRow("▶   Play again", highlight = true) { game.world.reset(); show(null) }.apply {
             (layoutParams as LinearLayout.LayoutParams).topMargin = dp(24f)
         })
         col.addView(menuRow("❓   How to play") { returnTo = overPanel; show(howPanel) })
@@ -492,35 +495,38 @@ class MainActivity : Activity(), GameView.Listener {
 
     // ------------------------------------------------------------------ game flow
 
-    private fun pauseGame() {
-        if (game.world.phase != Phase.RUNNING) return
-        game.paused = true
-        show(pausePanel)
+    private fun openMenu() {
+        val running = game.world.phase == Phase.RUNNING
+        if (running) game.paused = true
+        menuTitle.text = if (running) "Paused" else "Menu"
+        menuSubtitle.text = if (running) "The game is stopped. Pick what to do:" else "Pick what to do:"
+        resumeRow.visibility = if (running) View.VISIBLE else View.GONE
+        restartRow.visibility = if (running) View.VISIBLE else View.GONE
+        returnTo = null
+        show(menuPanel)
     }
 
-    private fun resumeGame() {
+    private fun closeMenu() {
         game.paused = false
         show(null)
     }
 
     override fun onPhaseChanged(phase: Phase) {
         when (phase) {
-            Phase.SETUP -> {
-                val best = prefs.getFloat("best", 0f)
-                setupBest.text = if (best > 0f) "🏆  Best: your team lasted ${fmt(best)}" else ""
-                show(setupPanel)
-            }
-            Phase.RUNNING -> show(null)
+            Phase.SETUP, Phase.RUNNING -> if (shown === overPanel) show(null) else updateHud()
             Phase.OVER -> {
                 val w = game.world
                 val best = prefs.getFloat("best", 0f)
                 val newBest = w.time > best
-                if (newBest) prefs.edit().putFloat("best", w.time).apply()
-                overTitle.text = "Game over"
+                if (newBest) {
+                    prefs.edit().putFloat("best", w.time).apply()
+                    game.best = w.time
+                }
                 overDetail.text = "Your team lasted ${fmt(w.time)}\nWave ${w.wave}  ·  ${w.kills} zombies stopped  ·  ${w.turned} turned"
                 overBest.text = if (newBest) "🏆  New best time!" else "🏆  Best: ${fmt(best)}"
                 handler.postDelayed({ if (game.world.phase == Phase.OVER) show(overPanel) }, 1200)
                 onAnnounce("Game over. Your team lasted ${fmt(w.time)}.")
+                updateHud()
             }
         }
     }

@@ -5,7 +5,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
@@ -20,9 +19,7 @@ class XmbBackground(context: Context, private val opacity: Float = 1f) : View(co
     private val d = resources.displayMetrics.density
     private val bgPaint = Paint()
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val ribbonFill = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val ribbonLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    private val path = Path()
+    private val ribbonLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         if (w <= 0 || h <= 0) return
@@ -38,6 +35,9 @@ class XmbBackground(context: Context, private val opacity: Float = 1f) : View(co
         )
     }
 
+    // Ribbon points, reused every frame (no allocations while animating)
+    private var segs = FloatArray(0)
+
     override fun onDraw(canvas: Canvas) {
         val w = width.toFloat()
         val h = height.toFloat()
@@ -45,33 +45,44 @@ class XmbBackground(context: Context, private val opacity: Float = 1f) : View(co
         canvas.drawRect(0f, 0f, w, h, glowPaint)
 
         val t = SystemClock.uptimeMillis() / 1000f
-        // Several thin ribbons that weave over each other, like the PS3 home screen
+        val step = 6f * d
+        val n = (w / step).toInt() + 3
+        if (segs.size < n * 4) segs = FloatArray(n * 4)
+
+        // Several thin ribbons that weave over each other, like the PS3 home screen.
+        // Drawn as line segments, which the GPU handles directly (smooth 60 fps).
         for (i in 0 until 6) {
             val phase = i * 0.9f
             val speed = 0.18f + i * 0.04f
             val amp = h * (0.05f + 0.025f * i)
             val baseY = h * (0.58f + 0.02f * i)
             val freq = (1.2f + i * 0.15f) * PI.toFloat() / w
-            path.reset()
-            var x = -10f
-            var first = true
-            while (x <= w + 10f) {
+            var px = -step
+            var py = baseY + sin(px * freq + t * speed + phase) * amp +
+                sin(px * freq * 0.5f - t * speed * 0.7f + phase * 2f) * amp * 0.5f
+            var k = 0
+            for (j in 0 until n) {
+                val x = px + step
                 val y = baseY + sin(x * freq + t * speed + phase) * amp +
                     sin(x * freq * 0.5f - t * speed * 0.7f + phase * 2f) * amp * 0.5f
-                if (first) { path.moveTo(x, y); first = false } else path.lineTo(x, y)
-                x += 8f * d
+                segs[k++] = px; segs[k++] = py; segs[k++] = x; segs[k++] = y
+                px = x; py = y
+            }
+            if (i == 2 || i == 4) {
+                ribbonLine.strokeWidth = 16f * d
+                ribbonLine.color = Color.argb((20 * opacity).toInt(), 160, 200, 255)
+                canvas.drawLines(segs, 0, k, ribbonLine)
             }
             ribbonLine.strokeWidth = (if (i == 2) 2.2f else 1.1f) * d
             ribbonLine.color = Color.argb(((if (i == 2) 150 else 70) * opacity).toInt(), 220, 235, 255)
-            canvas.drawPath(path, ribbonLine)
-            // A soft glow band under the brightest ribbon
-            if (i == 2 || i == 4) {
-                ribbonLine.strokeWidth = 18f * d
-                ribbonLine.color = Color.argb((22 * opacity).toInt(), 160, 200, 255)
-                canvas.drawPath(path, ribbonLine)
-            }
+            canvas.drawLines(segs, 0, k, ribbonLine)
         }
-        postInvalidateOnAnimation()
+        if (isShown) postInvalidateOnAnimation()
+    }
+
+    override fun onVisibilityAggregated(isVisible: Boolean) {
+        super.onVisibilityAggregated(isVisible)
+        if (isVisible) postInvalidateOnAnimation()
     }
 
     companion object {
