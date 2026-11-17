@@ -22,6 +22,7 @@ class MainActivity : Activity() {
         GameEntry("SynthPad", "com.synthpad.app", "Make music with synths", Color.rgb(120, 220, 255), 2)
     )
     private lateinit var hub: HubView
+    private lateinit var drawer: AppDrawer
     private val sfx by lazy { Sfx() }
     private var leftForApp = false
     private val prefs by lazy { getSharedPreferences("hub", MODE_PRIVATE) }
@@ -54,33 +55,24 @@ class MainActivity : Activity() {
     }
 
     private fun editDescription(g: GameEntry) {
-        val input = android.widget.EditText(this).apply {
-            setText(g.tagline)
-            setSelection(text.length)
-            setSingleLine()
-        }
-        val pad = (20 * resources.displayMetrics.density).toInt()
-        val box = android.widget.FrameLayout(this).apply { setPadding(pad, pad / 2, pad, 0); addView(input) }
-        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle("Description for ${g.name}")
-            .setView(box)
-            .setPositiveButton("Save") { _, _ ->
-                prefs.edit().putString("desc_${g.pkg}", input.text.toString().trim()).apply()
+        var field: android.widget.EditText? = null
+        field = NexusUi.panel(this, "Description", "Shown under ${g.name} in NEXUS.", listOf(
+            NexusUi.Option("Save", primary = true) {
+                prefs.edit().putString("desc_${g.pkg}", field?.text?.toString()?.trim() ?: "").apply()
                 refresh()
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+        ), input = g.tagline)
     }
 
-    /** Hold an added app: change its description or take it off NEXUS. */
+    /** Hold an added app (without moving it): change its description or take it off NEXUS. */
     private fun appOptions(g: GameEntry) {
-        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle(g.name)
-            .setItems(arrayOf("Edit description", "Remove from NEXUS")) { _, which ->
-                if (which == 0) editDescription(g) else removeGame(g)
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        NexusUi.panel(this, g.name, null, listOf(
+            NexusUi.Option("Edit description") { editDescription(g) },
+            NexusUi.Option("App info") {
+                try { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${g.pkg}"))) } catch (_: Exception) {}
+            },
+            NexusUi.Option("Remove from NEXUS", danger = true) { removeGame(g) }
+        ))
     }
 
     /** Saves a new position for an app (the order is kept by package name). */
@@ -103,43 +95,28 @@ class MainActivity : Activity() {
         hub.games = list
     }
 
-    /** Shows the apps on the phone (games first) so the player can add one to the hub. */
-    private fun pickGame() {
-        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val have = hub.games.map { it.pkg }.toSet() + packageName
-        val apps = packageManager.queryIntentActivities(launcher, 0)
-            .map { it.activityInfo.applicationInfo }
-            .distinctBy { it.packageName }
-            .filter { it.packageName !in have }
-            .map { info ->
-                val isGame = android.os.Build.VERSION.SDK_INT >= 26 && info.category == android.content.pm.ApplicationInfo.CATEGORY_GAME
-                Triple(info.packageName, packageManager.getApplicationLabel(info).toString(), isGame)
-            }
-            .sortedWith(compareBy({ !it.third }, { it.second.lowercase() }))
-        if (apps.isEmpty()) { Toast.makeText(this, "No other apps found", Toast.LENGTH_SHORT).show(); return }
-        val labels = apps.map { (if (it.third) "🎮  " else "      ") + it.second }.toTypedArray()
-        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle("Add to NEXUS")
-            .setItems(labels) { _, which ->
-                val pkg = apps[which].first
-                prefs.edit().putString("custom", (customPkgs() + pkg).joinToString(",")).apply()
-                refresh()
-                Toast.makeText(this, "${apps[which].second} added", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+    /** Adds an app from the drawer to the NEXUS list. */
+    private fun addApp(item: AppItem) {
+        if (item.pkg in hub.games.map { it.pkg }) return
+        prefs.edit().putString("custom", (customPkgs() + item.pkg).joinToString(",")).apply()
+        refresh()
+        Toast.makeText(this, "${item.label} added to NEXUS", Toast.LENGTH_SHORT).show()
+    }
+
+    /** Opens any app from the drawer, with the same smooth fade. */
+    private fun openPkg(pkg: String) {
+        val launch = packageManager.getLaunchIntentForPackage(pkg) ?: return
+        leftForApp = true
+        startActivity(launch, android.app.ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out).toBundle())
     }
 
     private fun removeGame(g: GameEntry) {
-        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle("Remove ${g.name} from the hub?")
-            .setMessage("This only removes it from NEXUS. The app stays on your phone.")
-            .setPositiveButton("Remove") { _, _ ->
+        NexusUi.panel(this, "Remove ${g.name}?", "This only removes it from NEXUS. The app stays on your phone.", listOf(
+            NexusUi.Option("Remove", danger = true) {
                 prefs.edit().putString("custom", customPkgs().filter { it != g.pkg }.joinToString(",")).apply()
                 refresh()
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+        ))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -149,8 +126,14 @@ class MainActivity : Activity() {
             finish()
             return
         }
-        hub = HubView(this, builtIn, { open(it) }, { pickGame() }, { appOptions(it) }, sfx, { homeSettings() }, { from, to -> moveApp(from, to) })
-        setContentView(hub)
+        hub = HubView(this, builtIn, { open(it) }, { drawer.open(add = true) }, { appOptions(it) }, sfx, { homeSettings() },
+            { from, to -> moveApp(from, to) }, { drawer.open(add = false) })
+        drawer = AppDrawer(this, sfx, { openPkg(it.pkg) }, { addApp(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
+        val root = android.widget.FrameLayout(this)
+        root.addView(hub)
+        root.addView(drawer)
+        setContentView(root)
+        drawer.load()
         // Full screen: no status bar, no navigation buttons (swipe from an edge to peek at them)
         if (android.os.Build.VERSION.SDK_INT >= 28) window.attributes.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         window.decorView.post { hideBars() }
@@ -181,15 +164,13 @@ class MainActivity : Activity() {
     }
 
     @Deprecated("Deprecated in Java")
-    override fun onBackPressed() = askClose()
+    override fun onBackPressed() { if (::drawer.isInitialized && drawer.isOpen) drawer.close() else askClose() }
 
     /** Closing NEXUS on purpose: NEXUS mode off until it's opened again from its icon. */
     private fun askClose() {
-        dialog().setTitle("Close NEXUS?")
-            .setMessage(if (HomeMode.isDefault(this)) "Home will go to your normal home screen until you open NEXUS again." else "NEXUS will close.")
-            .setPositiveButton("Close NEXUS") { _, _ -> closeNexus() }
-            .setNegativeButton("Stay", null)
-            .show()
+        NexusUi.panel(this, "Close NEXUS?",
+            if (HomeMode.isDefault(this)) "Home will go to your normal home screen until you open NEXUS again." else "NEXUS will close.",
+            listOf(NexusUi.Option("Close NEXUS", danger = true) { closeNexus() }), cancel = "Stay")
     }
 
     private fun closeNexus() {
@@ -198,14 +179,10 @@ class MainActivity : Activity() {
         finishAndRemoveTask()
     }
 
-    private fun dialog() = android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-
     private fun offerHome() {
-        dialog().setTitle("Make NEXUS your home screen?")
-            .setMessage("Home will take you to NEXUS, even after the screen turns off and on. To use your normal home screen, close NEXUS with Back. Open NEXUS again any time from its icon.\n\nOn the next screen, choose NEXUS as your Home app.")
-            .setPositiveButton("Set it up") { _, _ -> openHomeSettings() }
-            .setNegativeButton("Not now", null)
-            .show()
+        NexusUi.panel(this, "Make NEXUS your home screen?",
+            "Home will take you to NEXUS, even after the screen turns off and on. To use your normal home screen, close NEXUS with Back. Open NEXUS again any time from its icon.\n\nOn the next screen, choose NEXUS as your Home app.",
+            listOf(NexusUi.Option("Set it up", primary = true) { openHomeSettings() }), cancel = "Not now")
     }
 
     private fun openHomeSettings() {
@@ -219,36 +196,23 @@ class MainActivity : Activity() {
         val homes = HomeMode.otherHomes(this)
         if (homes.isEmpty()) { Toast.makeText(this, "No other home screen found", Toast.LENGTH_SHORT).show(); return }
         val current = HomeMode.normalHome(this)
-        dialog().setTitle("Your normal home screen")
-            .setSingleChoiceItems(homes.map { it.first }.toTypedArray(), homes.indexOfFirst { it.second == current }) { d, which ->
-                HomeMode.setNormalHome(this, homes[which].second); d.dismiss()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        NexusUi.panel(this, "Your normal home screen", "Where NEXUS takes you when you close it.",
+            homes.map { h -> NexusUi.Option((if (h.second == current) "✓  " else "     ") + h.first, primary = h.second == current) { HomeMode.setNormalHome(this, h.second) } })
     }
 
-    /** The gear: home screen options. */
+    /** The gear: NEXUS settings. */
     private fun homeSettings() {
         val isHome = HomeMode.isDefault(this)
-        val items = arrayOf(
-            if (isHome) "NEXUS is your home screen ✓ (change)" else "Make NEXUS my home screen",
-            "Choose my normal home screen",
-            "How it works",
-            "Close NEXUS"
-        )
-        dialog().setTitle("NEXUS settings")
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> openHomeSettings()
-                    1 -> chooseNormalHome()
-                    3 -> askClose()
-                    else -> dialog().setTitle("How it works")
-                        .setMessage("• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on.\n• Close NEXUS (Back, or Close NEXUS here) and Home goes to your normal home screen instead.\n• Open NEXUS from its icon to make it your home again.\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.")
-                        .setPositiveButton("OK", null).show()
-                }
-            }
-            .setNegativeButton("Close", null)
-            .show()
+        NexusUi.panel(this, "NEXUS settings", null, listOf(
+            NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
+            NexusUi.Option("Choose my normal home screen") { chooseNormalHome() },
+            NexusUi.Option("How it works") {
+                NexusUi.panel(this, "How it works",
+                    "• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on.\n• Close NEXUS (Back, or Close NEXUS here) and Home goes to your normal home screen.\n• Open NEXUS from its icon to make it your home again.\n• Swipe up or tap ALL APPS to see every app. Hold an app in the list to move it.\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.",
+                    emptyList(), cancel = "OK")
+            },
+            NexusUi.Option("Close NEXUS", danger = true) { askClose() }
+        ), cancel = "Done")
     }
 
     private fun hideBars() {

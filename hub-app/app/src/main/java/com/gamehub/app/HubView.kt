@@ -35,7 +35,8 @@ class GameEntry(val name: String, val pkg: String, val tagline: String, val acce
 @SuppressLint("ViewConstructor")
 class HubView(context: Context, var games: List<GameEntry>, private val onPick: (GameEntry) -> Unit,
               private val onAdd: () -> Unit, private val onRemove: (GameEntry) -> Unit, private val sfx: Sfx,
-              private val onSettings: () -> Unit, private val onReorder: (Int, Int) -> Unit) : View(context) {
+              private val onSettings: () -> Unit, private val onReorder: (Int, Int) -> Unit,
+              private val onDrawer: () -> Unit) : View(context) {
 
     private val d = resources.displayMetrics.density
     private val rnd = Random(3)
@@ -448,7 +449,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
         // Rows (scrollable)
         rows.clear()
-        listTop = h * 0.24f; listBottom = h - 52 * d
+        listTop = h * 0.24f; listBottom = h - 92 * d
         val rowH = 76 * d; val gap = 12 * d; val addH = 58 * d
         val left = 22 * d; val right = w - 22 * d
         val total = games.size * (rowH + gap) + addH
@@ -526,8 +527,25 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.textAlign = Paint.Align.CENTER
         text.textSize = 10.5f * d; text.letterSpacing = 0.12f
         text.color = Color.argb((110 * a).toInt(), 160, 185, 230)
+        // ALL APPS button (or swipe up from here)
+        val bob = sin(t * 2f) * 2 * d
+        allAppsRect.set(w / 2 - 70 * d, h - 54 * d, w / 2 + 70 * d, h - 18 * d)
+        fill.color = Color.argb((60 * a).toInt(), 40, 80, 200)
+        c.drawRoundRect(allAppsRect, 18 * d, 18 * d, fill)
+        line.strokeWidth = 1f * d; line.color = Color.argb((120 * a).toInt(), 140, 190, 255)
+        c.drawRoundRect(allAppsRect, 18 * d, 18 * d, line)
+        // little 3x3 grid glyph
+        fill.color = Color.argb((220 * a).toInt(), 200, 225, 255)
+        for (gx in 0..2) for (gy in 0..2) c.drawRect(allAppsRect.left + 18 * d + gx * 5 * d, allAppsRect.centerY() - 7 * d + gy * 5 * d,
+            allAppsRect.left + 21 * d + gx * 5 * d, allAppsRect.centerY() - 4 * d + gy * 5 * d, fill)
+        text.textAlign = Paint.Align.LEFT; text.textSize = 12.5f * d; text.letterSpacing = 0.25f
+        text.color = Color.argb((230 * a).toInt(), 220, 235, 255)
+        c.drawText("ALL APPS", allAppsRect.left + 42 * d, allAppsRect.centerY() + 4.5f * d, text)
+        line.color = Color.argb((90 * a).toInt(), 160, 200, 255)
+        c.drawLine(w / 2 - 8 * d, h - 62 * d + bob, w / 2, h - 66 * d + bob, line); c.drawLine(w / 2, h - 66 * d + bob, w / 2 + 8 * d, h - 62 * d + bob, line)
+        text.textAlign = Paint.Align.CENTER
         val hint = when { moveIndex >= 0 -> "DRAG TO MOVE  ·  LET GO TO DROP"; selected in games.indices -> "TAP AGAIN TO OPEN"; else -> "TAP TO SELECT" }
-        c.drawText(if (moveIndex < 0) "$hint  ·  HOLD TO MOVE" else hint, w / 2, h - 26 * d, text)
+        c.drawText(if (moveIndex < 0) "$hint  ·  HOLD TO MOVE" else hint, w / 2, h - 74 * d, text)
     }
 
     private val gearRect = RectF()
@@ -541,6 +559,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             c.drawLine(cx + cos(a) * r * 0.62f, cy + sin(a) * r * 0.62f, cx + cos(a) * r, cy + sin(a) * r, line)
         }
     }
+
+    private val allAppsRect = RectF()
+    private var swipedUp = false
 
     // Moving apps (hold, then drag)
     private var moveIndex = -1
@@ -706,6 +727,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 dragging = false; longFired = false
                 scrollVel = 0f
                 downRow = rowAt(e.x, e.y)
+                swipedUp = false
                 if (downRow in games.indices) postDelayed(longPress, 600)
             }
             MotionEvent.ACTION_MOVE -> {
@@ -719,7 +741,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     dragging = true
                     removeCallbacks(longPress)
                 }
-                if (dragging) {
+                // Swipe up from the bottom opens all apps
+                if (!swipedUp && downY > listBottom && downY - e.y > 50 * d) { swipedUp = true; sfx.tick(); onDrawer(); dragging = true }
+                if (dragging && !swipedUp) {
                     var dy = lastY - e.y
                     // Resist past the ends
                     if (scroll < 0f || scroll > maxScroll) dy *= 0.4f
@@ -746,9 +770,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     tracker?.recycle(); tracker = null
                     return true
                 }
-                if (dragging) {
+                if (dragging && !swipedUp) {
                     tracker?.computeCurrentVelocity(1000)
                     scrollVel = -(tracker?.yVelocity ?: 0f)
+                } else if (!longFired && launchFlash <= 0f && t > 1.2f && allAppsRect.contains(e.x, e.y)) {
+                    sfx.tick(); onDrawer()
                 } else if (!longFired && launchFlash <= 0f && t > 1.2f && gearRect.contains(e.x, e.y)) {
                     sfx.tick(); onSettings()
                 } else if (!longFired && launchFlash <= 0f && t > 1.2f) {
