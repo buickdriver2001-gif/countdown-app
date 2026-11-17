@@ -6,9 +6,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
-import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.text.Editable
@@ -47,16 +45,20 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
     private val search = EditText(a)
     var isOpen = false
         private set
+    /** Lets NEXUS pause its animated background while the drawer covers it. */
+    var onVisible: (Boolean) -> Unit = {}
 
     init {
         visibility = GONE
         isClickable = true
-        // Deep blue backdrop with a faint grid
+        isFocusable = true
+        // Solid deep blue backdrop (nothing behind shows through), with a faint grid on top
+        background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(Color.rgb(4, 8, 24), Color.rgb(8, 16, 42), Color.rgb(2, 4, 12)))
+        elevation = 30 * d
         addView(object : View(a) {
             val p = Paint()
             override fun onDraw(c: Canvas) {
-                p.shader = LinearGradient(0f, 0f, 0f, height.toFloat(), intArrayOf(Color.rgb(4, 8, 24), Color.rgb(8, 16, 42), Color.rgb(2, 4, 12)), null, Shader.TileMode.CLAMP)
-                c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), p); p.shader = null
                 p.color = Color.argb(14, 140, 190, 255); p.strokeWidth = 1f
                 var x = 0f; while (x < width) { c.drawLine(x, 0f, x, height.toFloat(), p); x += 40 * d }
                 var y = 0f; while (y < height) { c.drawLine(0f, y, width.toFloat(), y, p); y += 40 * d }
@@ -133,6 +135,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         search.setText("")
         fill()
         isOpen = true
+        onVisible(true)
         visibility = VISIBLE
         alpha = 0f; translationY = 60 * d
         animate().alpha(1f).translationY(0f).setDuration(260).start()
@@ -143,6 +146,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         if (!isOpen) return
         isOpen = false
         (a.getSystemService(Activity.INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(search.windowToken, 0)
+        onVisible(false)
         animate().alpha(0f).translationY(60 * d).setDuration(200).withEndAction { visibility = GONE }.start()
     }
 

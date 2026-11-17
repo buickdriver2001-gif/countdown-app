@@ -132,6 +132,7 @@ class MainActivity : Activity() {
         hub = HubView(this, builtIn, { open(it) }, { drawer.open(add = true) }, { appOptions(it) }, sfx, { homeSettings() },
             { from, to -> moveApp(from, to) }, { drawer.open(add = false) })
         drawer = AppDrawer(this, sfx, { openPkg(it.pkg) }, { addApps(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
+        drawer.onVisible = { open -> hub.covered = open; if (open) hub.clearSelection() }
         val root = android.widget.FrameLayout(this)
         root.addView(hub)
         root.addView(drawer)

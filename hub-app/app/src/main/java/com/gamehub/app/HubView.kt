@@ -94,6 +94,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
     // ------------------------------------------------------------------ drawing
 
+    /** True while something covers NEXUS (the app drawer): stop animating to save battery. */
+    var covered = false
+        set(v) { field = v; if (!v) { lastNs = 0L; invalidate() } }
+
     override fun onDraw(c: Canvas) {
         val now = System.nanoTime()
         val dt = if (lastNs == 0L) 0f else min(0.05f, (now - lastNs) / 1e9f)
@@ -147,7 +151,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         }
         // Fade in from black at start-up
         if (intro < 1f) { fill.color = Color.argb(((1f - intro) * 255).toInt(), 0, 0, 0); c.drawRect(0f, 0f, w, h, fill) }
-        postInvalidateOnAnimation()
+        if (!covered) postInvalidateOnAnimation()
     }
 
     /**
@@ -799,6 +803,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     override fun performClick(): Boolean { super.performClick(); return true }
+
+    fun clearSelection() { selected = -1 }
 
     /** Called when the screen comes back (e.g. after closing a game). */
     fun resumed(fromApp: Boolean) {
