@@ -117,9 +117,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         c.drawRect(0f, 0f, w, h, fill)
         fill.shader = null
 
+        drawGrid(c, intro)
+        drawOrbit(c, intro)
         drawTowers(c, intro)
         drawMotes(c, dt, intro)
-        drawMenu(c, intro)
+        drawStreaks(c, dt, intro)
+        drawMenu(c, intro, dt)
 
         if (launchFlash > 0f) {
             launchFlash -= dt
@@ -278,7 +281,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         project(x, y + h, z)
         val fog = fogK(pz)
         // Some cubes shimmer brighter now and then
-        val twinkle = max(0f, sin(t * 1.3f + tw.phase * 3f + k * 1.7f)).let { it * it * it * it }
+        val twinkle0 = max(0f, sin(t * 1.3f + tw.phase * 3f + k * 1.7f)).let { it * it * it * it }
+        // Every few seconds a band of white light passes across all the towers
+        val pass = (t % PASS_EVERY) / PASS_LEN
+        val bandX = -0.3f * width + pass * width * 1.6f
+        val sweep = if (pass <= 1f) kotlin.math.exp(-((px - bandX) / (70 * d)).let { it * it }) else 0f
+        val twinkle = min(1f, twinkle0 + sweep * 1.2f)
         val base = 26 + (40 * twinkle).toInt()
         // Faces: bottom(0,1,3,2) top(4,5,7,6) front(0,1,5,4) back(2,3,7,6) left(0,2,6,4) right(1,3,7,5)
         val faces = arrayOf(intArrayOf(4, 5, 7, 6), intArrayOf(0, 1, 5, 4), intArrayOf(2, 3, 7, 6), intArrayOf(0, 2, 6, 4), intArrayOf(1, 3, 7, 5))
@@ -299,6 +307,91 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         while (e < edges.size) { c.drawLine(cx[edges[e]], cyA[edges[e]], cx[edges[e + 1]], cyA[edges[e + 1]], line); e += 2 }
     }
 
+    private val PASS_EVERY = 6.5f
+    private val PASS_LEN = 2.2f
+
+    /** A faint grid far below, with a scan ring pulsing out from the middle. */
+    private fun drawGrid(c: Canvas, intro: Float) {
+        val gy = -3.6f
+        val span = 22f
+        line.strokeWidth = 1f * d
+        var gx = -span
+        while (gx <= span) {
+            gridLine(c, gx, gy, -span, gx, gy, span, intro)
+            gridLine(c, -span, gy, gx, span, gy, gx, intro)
+            gx += 2.75f
+        }
+        // Scan ring
+        val k = (t % 5f) / 5f
+        val rr = 1f + k * 21f
+        val a = ((1f - k) * 120 * intro).toInt()
+        line.color = Color.argb(a, 120, 180, 255); line.strokeWidth = 1.4f * d
+        var prevOk = false; var lx = 0f; var ly = 0f
+        for (i in 0..56) {
+            val ang = i / 56f * 6.283f
+            val ok = project(sin(ang) * rr, gy, cos(ang) * rr)
+            if (ok && prevOk) c.drawLine(lx, ly, px, py, line)
+            prevOk = ok; lx = px; ly = py
+        }
+    }
+
+    private fun gridLine(c: Canvas, x0: Float, y: Float, z0: Float, x1: Float, y1: Float, z1: Float, intro: Float) {
+        // Short pieces so the far end can fade and pieces behind the camera are skipped
+        val n = 6
+        var prevOk = false; var lx = 0f; var ly = 0f; var lz = 0f
+        for (i in 0..n) {
+            val u = i.toFloat() / n
+            val ok = project(x0 + (x1 - x0) * u, y + (y1 - y) * u, z0 + (z1 - z0) * u)
+            if (ok && prevOk) {
+                line.color = Color.argb((26 * fogK((pz + lz) / 2) * intro).toInt(), 110, 160, 255)
+                c.drawLine(lx, ly, px, py, line)
+            }
+            prevOk = ok; lx = px; ly = py; lz = pz
+        }
+    }
+
+    /** One thin tilted ring around the whole scene, with a light travelling along it. */
+    private fun drawOrbit(c: Canvas, intro: Float) {
+        val r = 9.5f
+        line.strokeWidth = 1f * d
+        var prevOk = false; var lx = 0f; var ly = 0f
+        val tilt = 0.22f
+        for (i in 0..96) {
+            val ang = i / 96f * 6.283f
+            val x = sin(ang) * r; val z = cos(ang) * r
+            val ok = project(x, 1.2f + sin(ang + 1f) * r * tilt, z)
+            if (ok && prevOk) { line.color = Color.argb((34 * fogK(pz) * intro).toInt(), 160, 200, 255); c.drawLine(lx, ly, px, py, line) }
+            prevOk = ok; lx = px; ly = py
+        }
+        val ang = t * 0.35f
+        if (project(sin(ang) * r, 1.2f + sin(ang + 1f) * r * tilt, cos(ang) * r)) {
+            val rad = max(2f, 30 * d / pz)
+            fill.shader = RadialGradient(px, py, rad * 3f, intArrayOf(Color.argb((200 * intro).toInt(), 210, 230, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+            c.drawCircle(px, py, rad * 3f, fill); fill.shader = null
+        }
+    }
+
+    private class Streak(var x: Float, val y: Float, val len: Float, val speed: Float, val alpha: Int)
+    private val streaks = ArrayList<Streak>()
+
+    /** Faint lines of light that zip across now and then. */
+    private fun drawStreaks(c: Canvas, dt: Float, intro: Float) {
+        if (rnd.nextFloat() < dt * 0.9f) {
+            val dir = if (rnd.nextBoolean()) 1f else -1f
+            streaks.add(Streak(if (dir > 0) -200 * d else width + 200 * d, height * (0.05f + rnd.nextFloat() * 0.85f),
+                (60 + rnd.nextFloat() * 140) * d, dir * (500 + rnd.nextFloat() * 700) * d, 40 + rnd.nextInt(70)))
+        }
+        val it = streaks.iterator()
+        while (it.hasNext()) {
+            val s = it.next()
+            s.x += s.speed * dt
+            if (s.x < -400 * d || s.x > width + 400 * d) { it.remove(); continue }
+            val tail = s.x - kotlin.math.sign(s.speed) * s.len
+            fill.shader = LinearGradient(tail, 0f, s.x, 0f, intArrayOf(Color.TRANSPARENT, Color.argb((s.alpha * intro).toInt(), 190, 220, 255)), null, Shader.TileMode.CLAMP)
+            c.drawRect(min(tail, s.x), s.y, max(tail, s.x), s.y + 1f * d, fill); fill.shader = null
+        }
+    }
+
     private fun drawMotes(c: Canvas, dt: Float, intro: Float) {
         for (m in motes) {
             m.y += m.speed * dt
@@ -310,83 +403,154 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         }
     }
 
-    private fun drawMenu(c: Canvas, intro: Float) {
+    // Scrolling list state
+    private var scroll = 0f
+    private var scrollVel = 0f
+    private var maxScroll = 0f
+    private var listTop = 0f
+    private var listBottom = 0f
+    private val dateFmt = SimpleDateFormat("EEE d MMM", Locale.getDefault())
+
+    private fun drawMenu(c: Canvas, intro: Float, dt: Float) {
         val w = width.toFloat(); val h = height.toFloat()
         val a = ((intro - 0.4f) / 0.6f).coerceIn(0f, 1f)
         if (a <= 0f) return
-        // Title
+        // Title with a thin glowing rule beneath it
         text.textAlign = Paint.Align.CENTER
-        text.textSize = 34 * d
-        text.letterSpacing = 0.35f
+        text.textSize = 32 * d
+        text.letterSpacing = 0.45f
         text.setShadowLayer(14 * d, 0f, 0f, Color.argb((255 * a).toInt(), 70, 140, 255))
         text.color = Color.argb((255 * a).toInt(), 235, 242, 255)
-        c.drawText("NEXUS", w / 2, h * 0.14f, text)
-        text.letterSpacing = 0.15f
-        text.textSize = 12 * d
-        text.color = Color.argb((170 * a).toInt(), 160, 190, 240)
-        c.drawText("SELECT AN APP", w / 2, h * 0.14f + 26 * d, text)
+        c.drawText("NEXUS", w / 2 + 6 * d, h * 0.12f, text)
         text.setShadowLayer(0f, 0f, 0f, 0)
-        // Clock
-        text.textAlign = Paint.Align.RIGHT
-        text.textSize = 13 * d; text.letterSpacing = 0.05f
-        text.color = Color.argb((190 * a).toInt(), 200, 215, 245)
-        c.drawText(clock.format(Date()), w - 18 * d, 30 * d, text)
+        val ruleY = h * 0.12f + 16 * d
+        fill.shader = LinearGradient(w * 0.25f, 0f, w * 0.75f, 0f, intArrayOf(Color.TRANSPARENT, Color.argb((200 * a).toInt(), 130, 180, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        c.drawRect(w * 0.25f, ruleY, w * 0.75f, ruleY + 1.2f * d, fill); fill.shader = null
+        // A spark travelling along the rule
+        val sx = w * 0.25f + (w * 0.5f) * ((t * 0.35f) % 1f)
+        fill.color = Color.argb((220 * a).toInt(), 220, 235, 255); c.drawCircle(sx, ruleY + 0.6f * d, 1.8f * d, fill)
+        text.letterSpacing = 0.3f
+        text.textSize = 10.5f * d
+        text.color = Color.argb((160 * a).toInt(), 160, 190, 240)
+        c.drawText("SELECT AN APP", w / 2, ruleY + 22 * d, text)
+        // Status corners: date left, clock right, thin brackets
+        text.letterSpacing = 0.12f; text.textSize = 11.5f * d
+        text.color = Color.argb((170 * a).toInt(), 190, 210, 245)
+        text.textAlign = Paint.Align.LEFT; c.drawText(dateFmt.format(Date()).uppercase(), 20 * d, 32 * d, text)
+        text.textAlign = Paint.Align.RIGHT; c.drawText(clock.format(Date()), w - 20 * d, 32 * d, text)
+        line.strokeWidth = 1f * d; line.color = Color.argb((70 * a).toInt(), 140, 190, 255)
+        bracket(c, 12 * d, 12 * d, 1, 1); bracket(c, w - 12 * d, 12 * d, -1, 1)
+        bracket(c, 12 * d, h - 12 * d, 1, -1); bracket(c, w - 12 * d, h - 12 * d, -1, -1)
 
-        // Game rows
+        // Rows (scrollable)
         rows.clear()
-        val count = games.size + 1
-        val top = h * 0.25f; val bottom = h - 56 * d
-        val gap = 12 * d
-        val rowH = min(84 * d, (bottom - top - gap * (count - 1)) / count).coerceAtLeast(52 * d)
+        listTop = h * 0.24f; listBottom = h - 52 * d
+        val rowH = 76 * d; val gap = 12 * d; val addH = 58 * d
         val left = 22 * d; val right = w - 22 * d
-        val total = count * rowH + (count - 1) * gap
-        var y = max(top, top + (bottom - top - total) * 0.6f) - scrollY0
+        val total = games.size * (rowH + gap) + addH
+        maxScroll = max(0f, total - (listBottom - listTop))
+        // Fling with friction, springing back at the ends
+        if (!dragging) {
+            scroll += scrollVel * dt
+            scrollVel *= kotlin.math.exp(-dt * 3.5f)
+            if (kotlin.math.abs(scrollVel) < 5f) scrollVel = 0f
+            if (scroll < 0f) { scroll += (0f - scroll) * min(1f, dt * 12f); scrollVel = 0f }
+            if (scroll > maxScroll) { scroll += (maxScroll - scroll) * min(1f, dt * 12f); scrollVel = 0f }
+        }
+        val startY = if (maxScroll > 0f) listTop else listTop + (listBottom - listTop - total) * 0.55f
+        var y = startY - scroll
+        c.save()
+        c.clipRect(0f, listTop - 6 * d, w, listBottom + 6 * d)
         for ((i, g) in games.withIndex()) {
             val r = RectF(left, y, right, y + rowH)
             rows.add(r)
-            val sel = i == selected
-            val pulse = 0.5f + 0.5f * sin(t * 3f)
-            // Glassy panel
-            fill.color = Color.argb(((if (sel) 70 else 34) * a).toInt(), 40, 80, 200)
-            c.drawRoundRect(r, 10 * d, 10 * d, fill)
-            line.strokeWidth = (if (sel) 2f else 1f) * d
-            line.color = Color.argb(((if (sel) 160 + 80 * pulse else 70f).toInt() * a).toInt(), 140, 190, 255)
-            c.drawRoundRect(r, 10 * d, 10 * d, line)
-            if (sel) {
-                fill.shader = LinearGradient(left, 0f, right, 0f, intArrayOf(Color.argb((80 * a).toInt(), 120, 180, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-                c.drawRoundRect(r, 10 * d, 10 * d, fill); fill.shader = null
-            }
-            // Icon
-            val ic = RectF(left + 12 * d, y + 12 * d, left + 12 * d + rowH - 24 * d, y + rowH - 12 * d)
-            drawIcon(c, g, ic, a)
-            // Name and status
-            text.textAlign = Paint.Align.LEFT
-            text.textSize = 20 * d; text.letterSpacing = 0.08f
-            text.color = Color.argb((255 * a).toInt(), 240, 245, 255)
-            c.drawText(g.name, ic.right + 16 * d, y + rowH * 0.45f, text)
-            text.textSize = 12 * d; text.letterSpacing = 0.04f
-            text.color = if (g.installed) Color.argb((180 * a).toInt(), 170, 200, 240) else Color.argb((200 * a).toInt(), 255, 190, 110)
-            c.drawText(if (g.installed) g.tagline else "Not installed · tap to download", ic.right + 16 * d, y + rowH * 0.72f, text)
+            if (r.bottom > listTop - 10 * d && r.top < listBottom + 10 * d) drawRow(c, g, r, i == selected, a)
             y += rowH + gap
         }
-        // "+ Add a game" row
-        run {
-            val r = RectF(left, y, right, y + rowH * 0.8f)
-            rows.add(r)
-            line.strokeWidth = 1f * d
-            line.color = Color.argb((90 * a).toInt(), 140, 190, 255)
-            line.pathEffect = android.graphics.DashPathEffect(floatArrayOf(8 * d, 6 * d), 0f)
-            c.drawRoundRect(r, 10 * d, 10 * d, line)
-            line.pathEffect = null
-            text.textAlign = Paint.Align.CENTER
-            text.textSize = 16 * d; text.letterSpacing = 0.1f
-            text.color = Color.argb((200 * a).toInt(), 170, 205, 255)
-            c.drawText("+  Add an app from your phone", r.centerX(), r.centerY() + 6 * d, text)
+        val ar = RectF(left, y, right, y + addH)
+        rows.add(ar)
+        val addSel = selected == games.size
+        line.strokeWidth = (if (addSel) 1.6f else 1f) * d
+        line.color = Color.argb(((if (addSel) 200 else 90) * a).toInt(), 140, 190, 255)
+        line.pathEffect = android.graphics.DashPathEffect(floatArrayOf(8 * d, 6 * d), 0f)
+        c.drawRoundRect(ar, 6 * d, 6 * d, line)
+        line.pathEffect = null
+        text.textAlign = Paint.Align.CENTER
+        text.textSize = 14 * d; text.letterSpacing = 0.18f
+        text.color = Color.argb(((if (addSel) 255 else 190) * a).toInt(), 170, 205, 255)
+        c.drawText(if (addSel) "TAP AGAIN TO ADD AN APP" else "+  ADD AN APP", ar.centerX(), ar.centerY() + 5 * d, text)
+        c.restore()
+        // Soft fades where the list scrolls under the edges
+        if (maxScroll > 0f) {
+            fill.shader = LinearGradient(0f, listTop - 6 * d, 0f, listTop + 24 * d, intArrayOf(Color.rgb(4, 8, 24), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+            c.drawRect(0f, listTop - 6 * d, w, listTop + 24 * d, fill)
+            fill.shader = LinearGradient(0f, listBottom - 24 * d, 0f, listBottom + 6 * d, intArrayOf(Color.TRANSPARENT, Color.rgb(2, 4, 12)), null, Shader.TileMode.CLAMP)
+            c.drawRect(0f, listBottom - 24 * d, w, listBottom + 6 * d, fill); fill.shader = null
+            // Thin scroll indicator
+            val trackH = listBottom - listTop
+            val thumbH = max(30 * d, trackH * trackH / (trackH + maxScroll))
+            val ty = listTop + (trackH - thumbH) * (scroll / maxScroll).coerceIn(0f, 1f)
+            fill.color = Color.argb((120 * a).toInt(), 140, 190, 255)
+            c.drawRoundRect(RectF(w - 9 * d, ty, w - 7 * d, ty + thumbH), d, d, fill)
         }
         text.textAlign = Paint.Align.CENTER
-        text.textSize = 11 * d
+        text.textSize = 10.5f * d; text.letterSpacing = 0.12f
         text.color = Color.argb((110 * a).toInt(), 160, 185, 230)
-        c.drawText(if (games.any { it.custom }) "Tap to open  ·  hold an added app for options" else "Tap to open", w / 2, h - 28 * d, text)
+        val hint = if (selected in games.indices) "TAP AGAIN TO OPEN" else "TAP TO SELECT"
+        c.drawText(if (games.any { it.custom }) "$hint  ·  HOLD AN ADDED APP FOR OPTIONS" else hint, w / 2, h - 26 * d, text)
+    }
+
+    /** Thin L-shaped corner mark. */
+    private fun bracket(c: Canvas, x: Float, y: Float, sx: Int, sy: Int) {
+        val l = 14 * d
+        c.drawLine(x, y, x + sx * l, y, line); c.drawLine(x, y, x, y + sy * l, line)
+    }
+
+    private fun drawRow(c: Canvas, g: GameEntry, r: RectF, sel: Boolean, a: Float) {
+        val pulse = 0.5f + 0.5f * sin(t * 3f)
+        // Dark glass panel
+        fill.color = Color.argb(((if (sel) 80 else 30) * a).toInt(), 40, 80, 200)
+        c.drawRoundRect(r, 6 * d, 6 * d, fill)
+        line.strokeWidth = 1f * d
+        line.color = Color.argb(((if (sel) 150 + 90 * pulse else 55f) * a).toInt(), 140, 190, 255)
+        c.drawRoundRect(r, 6 * d, 6 * d, line)
+        if (sel) {
+            fill.shader = LinearGradient(r.left, 0f, r.right, 0f, intArrayOf(Color.argb((90 * a).toInt(), 120, 180, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+            c.drawRoundRect(r, 6 * d, 6 * d, fill); fill.shader = null
+            // A white sheen sweeping across the highlighted row
+            val k = (t * 0.7f) % 1.6f
+            val sx = r.left + (r.width() + 120 * d) * k - 60 * d
+            c.save(); c.clipRect(r)
+            fill.shader = LinearGradient(sx - 50 * d, 0f, sx + 50 * d, 0f, intArrayOf(Color.TRANSPARENT, Color.argb((70 * a).toInt(), 255, 255, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+            c.drawRect(sx - 50 * d, r.top, sx + 50 * d, r.bottom, fill); fill.shader = null
+            c.restore()
+            // Corner ticks
+            line.strokeWidth = 2f * d; line.color = Color.argb((230 * a).toInt(), 200, 225, 255)
+            val l = 10 * d
+            c.drawLine(r.left - 4 * d, r.top - 4 * d, r.left - 4 * d + l, r.top - 4 * d, line); c.drawLine(r.left - 4 * d, r.top - 4 * d, r.left - 4 * d, r.top - 4 * d + l, line)
+            c.drawLine(r.right + 4 * d, r.bottom + 4 * d, r.right + 4 * d - l, r.bottom + 4 * d, line); c.drawLine(r.right + 4 * d, r.bottom + 4 * d, r.right + 4 * d, r.bottom + 4 * d - l, line)
+        }
+        // Left accent bar in the app's colour
+        fill.color = Color.argb(((if (sel) 255 else 140) * a).toInt(), Color.red(g.accent), Color.green(g.accent), Color.blue(g.accent))
+        c.drawRect(r.left, r.top + 14 * d, r.left + 2.5f * d, r.bottom - 14 * d, fill)
+        // Icon
+        val ic = RectF(r.left + 14 * d, r.top + 11 * d, r.left + 14 * d + r.height() - 22 * d, r.bottom - 11 * d)
+        drawIcon(c, g, ic, a)
+        // Name and description
+        text.textAlign = Paint.Align.LEFT
+        text.textSize = 19 * d; text.letterSpacing = 0.1f
+        text.color = Color.argb((255 * a).toInt(), 240, 245, 255)
+        c.drawText(g.name, ic.right + 16 * d, r.top + r.height() * 0.46f, text)
+        text.textSize = 11.5f * d; text.letterSpacing = 0.06f
+        text.color = if (g.installed) Color.argb((175 * a).toInt(), 170, 200, 240) else Color.argb((200 * a).toInt(), 255, 190, 110)
+        val sub = when { !g.installed -> "Not installed · tap again to download"; sel -> "Tap again to open"; else -> g.tagline }
+        c.drawText(sub, ic.right + 16 * d, r.top + r.height() * 0.72f, text)
+        if (sel) {
+            // Chevron on the right
+            line.strokeWidth = 2f * d; line.color = Color.argb((220 * a).toInt(), 200, 225, 255)
+            val cx = r.right - 22 * d; val cy = r.centerY(); val s = 6 * d
+            c.drawLine(cx - s * 0.5f, cy - s, cx + s * 0.5f, cy, line); c.drawLine(cx + s * 0.5f, cy, cx - s * 0.5f, cy + s, line)
+        }
     }
 
     private fun drawIcon(c: Canvas, g: GameEntry, r: RectF, a: Float) {
@@ -441,40 +605,77 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     // ------------------------------------------------------------------ touch
+    // Tap = highlight; tap the highlighted one again = open. Dragging scrolls and never selects.
 
     private var downRow = -1
     private var longFired = false
-    private val scrollY0 = 0f
+    private var dragging = false
+    private var downX = 0f; private var downY = 0f; private var lastY = 0f
+    private var tracker: android.view.VelocityTracker? = null
+    private val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop.toFloat()
     private val longPress = Runnable {
         val r = downRow
-        if (r in games.indices && games[r].custom) { longFired = true; performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); onRemove(games[r]) }
+        if (!dragging && r in games.indices && games[r].custom) {
+            longFired = true
+            selected = r
+            performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            onRemove(games[r])
+        }
+    }
+
+    private fun rowAt(x: Float, y: Float): Int {
+        if (y < listTop - 6 * d || y > listBottom + 6 * d) return -1
+        return rows.indexOfFirst { it.contains(x, y) }
     }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (tracker == null) tracker = android.view.VelocityTracker.obtain()
+        tracker?.addMovement(e)
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 if (booting) { booting = false; t = 0f; sfx.tick(); return true }
-                downRow = rows.indexOfFirst { it.contains(e.x, e.y) }
-                longFired = false
-                if (downRow >= 0) { if (downRow != selected) sfx.tick(); selected = downRow }
+                downX = e.x; downY = e.y; lastY = e.y
+                dragging = false; longFired = false
+                scrollVel = 0f
+                downRow = rowAt(e.x, e.y)
                 if (downRow in games.indices) postDelayed(longPress, 600)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!dragging && (kotlin.math.abs(e.y - downY) > slop || kotlin.math.abs(e.x - downX) > slop)) {
+                    dragging = true
+                    removeCallbacks(longPress)
+                }
+                if (dragging) {
+                    var dy = lastY - e.y
+                    // Resist past the ends
+                    if (scroll < 0f || scroll > maxScroll) dy *= 0.4f
+                    scroll += dy
+                }
+                lastY = e.y
             }
             MotionEvent.ACTION_UP -> {
                 removeCallbacks(longPress)
-                val r = rows.indexOfFirst { it.contains(e.x, e.y) }
-                if (!longFired && r >= 0 && r == downRow && launchFlash <= 0f && t > 1.5f) {
-                    sfx.confirm()
-                    if (r == games.size) onAdd()
-                    else {
-                        pending = games[r]
-                        launchFlash = LAUNCH_LEN
-                    }
-                    performClick()
+                if (dragging) {
+                    tracker?.computeCurrentVelocity(1000)
+                    scrollVel = -(tracker?.yVelocity ?: 0f)
+                } else if (!longFired && launchFlash <= 0f && t > 1.2f) {
+                    val r = rowAt(e.x, e.y)
+                    if (r >= 0 && r == downRow) {
+                        if (r != selected) { selected = r; sfx.tick() }
+                        else {
+                            sfx.confirm()
+                            if (r == games.size) onAdd()
+                            else { pending = games[r]; launchFlash = LAUNCH_LEN }
+                        }
+                        performClick()
+                    } else if (r < 0) selected = -1
                 }
+                dragging = false
                 downRow = -1
+                tracker?.recycle(); tracker = null
             }
-            MotionEvent.ACTION_CANCEL -> { removeCallbacks(longPress); downRow = -1 }
+            MotionEvent.ACTION_CANCEL -> { removeCallbacks(longPress); dragging = false; downRow = -1; tracker?.recycle(); tracker = null }
         }
         return true
     }
