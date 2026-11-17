@@ -32,6 +32,8 @@ class MainActivity : Activity() {
         root.addView(glView)
         root.addView(hud)
         setContentView(root)
+        // Wait for the 3D world to finish building before fading in
+        LaunchFade.attach(this, "ASHEN VOW") { renderer.firstFrameDone }
         window.decorView.post { hideBars() }
     }
 

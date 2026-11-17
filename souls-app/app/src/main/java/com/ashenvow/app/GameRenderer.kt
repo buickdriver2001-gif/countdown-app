@@ -79,6 +79,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
     private var sp = 0
 
     private var width = 1; private var height = 1
+    @Volatile var firstFrameDone = false
     @Volatile var lockX = 0f
     @Volatile var lockY = 0f
     @Volatile var lockVisible = false
@@ -446,6 +447,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         setMat(M_NONE, local = false)
         drawEffects(g)
         drawParticles(g)
+        firstFrameDone = true
     }
 
     private fun shadow(x: Float, z: Float, r: Float, a: Float) {

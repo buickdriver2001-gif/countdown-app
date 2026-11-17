@@ -108,6 +108,7 @@ class MainActivity : Activity(), GameView.Listener {
         settingsPanel = buildSettingsPanel().also { root.addView(it) }
         overPanel = buildOverPanel().also { root.addView(it) }
         setContentView(root)
+        LaunchFade.attach(this, "ZOMBIE DOTS")
         applyScale()
 
         updateHud()

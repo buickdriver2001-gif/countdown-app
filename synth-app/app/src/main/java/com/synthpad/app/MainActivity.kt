@@ -81,6 +81,7 @@ class MainActivity : Activity() {
         ParamMath.sync = prefs.getBoolean("sync", true)
         engine.metronome = prefs.getBoolean("metronome", false)
         setContentView(buildUi())
+        LaunchFade.attach(this, "SYNTHPAD")
         updateTempoChip()
         // Hide the status bar only once the screen exists (doing it earlier crashes on Android 16)
         try {

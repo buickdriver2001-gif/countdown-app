@@ -5,5 +5,7 @@
         <item name="android:navigationBarColor">#000000</item>
         <item name="android:windowBackground">@drawable/bg</item>
         <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
+        <item name="android:windowSplashScreenBackground">#02040E</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">#02040E</item>
     </style>
 </resources>
