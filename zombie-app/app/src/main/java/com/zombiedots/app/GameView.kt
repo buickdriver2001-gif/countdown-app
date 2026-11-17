@@ -201,12 +201,14 @@ class GameView(context: Context, private val listener: Listener) : View(context)
                 val p = toWorld(e.x, e.y)
                 if (p != null) { world.start(p.first, p.second); paused = false }
             }
+            if (world.phase == Phase.RUNNING && !paused && tapTotemAt(e.x, e.y)) return true
             if (cureMode && world.phase == Phase.RUNNING && !paused) {
                 // Pick the survivor nearest the tap (generous so moving dots are easy to hit)
-                val tx = e.x / d; val ty = e.y / d
-                val h = world.humans.filter { it.role != Role.STRAY && !it.dead }
-                    .minByOrNull { (it.x - tx) * (it.x - tx) + (it.y - ty) * (it.y - ty) }
-                if (h != null && (h.x - tx) * (h.x - tx) + (h.y - ty) * (h.y - ty) < 45f * 45f) listener.onCureTarget(h)
+                val p = toWorld(e.x, e.y) ?: return true
+                val tx = p.first; val ty = p.second
+                fun dist2(h: Human): Float { val dx = world.wx(h.x - tx); val dy = h.y - ty; return dx * dx + dy * dy }
+                val h = world.humans.filter { it.role != Role.STRAY && !it.dead }.minByOrNull { dist2(it) }
+                if (h != null && dist2(h) < 45f * 45f) listener.onCureTarget(h)
             }
             return true
         }
@@ -275,6 +277,8 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         val now = System.nanoTime()
         val dt = if (lastFrame == 0L) 0f else min((now - lastFrame) / 1e9f, 0.05f)
         lastFrame = now
+        // Fast speeds use bigger steps so the phone keeps up
+        world.stepSize = if (speed >= 6f) 1f / 30f else if (speed >= 4f) 1f / 45f else 1f / 60f
         if (!paused) world.update(dt * speed * (if (cureMode) 0.25f else 1f))
         if (flash > 0f) flash = max(0f, flash - dt * 2.2f)
 
@@ -286,6 +290,8 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         if (world.phase == Phase.SETUP) drawSetupHint(canvas)
         if (!covered) postInvalidateOnAnimation()
     }
+
+    private var lastPurger = 0
 
     private fun checkEvents() {
         if (world.phase != lastPhase) {
@@ -304,6 +310,11 @@ class GameView(context: Context, private val listener: Listener) : View(context)
             listener.onAnnounce("Warning! A behemoth is coming!")
             buzz(Haptics.Kind.BOSS)
         }
+        if (world.purgerArrived != lastPurger) {
+            lastPurger = world.purgerArrived
+            listener.onAnnounce("The Purger is here! It makes zombies stronger. Find its purple totem and tap it until it breaks.")
+            buzz(Haptics.Kind.BOSS)
+        }
         if (world.turned != lastTurned) {
             lastTurned = world.turned
             listener.onAnnounce("Oh no! Someone turned into a zombie.")
@@ -315,6 +326,29 @@ class GameView(context: Context, private val listener: Listener) : View(context)
     }
 
     fun vibe(kind: Haptics.Kind) = buzz(kind)
+
+    /** Taps that land on the Purger's totem crack it. */
+    private fun tapTotemAt(px: Float, py: Float): Boolean {
+        val t = world.totem ?: return false
+        if (globeMode) {
+            if (!globe.project(t.x, t.y)) return false
+            val dx = px - globe.sx; val dy = py - globe.sy
+            if (dx * dx + dy * dy > (36 * d) * (36 * d)) return false
+        } else {
+            val dx = px - t.x * d; val dy = py - t.y * d
+            if (dx * dx + dy * dy > (36 * d) * (36 * d)) return false
+        }
+        val left = world.tapTotem()
+        if (left < 0) return false
+        if (left == 0) {
+            buzz(Haptics.Kind.NUKE)
+            listener.onAnnounce("The totem broke! The Purger is gone, for now.")
+        } else {
+            buzz(Haptics.Kind.TICK)
+            if (left % 6 == 0) listener.onAnnounce("Totem cracking! $left more taps.")
+        }
+        return true
+    }
 
     fun teamSize() = world.humans.count { it.role != Role.STRAY && !it.dead }
 
@@ -484,8 +518,24 @@ class GameView(context: Context, private val listener: Listener) : View(context)
             c.drawCircle(g.sx, g.sy, sp.size * d * f, splatPaint)
         }
 
-        // Small zombies in batches, big ones one by one
+        // Zombies buffed by the Purger glow purple
         val zs = world.zombies
+        if (world.purger != null) {
+            if (gPts.size < zs.size * 2) gPts = FloatArray(zs.size * 4)
+            var kb = 0
+            for (z in zs) {
+                if (!z.buffed || !g.project(z.x, z.y)) continue
+                gPts[kb++] = g.sx; gPts[kb++] = g.sy
+            }
+            if (kb > 0) {
+                val pulse = 0.7f + 0.3f * kotlin.math.sin(System.currentTimeMillis() / 180.0).toFloat()
+                buffPaint.strokeWidth = World.ZOMBIE_R * 2 * d * f * 2.6f
+                buffPaint.alpha = (110 * pulse).toInt()
+                c.drawPoints(gPts, 0, kb, buffPaint)
+            }
+        }
+
+        // Small zombies in batches, big ones one by one
         if (gPts.size < zs.size * 2) gPts = FloatArray(zs.size * 4)
         zombiePaint.strokeCap = if (shapes) Paint.Cap.SQUARE else Paint.Cap.ROUND
         zombiePaint.strokeWidth = World.ZOMBIE_R * 2 * d * f
@@ -532,6 +582,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
             if (!g.project(h.x, h.y)) continue
             drawGlobeHuman(c, h, g.sx, g.sy, f)
         }
+        drawPurgerAndTotem(c, f)
 
         for (b in world.blasts) {
             if (!g.project(b.x, b.y)) continue
@@ -556,6 +607,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         }
 
         g.drawShading(c)
+        drawTotemArrow(c)
 
         if (aiming) drawAim(c)
         for (t in world.texts) {
@@ -584,6 +636,21 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         if (inf > 0.01f) {
             infRect.set(hx - 8.5f * d * f, hy - 8.5f * d * f, hx + 8.5f * d * f, hy + 8.5f * d * f)
             c.drawArc(infRect, -90f, 360f * inf, false, infPaint)
+        }
+        // Health bar (only when hurt): green, then yellow, then red
+        if (h.hp >= 0f) {
+            val frac = (h.hp / world.maxHp(h.role)).coerceIn(0f, 1f)
+            if (frac < 0.995f) {
+                val bw = 14f * d * f; val bh = 2.4f * d * f
+                val top = hy - 12.5f * d * f
+                c.drawRect(hx - bw / 2, top, hx + bw / 2, top + bh, hpBack)
+                hpBar.color = when {
+                    frac > 0.6f -> Color.parseColor("#5BE36B")
+                    frac > 0.3f -> Color.parseColor("#FFD54A")
+                    else -> Color.parseColor("#FF4A4A")
+                }
+                c.drawRect(hx - bw / 2, top, hx - bw / 2 + bw * frac, top + bh, hpBar)
+            }
         }
         if (inf >= 0.75f) {
             val pulse = 0.6f + 0.4f * kotlin.math.sin(System.currentTimeMillis() / 150.0).toFloat()
@@ -616,6 +683,102 @@ class GameView(context: Context, private val listener: Listener) : View(context)
     }
 
     private val hpBack = Paint().apply { color = Color.parseColor("#AA000000") }
+    private val hpBar = Paint()
+    private val buffPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#B65CFF"); strokeCap = Paint.Cap.ROUND; style = Paint.Style.STROKE
+    }
+    private val purgerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val totemPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val crackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; color = Color.parseColor("#1A0626"); strokeCap = Paint.Cap.ROUND
+    }
+    private val totemPath = android.graphics.Path()
+
+    private fun drawPurgerAndTotem(c: Canvas, f: Float) {
+        val g = globe
+        val now = System.currentTimeMillis()
+        world.purger?.let { p ->
+            if (g.project(p.x, p.y)) {
+                val pulse = 0.5f + 0.5f * kotlin.math.sin(now / 240.0).toFloat()
+                // Aura showing the buff range
+                purgerPaint.style = Paint.Style.FILL
+                purgerPaint.color = Color.argb((28 + 22 * pulse).toInt(), 182, 92, 255)
+                c.drawCircle(g.sx, g.sy, World.PURGE_RADIUS * g.scale, purgerPaint)
+                purgerPaint.style = Paint.Style.STROKE
+                purgerPaint.strokeWidth = 1.5f * d
+                purgerPaint.color = Color.argb(110, 200, 130, 255)
+                c.drawCircle(g.sx, g.sy, World.PURGE_RADIUS * g.scale, purgerPaint)
+                // The Purger itself: a dark hooded dot with a purple halo
+                purgerPaint.style = Paint.Style.FILL
+                purgerPaint.color = Color.argb((140 + 100 * pulse).toInt(), 182, 92, 255)
+                c.drawCircle(g.sx, g.sy, 11f * d * f, purgerPaint)
+                purgerPaint.color = Color.parseColor("#1A0626")
+                c.drawCircle(g.sx, g.sy, 7.5f * d * f, purgerPaint)
+                purgerPaint.color = Color.parseColor("#E9C8FF")
+                c.drawCircle(g.sx - 2.4f * d * f, g.sy - 1.2f * d * f, 1.3f * d * f, purgerPaint)
+                c.drawCircle(g.sx + 2.4f * d * f, g.sy - 1.2f * d * f, 1.3f * d * f, purgerPaint)
+            }
+        }
+        world.totem?.let { t ->
+            if (!g.project(t.x, t.y)) return@let
+            val x = g.sx; val y = g.sy
+            val shake = if (t.crackFlash > 0f) (Math.random().toFloat() - 0.5f) * 4f * d else 0f
+            val s = 14f * d * f.coerceAtLeast(0.8f)
+            val pulse = 0.5f + 0.5f * kotlin.math.sin(now / 200.0).toFloat()
+            // Tap-me ring
+            totemPaint.style = Paint.Style.STROKE
+            totemPaint.strokeWidth = 2f * d
+            totemPaint.color = Color.argb((120 + 120 * pulse).toInt(), 214, 160, 255)
+            c.drawCircle(x, y, s * (1.6f + 0.25f * pulse), totemPaint)
+            // A purple crystal
+            totemPath.reset()
+            totemPath.moveTo(x + shake, y - s * 1.3f)
+            totemPath.lineTo(x + s * 0.7f + shake, y)
+            totemPath.lineTo(x + shake, y + s * 1.1f)
+            totemPath.lineTo(x - s * 0.7f + shake, y)
+            totemPath.close()
+            totemPaint.style = Paint.Style.FILL
+            totemPaint.color = if (t.crackFlash > 0f) Color.WHITE else Color.parseColor("#9B4DFF")
+            c.drawPath(totemPath, totemPaint)
+            // Cracks spread as it gets tapped
+            val broken = 1f - t.hp.toFloat() / t.maxHp
+            crackPaint.strokeWidth = 1.6f * d
+            val cracks = (broken * 7).toInt()
+            for (i in 0 until cracks) {
+                val a = i * 2.1f
+                val len = s * (0.5f + 0.1f * (i % 3))
+                c.drawLine(x + shake, y, x + shake + kotlin.math.cos(a) * len * 0.7f, y + kotlin.math.sin(a) * len, crackPaint)
+            }
+            labelPaint.color = Color.WHITE
+            labelPaint.textSize = 11 * d
+            c.drawText("TAP! ${t.hp}", x, y + s * 1.1f + 14 * d, labelPaint)
+        }
+    }
+
+    /** When the totem is on the far side of the planet, a purple arrow at the edge points to it. */
+    private fun drawTotemArrow(c: Canvas) {
+        val t = world.totem ?: return
+        val g = globe
+        if (g.project(t.x, t.y) && g.depth > 0.15f) return
+        val dx = g.sx - g.cx; val dy = g.sy - g.cy
+        val len = sqrt(dx * dx + dy * dy)
+        if (len < 1f) return
+        val ux = dx / len; val uy = dy / len
+        val r = g.radius + 18 * d
+        val ax = g.cx + ux * r; val ay = g.cy + uy * r
+        val s = 11 * d
+        totemPath.reset()
+        totemPath.moveTo(ax + ux * s, ay + uy * s)
+        totemPath.lineTo(ax - uy * s * 0.7f, ay + ux * s * 0.7f)
+        totemPath.lineTo(ax + uy * s * 0.7f, ay - ux * s * 0.7f)
+        totemPath.close()
+        totemPaint.style = Paint.Style.FILL
+        totemPaint.color = Color.parseColor("#C58BFF")
+        c.drawPath(totemPath, totemPaint)
+        labelPaint.color = Color.parseColor("#E2C6FF")
+        labelPaint.textSize = 11 * d
+        c.drawText("totem", ax - ux * 14 * d, ay - uy * 14 * d + 4 * d, labelPaint)
+    }
     private val hpFill = Paint().apply { color = Color.parseColor("#FF3B3B") }
     private val armorFill = Paint().apply { color = Color.parseColor("#C9D1DC") }
     private val behemothPaint = Paint(Paint.ANTI_ALIAS_FLAG)

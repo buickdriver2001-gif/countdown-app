@@ -62,8 +62,8 @@ class MainActivity : Activity(), GameView.Listener {
 
     private val handler = Handler(Looper.getMainLooper())
 
-    private val speeds = listOf(0.5f to "½x", 1f to "1x", 2f to "2x", 4f to "4x")
-    private val speedNames = mapOf(0.5f to "Slow", 1f to "Normal", 2f to "Fast", 4f to "Super fast")
+    private val speeds = listOf(0.5f to "½x", 1f to "1x", 2f to "2x", 4f to "4x", 6f to "6x", 10f to "10x")
+    private val speedNames = mapOf(0.5f to "Slow", 1f to "Normal", 2f to "Fast", 4f to "Super fast", 6f to "Faster", 10f to "Fastest")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,7 +80,7 @@ class MainActivity : Activity(), GameView.Listener {
         game.tapAddsZombies = prefs.getBoolean("tapZombies", false)
         game.vibrate = prefs.getBoolean("vibrate", true)
         game.speed = prefs.getFloat("speed", 1f)
-        if (prefs.getBoolean("globe", false)) game.setGlobe(true)
+        game.setGlobe(true) // The planet is the only mode now
         game.best = prefs.getFloat("best", 0f)
 
         val root = FrameLayout(this)
@@ -111,8 +111,8 @@ class MainActivity : Activity(), GameView.Listener {
         applyScale()
 
         updateHud()
-        if (!prefs.getBoolean("seenTutorialV2", false)) {
-            prefs.edit().putBoolean("seenTutorialV2", true).apply()
+        if (!prefs.getBoolean("seenTutorialV3", false)) {
+            prefs.edit().putBoolean("seenTutorialV3", true).apply()
             openTutorial(null)
         }
         handler.post(hudTick)
@@ -342,12 +342,12 @@ class MainActivity : Activity(), GameView.Listener {
             else -> "✈ PLANE\nReady"
         }
         healthBtn.text = when {
-            !w.healthReady -> "❤ ${w.hitsToTurn(Role.HUNTER).toInt()} hits\n${w.healthCooldown.toInt() + 1}s"
-            else -> "❤ HEALTH +1\n${w.hitsToTurn(Role.HUNTER).toInt()} hits"
+            !w.healthReady -> "❤ ${w.maxHp(Role.HUNTER).toInt()} HP\n${w.healthCooldown.toInt() + 1}s"
+            else -> "❤ HEAL +15\n${w.maxHp(Role.HUNTER).toInt()} HP"
         }
         healthBtn.alpha = if (w.healthReady) 1f else 0.45f
-        healthBtn.contentDescription = if (w.healthReady) "Health upgrade ready. Hunters can take ${w.hitsToTurn(Role.HUNTER).toInt()} bites before turning. Tap to add one more."
-            else "Hunters can take ${w.hitsToTurn(Role.HUNTER).toInt()} bites before turning. Next upgrade in ${w.healthCooldown.toInt() + 1} seconds."
+        healthBtn.contentDescription = if (w.healthReady) "Health ready. Hunters have ${w.maxHp(Role.HUNTER).toInt()} health. Tap to heal everyone fully and add 15 more."
+            else "Hunters have ${w.maxHp(Role.HUNTER).toInt()} health. Next health boost in ${w.healthCooldown.toInt() + 1} seconds."
         val sick = w.humans.count { it.infection > 0.01f }
         if (!w.cureReady) game.cureMode = false
         cureBtn.text = when {
@@ -392,7 +392,7 @@ class MainActivity : Activity(), GameView.Listener {
             !w.healthReady -> onAnnounce("Next health upgrade in ${w.healthCooldown.toInt() + 1} seconds.")
             w.upgradeHealth() -> {
                 game.vibe(Haptics.Kind.HEALTH)
-                onAnnounce("Plus one health! Hunters can now take ${w.hitsToTurn(Role.HUNTER).toInt()} bites before turning.")
+                onAnnounce("Everyone healed! Hunters now have ${w.maxHp(Role.HUNTER).toInt()} health.")
             }
         }
         updateHud()
@@ -510,7 +510,8 @@ class MainActivity : Activity(), GameView.Listener {
 
         tutorialPage("Welcome!",
             card("🧟  Zombies are coming! Your little team of dots has to survive as long as possible."),
-            card("👆  To start, tap anywhere on the map to put your team down."),
+            card("🌍  The battle happens on a spinning planet. Drag to spin it, pinch to zoom. It follows your team on its own."),
+            card("👆  To start, tap anywhere on the planet to put your team down."),
             card("👀  After that, your team moves, runs and fights all by themselves. You just watch… and help them with your buttons!")
         )
         tutorialPage("Who is who",
@@ -518,7 +519,7 @@ class MainActivity : Activity(), GameView.Listener {
                 "Your team:",
                 dot(game.playerColor, "Gold = your leader. Carries a powerful shotgun that hits many zombies at once!"),
                 dot(game.hunterColor, "Blue = hunters. They shoot zombies."),
-                dot(game.strayColor, "Gray = lost survivors. They run over and join your team!")
+                dot(game.strayColor, "Gray = lost survivors. They run over and join your team! Later rounds bring whole groups. Your squad can grow up to 100 hunters!")
             ),
             card("🪖  The top bar shows how many survivors you have, the round, and how many zombies are left.")
         )
@@ -531,15 +532,26 @@ class MainActivity : Activity(), GameView.Listener {
                 dot(Color.parseColor("#C9D1DC"), "Steel ring = armored. Shoot the armor off first!")
             )
         )
+        tutorialPage("The Purger",
+            card(
+                "☠  The PURGER:",
+                dot(Color.parseColor("#B65CFF"), "A dark zombie with a purple halo. Bullets can't hurt it!"),
+                dot(Color.parseColor("#B65CFF"), "Zombies near it glow purple: they get faster, bite harder and are tougher to kill.")
+            ),
+            card("💎  Somewhere on the planet is its purple TOTEM. A purple arrow at the edge shows where. Spin the planet to find it, then TAP the totem again and again until it breaks."),
+            card("✨  When the totem breaks, the Purger disappears… for now. It first shows up in round 4.")
+        )
         tutorialPage("Getting bitten",
-            card("🟢  When a zombie bites someone, a green ring starts filling up around them."),
-            card("⚠  A yellow warning sign means they are about to turn!"),
-            card("🧟  When the ring is full, they turn into a zombie and chase their old team.")
+            card("❤  Every bite takes away HEALTH. A little bar above a survivor shows it: green, then yellow, then red. Health slowly comes back when they stay safe for a few seconds."),
+            card("🟢  Bites can also infect: a green ring fills up around them. It keeps creeping up slowly, so use CURE!"),
+            card("⚠  A yellow warning sign means the ring is almost full!"),
+            card("🧟  If their health runs out OR the green ring fills up, they turn into a zombie and chase their old team.")
         )
         tutorialPage("Your buttons",
             card("☢  NUKE: tap it to open the safety case, then press and HOLD the red button. 3… 2… 1… every zombie disappears! You only get ONE."),
             card("✈  PLANE: tap it, then drag your finger across the map. A plane drops bombs along your line. Comes back after 20 seconds."),
-            card("❤  HEALTH: everyone can take a few bites before turning (hunters 6, your leader 7). Each HEALTH tap adds +1 bite to the whole team, and makes them a bit faster too. Use it every time it's ready!"),
+            card("❤  HEALTH: heals your whole team to full and adds +15 max health (hunters start at 100, your leader at 150). It also makes them a bit faster and stronger. Use it every time it's ready!"),
+            card("💎  TOTEM: when the Purger shows up, tap its purple totem on the planet over and over to break it."),
             card("💊  CURE: you have 3 charges. Each tap heals your WHOLE team by a third (3 taps = fully cured). When all 3 are used up, they come back after 2 minutes.")
         )
         tutorialPage("Rounds and bosses",
@@ -551,8 +563,7 @@ class MainActivity : Activity(), GameView.Listener {
             )
         )
         tutorialPage("Last tips",
-            card("⏩  The 1x button at the top changes the game speed. ❚❚ pauses the game."),
-            card("🌍  Try GLOBE MODE in Settings: the battle happens on a spinning planet. Drag to spin it, pinch to zoom, and it follows your team on its own."),
+            card("⏩  The 1x button at the top changes the game speed: ½x, 1x, 2x, 4x, 6x and 10x. ❚❚ pauses the game."),
             card("⚙  In Settings you can also turn on bigger text and shapes (for colorblind players)."),
             card("🏆  There's no last round. See how far your team can go!")
         )
@@ -636,10 +647,6 @@ class MainActivity : Activity(), GameView.Listener {
         })
         col.addView(toggle("Tapping the map adds more zombies (harder)", "tapZombies", game.tapAddsZombies) {
             game.tapAddsZombies = it
-        })
-        col.addView(toggle("🌍 Globe mode: play on a spinning planet (drag to spin, pinch to zoom). Starts a new game.", "globe", game.globeMode) {
-            game.setGlobe(it)
-            game.paused = false
         })
         col.addView(toggle("Vibration", "vibrate", game.vibrate) { game.vibrate = it; nukeBtn.vibrate = it })
         col.addView(menuRow("✔   Done", highlight = true) { show(returnTo) })

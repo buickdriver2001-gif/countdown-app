@@ -23,8 +23,8 @@ import kotlin.random.Random
 class GlobeRenderer(private val world: World, private val d: Float) {
 
     companion object {
-        const val WORLD_W = 1400f
-        const val WORLD_H = 470f
+        const val WORLD_W = 2200f
+        const val WORLD_H = 740f
         val LAT_SPAN = (120.0 * PI / 180.0).toFloat() // the map covers 60°S..60°N
     }
 
