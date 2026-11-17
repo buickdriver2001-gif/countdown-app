@@ -206,9 +206,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             text.setShadowLayer(0f, 0f, 0f, 0)
             text.letterSpacing = 0.15f
         }
-        text.textAlign = Paint.Align.CENTER; text.textSize = 11 * d
-        text.color = Color.argb(70, 200, 210, 230)
-        c.drawText("tap to skip", w / 2, h - 30 * d, text)
     }
 
     private val bx = FloatArray(8); private val by = FloatArray(8)
@@ -813,7 +810,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         tracker?.addMovement(e)
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (booting) { booting = false; t = 0f; sfx.tick(); return true }
+                if (booting) return true // the intro always plays in full
                 downX = e.x; downY = e.y; lastY = e.y
                 dragging = false; longFired = false
                 scrollVel = 0f
