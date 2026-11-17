@@ -135,6 +135,7 @@ class SynthEngine(context: Context) {
         var env = 0f
         var age = 0L
         var freq = 440f
+        var curFreq = 440f
         val ph = FloatArray(5)
         var subPh = 0f
         var ic1 = 0f
@@ -150,6 +151,9 @@ class SynthEngine(context: Context) {
             }
             note = n
             freq = 440f * 2f.pow((n - 69) / 12f)
+            // Glide: slide in from the last note played
+            curFreq = if (glideOn && lastFreq > 0f) lastFreq else freq
+            lastFreq = freq
             gate = true
             stage = 1
             age = order
@@ -167,23 +171,46 @@ class SynthEngine(context: Context) {
 
     private val voices = Array(8) { Voice() }
     private var noteCounter = 0L
+    private var glideOn = false
+    private var lastFreq = 0f
+
+    // Arpeggiator
+    private val held = ArrayList<Int>()
+    private var arpOn = false
+    private var arpTimer = 0f
+    private var arpStep = 0
+    private var arpNote = -1
+    private var arpDir = 1
+
+    private fun startNote(note: Int) {
+        val v = voices.firstOrNull { it.note == note && it.active }
+            ?: voices.firstOrNull { !it.active }
+            ?: voices.filter { !it.gate }.minByOrNull { it.age }
+            ?: voices.minByOrNull { it.age }!!
+        v.start(note, noteCounter++)
+    }
+
+    private fun stopNote(note: Int) {
+        for (v in voices) if (v.note == note && v.gate) v.release()
+    }
 
     private fun drainEvents() {
         while (true) {
             val e = events.poll() ?: break
             if (e == -1) {
                 for (v in voices) v.release()
+                held.clear()
+                arpNote = -1
                 continue
             }
             val note = e and 0xFFF
             if (e and 0x1000 != 0) {
-                val v = voices.firstOrNull { it.note == note && it.active }
-                    ?: voices.firstOrNull { !it.active }
-                    ?: voices.filter { !it.gate }.minByOrNull { it.age }
-                    ?: voices.minByOrNull { it.age }!!
-                v.start(note, noteCounter++)
+                if (!held.contains(note)) { held.add(note); held.sort() }
+                if (!arpOn) startNote(note)
+                else if (held.size == 1) { arpTimer = 0f; arpStep = 0; arpDir = 1 } // start the pattern right away
             } else {
-                for (v in voices) if (v.note == note && v.gate) v.release()
+                held.remove(note)
+                if (!arpOn) stopNote(note)
             }
         }
     }
@@ -255,14 +282,31 @@ class SynthEngine(context: Context) {
     private val apIdxL = IntArray(apTuning.size)
     private val apIdxR = IntArray(apTuning.size)
 
+    private var ringPh = 0f
+    private var phaserPh = 0f
+    private var phaserFb = 0f
+    private val apZ = FloatArray(4)
+    private var toneL = 0f
+    private var toneR = 0f
+    private var lowL = 0f
+    private var lowR = 0f
+    private var hiL = 0f
+    private var hiR = 0f
+    private val eqLowCoef = 1f - exp(-2f * PI.toFloat() * 250f / sr)
+    private val eqHighCoef = 1f - exp(-2f * PI.toFloat() * 3500f / sr)
+
     private val chunk = 32
     private val mono = FloatArray(chunk)
 
     // ------------------------------------------------------------------ render
 
     private fun render(out: FloatArray, frames: Int) {
-        drainEvents()
         val p = params
+        glideOn = p[P.GLIDE.ordinal] > 0.01f
+        val arpMode = ParamMath.arpMode(p[P.ARP.ordinal])
+        if (arpMode == 0 && arpOn) { arpOn = false; if (arpNote >= 0) stopNote(arpNote); arpNote = -1 }
+        if (arpMode != 0 && !arpOn) { arpOn = true; for (v in voices) v.release(); arpTimer = 0f }
+        drainEvents()
 
         val wave = ParamMath.waveIndex(p[P.WAVE.ordinal])
         val detuneCents = p[P.DETUNE.ordinal] * 50f
@@ -300,9 +344,23 @@ class SynthEngine(context: Context) {
         val delayFb = p[P.DELAY_FB.ordinal] * 0.9f
         val revMix = p[P.REV_MIX.ordinal] * 0.6f
         val revFb = 0.7f + p[P.REV_SIZE.ordinal] * 0.28f
-        val revDamp = 0.3f
 
         val volTarget = p[P.VOLUME.ordinal].let { it * it * 1.6f }
+
+        val octMul = 2f.pow(ParamMath.octaves(p[P.PITCH.ordinal]).toFloat())
+        val glideSec = ParamMath.glideSec(p[P.GLIDE.ordinal])
+        val filterType = ParamMath.filterType(p[P.FILTER_TYPE.ordinal])
+        val phaserMix = p[P.PHASER.ordinal]
+        val phaserInc = ParamMath.phaserHz(p[P.PHASER_RATE.ordinal]) / sr
+        val ringMix = p[P.RING.ordinal]
+        val ringInc = ParamMath.ringHz(p[P.RING_FREQ.ordinal]) / sr
+        val toneCoef = 1f - exp(-2f * PI.toFloat() * min(ParamMath.delayToneHz(p[P.DELAY_TONE.ordinal]), sr * 0.45f) / sr)
+        val revDampV = 0.05f + p[P.REV_DAMP.ordinal] * 0.7f
+        val bassGain = 10f.pow(ParamMath.eqDb(p[P.BASS.ordinal]) / 20f) - 1f
+        val trebleGain = 10f.pow(ParamMath.eqDb(p[P.TREBLE.ordinal]) / 20f) - 1f
+        val width = p[P.WIDTH.ordinal] * 2f
+        val arpRate = ParamMath.arpRate(p[P.ARP_RATE.ordinal])
+        val arpOct = ParamMath.arpOct(p[P.ARP_OCT.ordinal])
 
         var start = 0
         while (start < frames) {
@@ -319,11 +377,49 @@ class SynthEngine(context: Context) {
             val gl = cos(theta) * 1.4142f
             val gr = sin(theta) * 1.4142f
 
+            // Arpeggiator clock
+            if (arpOn) {
+                arpTimer -= n / sr
+                if (held.isEmpty()) {
+                    if (arpNote >= 0) { stopNote(arpNote); arpNote = -1 }
+                } else if (arpTimer <= 0f) {
+                    arpTimer += 1f / arpRate
+                    if (arpTimer < 0f) arpTimer = 1f / arpRate
+                    val seq = ArrayList<Int>()
+                    for (o in 0 until arpOct) for (hn in held) { val nn = hn + 12 * o; if (nn < 128) seq.add(nn) }
+                    if (arpNote >= 0) stopNote(arpNote)
+                    val next = when (arpMode) {
+                        2 -> seq[(seq.size - 1 - arpStep.mod(seq.size))]
+                        3 -> {
+                            if (seq.size == 1) seq[0] else {
+                                val period = (seq.size - 1) * 2
+                                val pos = arpStep.mod(period)
+                                seq[if (pos < seq.size) pos else period - pos]
+                            }
+                        }
+                        4 -> seq[(rand01() * seq.size).toInt().coerceIn(0, seq.size - 1)]
+                        else -> seq[arpStep.mod(seq.size)]
+                    }
+                    arpStep++
+                    startNote(next)
+                    arpNote = next
+                }
+            }
+
             for (i in 0 until n) mono[i] = 0f
+            // Phaser sweep position for this chunk
+            phaserPh += phaserInc * n; if (phaserPh >= 1f) phaserPh -= 1f
+            val sweepHz = 250f * 8f.pow(0.5f + 0.5f * sin(twoPi * phaserPh))
+            val tw = tan(PI.toFloat() * min(sweepHz, sr * 0.45f) / sr)
+            val apA = (tw - 1f) / (tw + 1f)
 
             for (v in voices) {
                 if (!v.active) continue
-                val f = v.freq * pitchMul
+                if (glideSec > 0.001f && v.curFreq != v.freq) {
+                    v.curFreq += (v.freq - v.curFreq) * (1f - exp(-n / (glideSec * sr)))
+                    if (abs(v.curFreq - v.freq) < 0.01f) v.curFreq = v.freq
+                } else v.curFreq = v.freq
+                val f = v.curFreq * octMul * pitchMul
                 val dt = (f / sr).coerceAtMost(0.45f)
                 val cutoff = (cutoffBase * 2f.pow(envOct * v.env + lfoOct * lfo))
                     .coerceIn(20f, sr * 0.45f)
@@ -380,13 +476,36 @@ class SynthEngine(context: Context) {
                     v.ic1 = 2f * v1 - v.ic1
                     v.ic2 = 2f * v2 - v.ic2
 
-                    mono[i] += v2 * v.env * 0.2f
+                    val filtered = when (filterType) {
+                        1 -> v1 * 1.6f                 // band-pass
+                        2 -> s - k * v1 - v2           // high-pass
+                        else -> v2                     // low-pass
+                    }
+                    mono[i] += filtered * v.env * 0.2f
                 }
             }
 
             // Effects, per sample
             for (i in 0 until n) {
                 var x = mono[i]
+
+                // Ring modulator: metallic / robotic
+                if (ringMix > 0.001f) {
+                    ringPh += ringInc; if (ringPh >= 1f) ringPh -= 1f
+                    x = x * (1f - ringMix) + x * sin(twoPi * ringPh) * ringMix * 1.4f
+                }
+
+                // Phaser: 4 sweeping all-pass stages mixed back in
+                if (phaserMix > 0.001f) {
+                    var y = x + phaserFb * 0.5f
+                    for (st in 0 until 4) {
+                        val o = apA * y + apZ[st]
+                        apZ[st] = y - apA * o
+                        y = o
+                    }
+                    phaserFb = y
+                    x = x * (1f - phaserMix * 0.5f) + y * phaserMix * 0.7f
+                }
 
                 if (drive > 0.001f) x = tanh(x * driveG) * driveNorm
 
@@ -425,8 +544,10 @@ class SynthEngine(context: Context) {
                 delaySmooth += (delayTarget - delaySmooth) * 0.0005f
                 val el = readFrac(delayL, delayW, delaySmooth, delayLen)
                 val er = readFrac(delayR, delayW, delaySmooth, delayLen)
-                delayL[delayW] = (l + r) * 0.5f * (if (delayMix > 0.001f) 1f else 0f) + er * delayFb
-                delayR[delayW] = el * delayFb
+                toneL += (er * delayFb - toneL) * toneCoef
+                toneR += (el * delayFb - toneR) * toneCoef
+                delayL[delayW] = (l + r) * 0.5f * (if (delayMix > 0.001f) 1f else 0f) + toneL
+                delayR[delayW] = toneR
                 delayW++; if (delayW >= delayLen) delayW = 0
                 l += el * delayMix
                 r += er * delayMix
@@ -439,14 +560,14 @@ class SynthEngine(context: Context) {
                     for (c in combL.indices) {
                         val bl = combL[c]; val il = combIdxL[c]
                         val ol = bl[il]
-                        combStoreL[c] = ol * (1f - revDamp) + combStoreL[c] * revDamp
+                        combStoreL[c] = ol * (1f - revDampV) + combStoreL[c] * revDampV
                         bl[il] = input + combStoreL[c] * revFb
                         combIdxL[c] = if (il + 1 >= bl.size) 0 else il + 1
                         rl += ol
 
                         val br = combR[c]; val ir = combIdxR[c]
                         val or = br[ir]
-                        combStoreR[c] = or * (1f - revDamp) + combStoreR[c] * revDamp
+                        combStoreR[c] = or * (1f - revDampV) + combStoreR[c] * revDampV
                         br[ir] = input + combStoreR[c] * revFb
                         combIdxR[c] = if (ir + 1 >= br.size) 0 else ir + 1
                         rr += or
@@ -466,6 +587,20 @@ class SynthEngine(context: Context) {
                     }
                     l += rl * revMix * 3f
                     r += rr * revMix * 3f
+                }
+
+                // EQ: bass and treble shelves
+                if (abs(bassGain) > 0.01f || abs(trebleGain) > 0.01f) {
+                    lowL += (l - lowL) * eqLowCoef; lowR += (r - lowR) * eqLowCoef
+                    l += lowL * bassGain; r += lowR * bassGain
+                    hiL += (l - hiL) * eqHighCoef; hiR += (r - hiR) * eqHighCoef
+                    l += (l - hiL) * trebleGain; r += (r - hiR) * trebleGain
+                }
+                // Stereo width
+                if (abs(width - 1f) > 0.01f) {
+                    val m = (l + r) * 0.5f
+                    val sd = (l - r) * 0.5f * width
+                    l = m + sd; r = m - sd
                 }
 
                 // Volume + soft limiter
