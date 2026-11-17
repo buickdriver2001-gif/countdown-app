@@ -64,6 +64,11 @@ class MainActivity : Activity(), GameView.Listener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (App.crashFile(this).exists()) {
+            startActivity(android.content.Intent(this, CrashActivity::class.java))
+            finish()
+            return
+        }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         textScale = if (prefs.getBoolean("bigText", false)) 1.3f else 1f
@@ -95,6 +100,7 @@ class MainActivity : Activity(), GameView.Listener {
 
     override fun onPause() {
         super.onPause()
+        if (!::game.isInitialized) return
         if (game.world.phase == Phase.RUNNING && !game.paused) pauseGame()
     }
 
@@ -159,19 +165,19 @@ class MainActivity : Activity(), GameView.Listener {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24f), dp(28f), dp(24f), dp(28f))
         }
-        val scroll = ScrollView(this).apply {
-            isFillViewport = true
-            addView(FrameLayout(this@MainActivity).apply {
-                addView(column, FrameLayout.LayoutParams(
-                    minOf(resources.displayMetrics.widthPixels, dp(480f)),
-                    ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER
-                ))
-            })
+        val colWidth = minOf(resources.displayMetrics.widthPixels, dp(480f))
+        if (blocking) {
+            // Menus scroll, in case of big text or small screens
+            val scroll = ScrollView(this).apply {
+                isFillViewport = true
+                addView(FrameLayout(this@MainActivity).apply {
+                    addView(column, FrameLayout.LayoutParams(colWidth, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+                })
+            }
+            frame.addView(scroll)
+        } else {
+            frame.addView(column, FrameLayout.LayoutParams(colWidth, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         }
-        if (blocking) frame.addView(scroll)
-        else frame.addView(column, FrameLayout.LayoutParams(
-            minOf(resources.displayMetrics.widthPixels, dp(480f)), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER
-        ))
         return frame to column
     }
 

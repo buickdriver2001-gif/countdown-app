@@ -25,6 +25,7 @@ class XmbBackground(context: Context, private val opacity: Float = 1f) : View(co
     private val path = Path()
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        if (w <= 0 || h <= 0) return
         val a = (opacity * 255).toInt()
         bgPaint.shader = LinearGradient(
             0f, 0f, w * 0.3f, h.toFloat(),
