@@ -29,6 +29,15 @@ import kotlin.math.roundToInt
 
 /** NEXUS Open Apps: swipe through cards of recent apps (their last screen), tap to jump back in. */
 class SwitcherActivity : Activity() {
+    companion object {
+        /** Start options with a plain colour splash (no app icon) and no opening animation. */
+        fun noIconSplash(c: Context): Bundle {
+            val o = android.app.ActivityOptions.makeCustomAnimation(c, 0, 0)
+            if (android.os.Build.VERSION.SDK_INT >= 33) o.setSplashScreenStyle(android.window.SplashScreen.SPLASH_SCREEN_STYLE_SOLID_COLOR)
+            return o.toBundle()
+        }
+    }
+
     private lateinit var view: SwitcherView
     private val sfx by lazy { Sfx() }
 

@@ -246,8 +246,9 @@ class MainActivity : Activity() {
     }
 
     private fun openSwitcher() {
-        startActivity(Intent(this, SwitcherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            android.app.ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out).toBundle())
+        val o = android.app.ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out)
+        if (android.os.Build.VERSION.SDK_INT >= 33) o.setSplashScreenStyle(android.window.SplashScreen.SPLASH_SCREEN_STYLE_SOLID_COLOR)
+        startActivity(Intent(this, SwitcherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), o.toBundle())
     }
 
     /** NEXUS's own App info page (where "Allow restricted settings" lives, under ⋮). */
