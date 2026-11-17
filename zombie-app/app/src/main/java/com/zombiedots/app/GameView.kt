@@ -491,6 +491,52 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         c.drawRoundRect(bossRect, 3 * d, 3 * d, bossFrame)
     }
 
+    /** Muzzle flash, then a bright streak flying to the target, then impact sparks. */
+    private fun drawBullet(c: Canvas, t: Tracer) {
+        val ux = (t.x2 - t.x1) / t.length
+        val uy = (t.y2 - t.y1) / t.length
+        // Muzzle flash (bigger for the shotgun)
+        if (t.age < 0.05f) {
+            val a = 1f - t.age / 0.05f
+            flashPaint.color = Color.argb(((if (t.pellet) 120 else 230) * a).toInt(), 255, 230, 150)
+            c.drawCircle((t.x1 + ux * 5f) * d, (t.y1 + uy * 5f) * d, (if (t.pellet) 5f else 3.2f) * d * (0.6f + 0.4f * a), flashPaint)
+        }
+        if (t.age <= t.travel) {
+            val dist = t.length * (t.age / t.travel)
+            val tail = if (t.pellet) 6f else if (t.tracerRound) 22f else 11f
+            val hx = (t.x1 + ux * dist) * d; val hy = (t.y1 + uy * dist) * d
+            val tx = (t.x1 + ux * max(0f, dist - tail)) * d; val ty = (t.y1 + uy * max(0f, dist - tail)) * d
+            if (t.pellet) {
+                bulletGlow.color = Color.argb(70, 255, 210, 90); bulletGlow.strokeWidth = 3f * d
+                c.drawLine(tx, ty, hx, hy, bulletGlow)
+                bulletPaint.color = Color.parseColor("#FFE066"); bulletPaint.strokeWidth = 1.3f * d
+            } else if (t.tracerRound) {
+                bulletGlow.color = Color.argb(90, 255, 120, 40); bulletGlow.strokeWidth = 5f * d
+                c.drawLine(tx, ty, hx, hy, bulletGlow)
+                bulletPaint.color = Color.parseColor("#FFB15A"); bulletPaint.strokeWidth = 2.2f * d
+            } else {
+                bulletGlow.color = Color.argb(60, 255, 230, 160); bulletGlow.strokeWidth = 3.5f * d
+                c.drawLine(tx, ty, hx, hy, bulletGlow)
+                bulletPaint.color = Color.parseColor("#FFF1C2"); bulletPaint.strokeWidth = 1.5f * d
+            }
+            c.drawLine(tx, ty, hx, hy, bulletPaint)
+            // hot bullet head
+            flashPaint.color = Color.WHITE
+            c.drawCircle(hx, hy, 1.1f * d, flashPaint)
+        } else if (t.hit) {
+            // Impact sparks
+            val p = ((t.age - t.travel) / Tracer.IMPACT_TIME).coerceIn(0f, 1f)
+            val ex = t.x2 * d; val ey = t.y2 * d
+            sparkPaint.color = Color.argb(((1f - p) * 255).toInt(), 255, 200, 110)
+            for (k in 0 until 4) {
+                val ang = kotlin.math.atan2(-uy, -ux) + (k - 1.5f) * 0.6f
+                val r1 = (1.5f + 5f * p) * d; val r2 = (3.5f + 8f * p) * d
+                c.drawLine(ex + kotlin.math.cos(ang) * r1, ey + kotlin.math.sin(ang) * r1,
+                    ex + kotlin.math.cos(ang) * r2, ey + kotlin.math.sin(ang) * r2, sparkPaint)
+            }
+        }
+    }
+
     private fun blend(a: Int, b: Int, t: Float): Int {
         val u = 1f - t
         return Color.rgb(
