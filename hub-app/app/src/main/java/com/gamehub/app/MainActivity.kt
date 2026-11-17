@@ -142,11 +142,12 @@ class MainActivity : Activity() {
         window.decorView.post { hideBars() }
         val fromApp = intent?.getBooleanExtra("fromApp", false) == true
         if (fromApp) { hub.booting = false; leftForApp = true }
-        else if (isHomeIntent(intent) && !HomeMode.showNexus && HomeMode.goNormalHome(this)) {
-            // Home pressed but NEXUS already showed since the screen came on: straight to the normal home screen
+        else if (isHomeIntent(intent) && !HomeMode.isOn(this) && HomeMode.goNormalHome(this)) {
+            // NEXUS was closed on purpose: Home goes to the normal home screen
             hub.booting = false
         } else {
-            if (isHomeIntent(intent)) HomeMode.showNexus = false
+            // Opened from its icon (or Home while NEXUS mode is on): NEXUS mode on
+            HomeMode.setOn(this, true)
             if (savedInstanceState == null) Thread { playChime() }.start()
             // Offer once to make NEXUS the phone's Home app
             if (!HomeMode.isDefault(this) && !prefs.getBoolean("offeredHome", false)) {
@@ -166,17 +167,28 @@ class MainActivity : Activity() {
     }
 
     @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        // As the Home app, Back leaves NEXUS for the normal home screen
-        if (HomeMode.isDefault(this) && HomeMode.goNormalHome(this)) return
-        @Suppress("DEPRECATION") super.onBackPressed()
+    override fun onBackPressed() = askClose()
+
+    /** Closing NEXUS on purpose: NEXUS mode off until it's opened again from its icon. */
+    private fun askClose() {
+        dialog().setTitle("Close NEXUS?")
+            .setMessage(if (HomeMode.isDefault(this)) "Home will go to your normal home screen until you open NEXUS again." else "NEXUS will close.")
+            .setPositiveButton("Close NEXUS") { _, _ -> closeNexus() }
+            .setNegativeButton("Stay", null)
+            .show()
+    }
+
+    private fun closeNexus() {
+        HomeMode.setOn(this, false)
+        if (HomeMode.isDefault(this)) HomeMode.goNormalHome(this)
+        finishAndRemoveTask()
     }
 
     private fun dialog() = android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
 
     private fun offerHome() {
         dialog().setTitle("Make NEXUS your home screen?")
-            .setMessage("After you turn your screen on, pressing Home shows NEXUS first. Press Back or Home to go to your normal home screen; it stays there until the screen goes off and on again.\n\nOn the next screen, choose NEXUS as your Home app.")
+            .setMessage("Home will take you to NEXUS, even after the screen turns off and on. To use your normal home screen, close NEXUS with Back. Open NEXUS again any time from its icon.\n\nOn the next screen, choose NEXUS as your Home app.")
             .setPositiveButton("Set it up") { _, _ -> openHomeSettings() }
             .setNegativeButton("Not now", null)
             .show()
@@ -207,15 +219,17 @@ class MainActivity : Activity() {
         val items = arrayOf(
             if (isHome) "NEXUS is your home screen ✓ (change)" else "Make NEXUS my home screen",
             "Choose my normal home screen",
-            "How it works"
+            "How it works",
+            "Close NEXUS"
         )
         dialog().setTitle("NEXUS settings")
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> openHomeSettings()
                     1 -> chooseNormalHome()
+                    3 -> askClose()
                     else -> dialog().setTitle("How it works")
-                        .setMessage("• Turn your screen on and press Home: NEXUS appears.\n• Press Back or Home in NEXUS to go to your normal home screen.\n• Home keeps going to your normal home screen until the screen turns off and on again.\n• Tapping the NEXUS icon always opens NEXUS.\n\nTo stop, choose your old home screen in Settings → Apps → Default apps → Home app.")
+                        .setMessage("• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on.\n• Close NEXUS (Back, or Close NEXUS here) and Home goes to your normal home screen instead.\n• Open NEXUS from its icon to make it your home again.\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.")
                         .setPositiveButton("OK", null).show()
                 }
             }
@@ -248,15 +262,13 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (isHomeIntent(intent) && intent?.getBooleanExtra("fromApp", false) != true) {
-            // Home pressed. Was NEXUS already on screen? Then this means "leave".
-            val wasOnScreen = android.os.SystemClock.uptimeMillis() - pausedAt < 700
-            when {
-                wasOnScreen -> { if (!HomeMode.goNormalHome(this)) leftForApp = true }
-                HomeMode.showNexus -> { HomeMode.showNexus = false; leftForApp = true }
-                !HomeMode.goNormalHome(this) -> leftForApp = true
-            }
+            // Home pressed: NEXUS mode on = stay in / come back to NEXUS; off = normal home screen
+            if (!HomeMode.isOn(this) && HomeMode.goNormalHome(this)) return
+            leftForApp = android.os.SystemClock.uptimeMillis() - pausedAt > 700
             return
         }
+        // Opened from its icon or back from one of the apps
+        HomeMode.setOn(this, true)
         leftForApp = true // brought back from one of the apps
     }
 

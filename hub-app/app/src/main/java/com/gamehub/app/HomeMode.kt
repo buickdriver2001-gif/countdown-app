@@ -1,32 +1,22 @@
 package com.gamehub.app
 
 import android.app.Activity
-import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.os.Build
 
 /**
- * NEXUS as the Home app: it shows on the first Home press after the screen turns on,
- * and otherwise passes Home straight through to the phone's normal home screen.
+ * NEXUS as the Home app.
+ * While NEXUS mode is on, Home always shows NEXUS (screen off/on keeps you there).
+ * Closing NEXUS on purpose turns the mode off: Home then goes to the normal home screen
+ * until NEXUS is opened again from its icon.
  */
 object HomeMode {
-    /** True after the screen turns off: the next Home press shows NEXUS. */
-    @Volatile var showNexus = true
+    private fun prefs(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE)
 
-    fun watchScreen(app: Context) {
-        val r = object : BroadcastReceiver() {
-            override fun onReceive(c: Context, i: Intent) {
-                if (i.action == Intent.ACTION_SCREEN_OFF) showNexus = true
-            }
-        }
-        val f = IntentFilter(Intent.ACTION_SCREEN_OFF)
-        if (Build.VERSION.SDK_INT >= 33) app.registerReceiver(r, f, Context.RECEIVER_NOT_EXPORTED)
-        else app.registerReceiver(r, f)
-    }
+    fun isOn(c: Context) = prefs(c).getBoolean("nexusMode", true)
+    fun setOn(c: Context, on: Boolean) = prefs(c).edit().putBoolean("nexusMode", on).apply()
 
     /** Is NEXUS currently the phone's default Home app? */
     fun isDefault(c: Context): Boolean {
