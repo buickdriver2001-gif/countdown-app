@@ -221,15 +221,15 @@ class MainActivity : Activity() {
         val status = if (on) "Helper is ON. Open apps are being remembered." else "Helper is OFF. Follow the two steps below to turn it on."
         val opts = ArrayList<NexusUi.Option>()
         if (!on) {
-            opts.add(NexusUi.Option("1.  Allow restricted settings") { openAppInfo() })
-            opts.add(NexusUi.Option("2.  Turn on helper", primary = true) { openAccessibility() })
+            opts.add(NexusUi.Option("1.  Turn on helper", primary = true) { openAccessibility() })
+            opts.add(NexusUi.Option("2.  Allow restricted settings (if asked)") { openAppInfo() })
         } else opts.add(NexusUi.Option("Turn helper off") { openAccessibility() })
         opts.add(NexusUi.Option("Square button opens NEXUS Open Apps:  " + (if (replace) "ON" else "OFF")) {
             prefs.edit().putBoolean("replaceRecents", !replace).apply()
             openAppsSettings()
         })
         opts.add(NexusUi.Option("Show Open Apps now") { openSwitcher() })
-        NexusUi.panel(this, "Open apps", "$status\n\nStep 1: on the App info page, tap ⋮ at the top right and choose Allow restricted settings (only needed for apps installed from a download).\nStep 2: in Accessibility, choose NEXUS Open Apps and switch it on.\n\nPictures of your apps stay on this phone and are never sent anywhere.", opts, cancel = "Done")
+        NexusUi.panel(this, "Open apps", "$status\n\nStep 1: in Accessibility, choose NEXUS Open Apps and switch it on.\nStep 2: if Android says \"Restricted setting\", open App info, tap ⋮ at the top right and choose Allow restricted settings. Then do step 1 again.\n\nPictures of your apps stay on this phone and are never sent anywhere.", opts, cancel = "Done")
     }
 
     /** Closing NEXUS on purpose: NEXUS mode off until it's opened again from its icon. */

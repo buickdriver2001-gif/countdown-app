@@ -40,10 +40,10 @@ class TutorialView(private val a: Activity, private val sfx: Sfx, private val ac
             "So pressing Home takes you to NEXUS:\n\n1. Tap the button below.\n2. Choose NEXUS as your Home app.\n\nNEXUS stays your home until you close it (see step 06).",
             listOf("Set NEXUS as Home" to { actions.setHome() })),
         Page("05", "Open apps (square button)",
-            "See the apps you have open as NEXUS cards showing their last screen. Press the square button or tap RECENT in NEXUS.\n\nTo turn it on:\n1. Tap Allow restricted settings, then tap ⋮ at the top right and choose Allow restricted settings. (Needed on newer Android for apps installed from a download.)\n2. Tap Turn on helper, choose NEXUS and switch it on.\n\nNEXUS only uses this to remember each app's last screen and to show its own Open Apps screen. Screenshots stay on your phone and are never sent anywhere.",
-            listOf("Allow restricted settings" to { actions.appInfo() }, "Turn on helper" to { actions.accessibility() })),
+            "See the apps you have open as NEXUS cards showing their last screen. Press the square button, or tap RECENT in NEXUS.\n\nTo turn it on:\n1. Tap Turn on helper, choose NEXUS Open Apps and switch it on.\n2. If Android says \"Restricted setting\", tap Allow restricted settings below, then tap ⋮ at the top right and choose Allow restricted settings. (Newer Android asks this for apps installed from a download.)\n3. Tap Turn on helper again and switch it on.\n\nNEXUS only uses this to remember each app's last screen and to show its own Open Apps screen. Pictures stay on your phone and are never sent anywhere. You can skip this step; everything else works without it.",
+            listOf("Turn on helper" to { actions.accessibility() }, "Allow restricted settings" to { actions.appInfo() })),
         Page("06", "Closing NEXUS & going back",
-            "• To use your normal home screen for a while: press Back in NEXUS and choose Close NEXUS. Open NEXUS from its icon to make it your home again.\n\n• To stop using NEXUS completely: Settings → Apps → Default apps → Home app, then choose your original launcher (the one your phone came with).",
+            "• To use your normal home screen for a while: press Back in NEXUS and choose Close NEXUS. Open NEXUS from its icon to make it your home again.\n\n• To stop using NEXUS completely: Settings → Apps → Default apps → Home app, then choose your original launcher (the one your phone came with). Names can vary slightly by phone; searching Settings for \"Home app\" also works.",
             listOf("Open Home app settings" to { actions.setHome() })),
         Page("07", "You're all set",
             "You can see this guide again any time from ⚙ → Tutorial.\n\nEnjoy NEXUS.")
