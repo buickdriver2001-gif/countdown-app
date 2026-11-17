@@ -70,7 +70,10 @@ class GameView(context: Context, private val listener: Listener) : View(context)
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val corePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.6f * d; color = Color.WHITE }
-    private val tracerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#FFE9A0"); strokeWidth = 1.4f * d }
+    private val bulletPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
+    private val bulletGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
+    private val flashPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val sparkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND; strokeWidth = 1.2f * d }
     private val nukePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val blastPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val planePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#D8DEE8") }
@@ -335,10 +338,7 @@ class GameView(context: Context, private val listener: Listener) : View(context)
             }
         }
 
-        for (t in world.tracers) {
-            tracerPaint.alpha = (t.life / 0.12f * 255).toInt().coerceIn(0, 255)
-            c.drawLine(t.x1 * d, t.y1 * d, t.x2 * d, t.y2 * d, tracerPaint)
-        }
+        for (t in world.tracers) drawBullet(c, t)
 
         for (h in world.humans) drawHuman(c, h)
 
@@ -473,6 +473,48 @@ class GameView(context: Context, private val listener: Listener) : View(context)
             c.drawRoundRect(bossRect, 2 * d, 2 * d, hpBack)
             bossRect.set(left, at, left + (right - left) * (z.armor / z.armorMax).coerceIn(0f, 1f), at + 4 * d)
             c.drawRoundRect(bossRect, 2 * d, 2 * d, armorFill)
+        }
+    }
+
+    /** Muzzle flash, then a bright streak flying to the target, then impact sparks. */
+    private fun drawBullet(c: Canvas, t: Tracer) {
+        val ux = (t.x2 - t.x1) / t.length
+        val uy = (t.y2 - t.y1) / t.length
+        // Muzzle flash
+        if (t.age < 0.05f) {
+            val a = 1f - t.age / 0.05f
+            flashPaint.color = Color.argb((230 * a).toInt(), 255, 230, 150)
+            c.drawCircle((t.x1 + ux * 5f) * d, (t.y1 + uy * 5f) * d, 3.2f * d * (0.6f + 0.4f * a), flashPaint)
+        }
+        if (t.age <= t.travel) {
+            val dist = t.length * (t.age / t.travel)
+            val tail = if (t.tracerRound) 22f else 11f
+            val hx = (t.x1 + ux * dist) * d; val hy = (t.y1 + uy * dist) * d
+            val tx = (t.x1 + ux * max(0f, dist - tail)) * d; val ty = (t.y1 + uy * max(0f, dist - tail)) * d
+            if (t.tracerRound) {
+                bulletGlow.color = Color.argb(90, 255, 120, 40); bulletGlow.strokeWidth = 5f * d
+                c.drawLine(tx, ty, hx, hy, bulletGlow)
+                bulletPaint.color = Color.parseColor("#FFB15A"); bulletPaint.strokeWidth = 2.2f * d
+            } else {
+                bulletGlow.color = Color.argb(60, 255, 230, 160); bulletGlow.strokeWidth = 3.5f * d
+                c.drawLine(tx, ty, hx, hy, bulletGlow)
+                bulletPaint.color = Color.parseColor("#FFF1C2"); bulletPaint.strokeWidth = 1.5f * d
+            }
+            c.drawLine(tx, ty, hx, hy, bulletPaint)
+            // hot bullet head
+            flashPaint.color = Color.WHITE
+            c.drawCircle(hx, hy, 1.1f * d, flashPaint)
+        } else if (t.hit) {
+            // Impact sparks
+            val p = ((t.age - t.travel) / Tracer.IMPACT_TIME).coerceIn(0f, 1f)
+            val ex = t.x2 * d; val ey = t.y2 * d
+            sparkPaint.color = Color.argb(((1f - p) * 255).toInt(), 255, 200, 110)
+            for (k in 0 until 4) {
+                val ang = kotlin.math.atan2(-uy, -ux) + (k - 1.5f) * 0.6f
+                val r1 = (1.5f + 5f * p) * d; val r2 = (3.5f + 8f * p) * d
+                c.drawLine(ex + kotlin.math.cos(ang) * r1, ey + kotlin.math.sin(ang) * r1,
+                    ex + kotlin.math.cos(ang) * r2, ey + kotlin.math.sin(ang) * r2, sparkPaint)
+            }
         }
     }
 

@@ -69,7 +69,19 @@ enum class Tactic(val label: String) {
     PATROL("Patrolling")
 }
 
-class Tracer(val x1: Float, val y1: Float, val x2: Float, val y2: Float, var life: Float)
+/** A bullet in flight (purely visual: damage is applied when the shot is fired). */
+class Tracer(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val tracerRound: Boolean, val hit: Boolean) {
+    val length = kotlin.math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1)).coerceAtLeast(1f)
+    /** Seconds the bullet takes to arrive. */
+    val travel = length / BULLET_SPEED
+    var age = 0f
+    val done get() = age > travel + IMPACT_TIME
+
+    companion object {
+        const val BULLET_SPEED = 1300f
+        const val IMPACT_TIME = 0.12f
+    }
+}
 class Splat(val x: Float, val y: Float, var life: Float, val size: Float)
 class Nuke(val x: Float, val y: Float, var age: Float)
 class FloatText(val x: Float, var y: Float, val text: String, var life: Float)
@@ -511,8 +523,8 @@ class World(private val rnd: Random = Random.Default) {
     }
 
     private fun ageEffects(dt: Float) {
-        for (t in tracers) t.life -= dt
-        tracers.removeAll { it.life <= 0f }
+        for (t in tracers) t.age += dt
+        tracers.removeAll { it.done }
         for (s in splats) s.life -= dt * 0.25f
         splats.removeAll { it.life <= 0f }
         for (b in blasts) b.age += dt
@@ -991,10 +1003,13 @@ class World(private val rnd: Random = Random.Default) {
                 }
                 second?.let { hurt(it, dmg * 0.7f); endX = it.x; endY = it.y }
             }
-            tracers.add(Tracer(h.x, h.y, endX, endY, 0.12f))
+            tracers.add(Tracer(h.x, h.y, endX, endY, rnd.nextInt(3) == 0, hit = true))
         } else {
             val miss = (rnd.nextFloat() - 0.5f) * 20f
-            tracers.add(Tracer(h.x, h.y, z.x + miss, z.y - miss, 0.12f))
+            // A miss flies on past the zombie
+            val dx = z.x + miss - h.x; val dy = z.y - miss - h.y
+            val len = sqrt(dx * dx + dy * dy).coerceAtLeast(1f)
+            tracers.add(Tracer(h.x, h.y, h.x + dx / len * (len + 40f), h.y + dy / len * (len + 40f), rnd.nextInt(3) == 0, hit = false))
         }
     }
 
