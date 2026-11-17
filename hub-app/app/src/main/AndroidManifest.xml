@@ -24,6 +24,8 @@
 
     <!-- Lets "Clear all" / swipe-up close apps in the background -->
     <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
+    <!-- Only used when you tap "Match wallpaper to NEXUS" -->
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
 
     <application
         android:name=".App"
@@ -51,7 +53,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
-        <!-- NEXUS Open Apps (the square button screen) -->
+        <!-- NEXUS Recent Apps (the square button screen) -->
         <activity
             android:name=".SwitcherActivity"
             android:exported="false"
@@ -67,7 +69,7 @@
         <service
             android:name=".NexusAccessibility"
             android:exported="true"
-            android:label="NEXUS Open Apps"
+            android:label="NEXUS Recent Apps"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />

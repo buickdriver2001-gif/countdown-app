@@ -27,7 +27,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/** NEXUS Open Apps: swipe through cards of recent apps (their last screen), tap to jump back in. */
+/** NEXUS Recent Apps: swipe through cards of recent apps (their last screen), tap to jump back in. */
 class SwitcherActivity : Activity() {
     companion object {
         /** Start options with a plain colour splash (no app icon) and no opening animation. */
@@ -184,7 +184,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         text.textAlign = Paint.Align.CENTER
         text.textSize = 20 * d; text.letterSpacing = 0.4f
         text.color = Color.argb((255 * enter).toInt(), 235, 242, 255)
-        c.drawText("OPEN APPS", w / 2, 64 * d, text)
+        c.drawText("RECENT APPS", w / 2, 64 * d, text)
         fill.shader = LinearGradient(w * 0.3f, 0f, w * 0.7f, 0f, intArrayOf(Color.TRANSPARENT, Color.argb(180, 130, 180, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
         c.drawRect(w * 0.3f, 76 * d, w * 0.7f, 77.2f * d, fill); fill.shader = null
 
@@ -192,11 +192,11 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         if (live.isEmpty()) {
             val on = Recents.serviceOn(a)
             text.textSize = 16 * d; text.letterSpacing = 0.05f; text.color = Color.argb(220, 200, 220, 250)
-            c.drawText(if (on) "No open apps yet" else "The NEXUS helper is off", w / 2, h * 0.36f, text)
+            c.drawText(if (on) "No recent apps yet" else "The NEXUS helper is off", w / 2, h * 0.36f, text)
             text.textSize = 12.5f * d; text.color = Color.argb(170, 170, 195, 235)
             val lines = if (on) listOf("Open a few apps for a few seconds each,", "then come back here.")
                 else listOf("NEXUS needs its helper switched on to see", "which apps you've used.", "",
-                    "1. Tap TURN ON HELPER below.", "2. Choose NEXUS Open Apps and switch it on.",
+                    "1. Tap TURN ON HELPER below.", "2. Choose NEXUS Recent Apps and switch it on.",
                     "3. If it says \"Restricted setting\", tap the second button,", "    then ⋮ (top right) → Allow restricted settings,", "    and switch the helper on again.")
             lines.forEachIndexed { i, l -> c.drawText(l, w / 2, h * 0.36f + (30 + i * 20) * d, text) }
             if (!on) {

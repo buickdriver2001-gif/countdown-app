@@ -14,7 +14,7 @@ import android.widget.TextView
 
 /**
  * First-run guide (shown once; replay it from ⚙ → Tutorial). Explains NEXUS, sets it as Home,
- * turns on Open Apps, and explains how to go back to the phone's original launcher.
+ * turns on Recent Apps, and explains how to go back to the phone's original launcher.
  */
 @SuppressLint("ViewConstructor")
 class TutorialView(private val a: Activity, private val sfx: Sfx, private val actions: Actions) : FrameLayout(a) {
@@ -39,8 +39,8 @@ class TutorialView(private val a: Activity, private val sfx: Sfx, private val ac
         Page("04", "Make NEXUS your home",
             "So pressing Home takes you to NEXUS:\n\n1. Tap the button below.\n2. Choose NEXUS as your Home app.\n\nNEXUS stays your home until you close it (see step 06).",
             listOf("Set NEXUS as Home" to { actions.setHome() })),
-        Page("05", "Open apps (square button)",
-            "See the apps you have open as NEXUS cards showing their last screen. Press the square button, or tap RECENT in NEXUS.\n\nTo turn it on:\n1. Tap Turn on helper, choose NEXUS Open Apps and switch it on.\n2. If Android says \"Restricted setting\", tap Allow restricted settings below, then tap ⋮ at the top right and choose Allow restricted settings. (Newer Android asks this for apps installed from a download.)\n3. Tap Turn on helper again and switch it on.\n\nNEXUS only uses this to remember each app's last screen and to show its own Open Apps screen. Pictures stay on your phone and are never sent anywhere. You can skip this step; everything else works without it.",
+        Page("05", "Recent apps (square button)",
+            "See your recent apps as NEXUS cards showing their last screen. Press the square button, or tap RECENT in NEXUS.\n\nTo turn it on:\n1. Tap Turn on helper, choose NEXUS Recent Apps and switch it on.\n2. If Android says \"Restricted setting\", tap Allow restricted settings below, then tap ⋮ at the top right and choose Allow restricted settings. (Newer Android asks this for apps installed from a download.)\n3. Tap Turn on helper again and switch it on.\n\nNEXUS only uses this to remember each app's last screen and to show its own Recent Apps screen. Pictures stay on your phone and are never sent anywhere. You can skip this step; everything else works without it.\n\nTip: Android shows its own screen for a split second when you press the square button. Gear icon → Match wallpaper to NEXUS makes that moment look like NEXUS too.",
             listOf("Turn on helper" to { actions.accessibility() }, "Allow restricted settings" to { actions.appInfo() })),
         Page("06", "Closing NEXUS & going back",
             "• To use your normal home screen for a while: press Back in NEXUS and choose Close NEXUS. Open NEXUS from its icon to make it your home again.\n\n• To stop using NEXUS completely: Settings → Apps → Default apps → Home app, then choose your original launcher (the one your phone came with). Names can vary slightly by phone; searching Settings for \"Home app\" also works.",

@@ -260,22 +260,22 @@ class MainActivity : Activity() {
         try { startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (_: Exception) {}
     }
 
-    /** Settings → Open apps: status, setup steps, and an on/off switch for the square button. */
+    /** Settings → Recent apps: status, setup steps, and an on/off switch for the square button. */
     private fun openAppsSettings() {
         val on = Recents.serviceOn(this)
         val replace = prefs.getBoolean("replaceRecents", true)
-        val status = if (on) "Helper is ON. Open apps are being remembered." else "Helper is OFF. Follow the two steps below to turn it on."
+        val status = if (on) "Helper is ON. Recent apps are being remembered." else "Helper is OFF. Follow the two steps below to turn it on."
         val opts = ArrayList<NexusUi.Option>()
         if (!on) {
             opts.add(NexusUi.Option("1.  Turn on helper", primary = true) { openAccessibility() })
             opts.add(NexusUi.Option("2.  Allow restricted settings (if asked)") { openAppInfo() })
         } else opts.add(NexusUi.Option("Turn helper off") { openAccessibility() })
-        opts.add(NexusUi.Option("Square button opens NEXUS Open Apps:  " + (if (replace) "ON" else "OFF")) {
+        opts.add(NexusUi.Option("Square button opens NEXUS Recent Apps:  " + (if (replace) "ON" else "OFF")) {
             prefs.edit().putBoolean("replaceRecents", !replace).apply()
             openAppsSettings()
         })
-        opts.add(NexusUi.Option("Show Open Apps now") { openSwitcher() })
-        NexusUi.panel(this, "Open apps", "$status\n\nStep 1: in Accessibility, choose NEXUS Open Apps and switch it on.\nStep 2: if Android says \"Restricted setting\", open App info, tap ⋮ at the top right and choose Allow restricted settings. Then do step 1 again.\n\nPictures of your apps stay on this phone and are never sent anywhere.", opts, cancel = "Done")
+        opts.add(NexusUi.Option("Show Recent Apps now") { openSwitcher() })
+        NexusUi.panel(this, "Recent apps", "$status\n\nStep 1: in Accessibility, choose NEXUS Recent Apps and switch it on.\nStep 2: if Android says \"Restricted setting\", open App info, tap ⋮ at the top right and choose Allow restricted settings. Then do step 1 again.\n\nPictures of your apps stay on this phone and are never sent anywhere.", opts, cancel = "Done")
     }
 
     /** Closing NEXUS on purpose: NEXUS mode off until it's opened again from its icon. */
@@ -312,6 +312,43 @@ class MainActivity : Activity() {
             homes.map { h -> NexusUi.Option((if (h.second == current) "✓  " else "     ") + h.first, primary = h.second == current) { HomeMode.setNormalHome(this, h.second) } })
     }
 
+    /**
+     * Sets the phone's home-screen wallpaper to NEXUS's deep blue, so the split second Android shows
+     * its own screens (like recent apps) looks like NEXUS instead of the old home screen.
+     */
+    private fun askWallpaper() {
+        NexusUi.panel(this, "Match wallpaper to NEXUS?",
+            "Your phone briefly shows its wallpaper when Android opens its own screens (like the square button). " +
+                "This sets your home screen wallpaper to NEXUS's deep blue so those moments look like NEXUS too.\n\n" +
+                "Your lock screen isn't changed. You can pick a different wallpaper any time in your phone's wallpaper settings.",
+            listOf(NexusUi.Option("Set NEXUS wallpaper", primary = true) { setNexusWallpaper() }), cancel = "Not now")
+    }
+
+    private fun setNexusWallpaper() {
+        val dm = resources.displayMetrics
+        val w = dm.widthPixels.coerceAtLeast(720); val h = dm.heightPixels.coerceAtLeast(1280)
+        Thread {
+            val ok = try {
+                val b = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+                val c = android.graphics.Canvas(b)
+                val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+                p.shader = android.graphics.LinearGradient(0f, 0f, 0f, h.toFloat(), intArrayOf(Color.rgb(3, 6, 18), Color.rgb(8, 16, 42), Color.rgb(2, 4, 12)), null, android.graphics.Shader.TileMode.CLAMP)
+                c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), p); p.shader = null
+                val step = 40 * dm.density
+                p.strokeWidth = 1f; p.color = Color.argb(14, 140, 190, 255)
+                var x = 0f; while (x < w) { c.drawLine(x, 0f, x, h.toFloat(), p); x += step }
+                var y = 0f; while (y < h) { c.drawLine(0f, y, w.toFloat(), y, p); y += step }
+                p.shader = android.graphics.RadialGradient(w / 2f, h * 0.45f, w * 0.9f, intArrayOf(Color.argb(70, 40, 90, 220), Color.TRANSPARENT), null, android.graphics.Shader.TileMode.CLAMP)
+                c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), p)
+                val wm = android.app.WallpaperManager.getInstance(this)
+                if (android.os.Build.VERSION.SDK_INT >= 24) wm.setBitmap(b, null, true, android.app.WallpaperManager.FLAG_SYSTEM) else wm.setBitmap(b)
+                b.recycle()
+                true
+            } catch (_: Exception) { false }
+            runOnUiThread { Toast.makeText(this, if (ok) "Wallpaper set" else "Couldn't set the wallpaper", Toast.LENGTH_SHORT).show() }
+        }.start()
+    }
+
     /** The gear: NEXUS settings. */
     private fun homeSettings() {
         val isHome = HomeMode.isDefault(this)
@@ -320,11 +357,12 @@ class MainActivity : Activity() {
             NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
             NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
             NexusUi.Option("Choose my normal home screen") { chooseNormalHome() },
-            NexusUi.Option("Open apps (square button)") { openAppsSettings() },
+            NexusUi.Option("Recent apps (square button)") { openAppsSettings() },
+            NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
             NexusUi.Option("Tutorial") { showTutorial() },
             NexusUi.Option("How it works") {
                 NexusUi.panel(this, "How it works",
-                    "• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on.\n• Close NEXUS (Back, or Close NEXUS here) and Home goes to your normal home screen.\n• Open NEXUS from its icon to make it your home again.\n• Swipe up or tap ALL APPS to see every app. Hold an app in the list to move it.\n• Tap RECENT (or press the square button, once the helper is on) for your open apps.\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.",
+                    "• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on.\n• Close NEXUS (Back, or Close NEXUS here) and Home goes to your normal home screen.\n• Open NEXUS from its icon to make it your home again.\n• Swipe up or tap ALL APPS to see every app. Hold an app in the list to move it.\n• Tap RECENT (or press the square button, once the helper is on) for your recent apps.\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.",
                     emptyList(), cancel = "OK")
             },
             NexusUi.Option("Close NEXUS", danger = true) { askClose() }

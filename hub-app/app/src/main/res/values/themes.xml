@@ -9,7 +9,7 @@
         <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
         <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
     </style>
-    <!-- Open Apps: deep blue from the very first frame, no opening animation -->
+    <!-- Recent Apps: deep blue from the very first frame, no opening animation -->
     <style name="SwitcherTheme" parent="AppTheme">
         <item name="android:windowBackground">@drawable/switcher_bg</item>
         <item name="android:windowAnimationStyle">@null</item>

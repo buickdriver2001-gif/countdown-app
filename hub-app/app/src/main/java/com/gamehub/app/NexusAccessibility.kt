@@ -18,7 +18,7 @@ import java.io.FileOutputStream
 /**
  * NEXUS's helper service (turned on by the user in Accessibility settings). It:
  *  - keeps a small screenshot of the last screen of each app you use (stored only inside NEXUS)
- *  - notices when the phone's recent-apps screen opens (the square button) and shows NEXUS Open Apps instead
+ *  - notices when the phone's recent-apps screen opens (the square button) and shows NEXUS Recent Apps instead
  */
 class NexusAccessibility : AccessibilityService() {
 
@@ -65,7 +65,7 @@ class NexusAccessibility : AccessibilityService() {
         if (e == null || e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = e.packageName?.toString() ?: return
         val cls = e.className?.toString() ?: ""
-        // The phone's own recent-apps screen opened (square button): swap in NEXUS Open Apps
+        // The phone's own recent-apps screen opened (square button): swap in NEXUS Recent Apps
         // Only the system's dedicated recent-apps screen counts (e.g. ...quickstep.RecentsActivity or
         // ...systemui.recents.RecentsActivity). Never a launcher's home screen, never another app.
         val systemScreen = pkg in homePkgs || pkg == "com.android.systemui"
