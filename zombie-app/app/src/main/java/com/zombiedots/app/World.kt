@@ -112,7 +112,7 @@ class World(private val rnd: Random = Random.Default) {
         const val ROUND_BREAK = 8f
         const val HEALTH_COOLDOWN = 30f
         const val CURE_COOLDOWN = 45f
-        const val MAX_HEALTH_LEVEL = 10
+        const val MAX_HEALTH_LEVEL = Int.MAX_VALUE
         const val ROUND_MAX = 90f
         const val AIRSTRIKE_COOLDOWN = 20f
         const val BOMB_RADIUS = 24f
@@ -303,11 +303,12 @@ class World(private val rnd: Random = Random.Default) {
         growRound()
         val edges = 1 + rnd.nextInt(if (wave > 3) 3 else 2)
         waveEdges = (0 until 4).shuffled(rnd).take(edges)
-        behemothsPending = when {
+        val alive = zombies.count { it.type == ZType.BEHEMOTH }
+        behemothsPending = (when {
             wave >= 13 -> 2
             wave >= 6 -> 1
             else -> 0
-        }
+        }).coerceAtMost(max(0, 2 - alive)) // never more than 2 roaming at once
         spawnQueue = waveSize + behemothsPending
         spawnTimer = 0f
         waveAge = 0f
@@ -330,10 +331,13 @@ class World(private val rnd: Random = Random.Default) {
 
     private fun zombieBaseSpeed() = speedBase
 
-    /** Black Ops-style zombie toughness: +30% per round up to round 9, then x1.1 per round. */
+    /**
+     * Zombie toughness: +30% per round up to round 9, then it keeps rising with diminishing
+     * returns and levels off, so a well-played squad can keep going indefinitely.
+     */
     fun zombieHp(): Float =
         if (wave <= 9) 1f + 0.3f * (wave - 1)
-        else (1f + 0.3f * 8) * Math.pow(1.1, (wave - 9).toDouble()).toFloat()
+        else 3.4f + 2.6f * (1f - Math.pow(0.9, (wave - 9).toDouble()).toFloat())
 
     /** Deals damage; returns true if the zombie went down. */
     private fun hurt(z: Zombie, dmg: Float): Boolean {
@@ -404,10 +408,14 @@ class World(private val rnd: Random = Random.Default) {
     var healthLevel = 0
     var healthCooldown = 0f
     var cureCooldown = 0f
-    val healthReady get() = healthCooldown <= 0f && healthLevel < MAX_HEALTH_LEVEL
+    val healthReady get() = healthCooldown <= 0f
     val cureReady get() = cureCooldown <= 0f
-    /** Each health level makes bites infect ~8% less. */
-    val biteResist get() = Math.pow(0.92, healthLevel.toDouble()).toFloat()
+    /** Each health level makes bites infect less (diminishing, never fully immune). */
+    val biteResist get() = 0.3f + 0.7f * Math.pow(0.9, healthLevel.toDouble()).toFloat()
+    /** And makes hunters hit harder, up to +50%. */
+    val damageBonus get() = 1f + 0.5f * (1f - Math.pow(0.9, healthLevel.toDouble()).toFloat())
+    /** Each health level also makes survivors faster, up to about +45%. */
+    val speedBonus get() = 1f + 0.45f * (1f - Math.pow(0.88, healthLevel.toDouble()).toFloat())
 
     fun upgradeHealth(): Boolean {
         if (phase != Phase.RUNNING || !healthReady) return false
@@ -850,7 +858,7 @@ class World(private val rnd: Random = Random.Default) {
             val ax = gx * urgency + ex * dodgeW + wx * 2.2f
             val ay = gy * urgency + ey * dodgeW + wy * 2.2f
             val al = sqrt(ax * ax + ay * ay)
-            val spd = h.speed * min(1f, al)
+            val spd = h.speed * speedBonus * min(1f, al)
             val wantX = if (al > 0.001f) ax / al * spd else 0f
             val wantY = if (al > 0.001f) ay / al * spd else 0f
             val k = min(1f, dt * 7f)
@@ -883,7 +891,7 @@ class World(private val rnd: Random = Random.Default) {
         val hitChance = (if (h.role == Role.HUNTER) 0.88f else 0.65f) * (if (running) 0.65f else 1f)
         if (rnd.nextFloat() < hitChance) {
             // Hunters hit hard, with the odd critical hit
-            val dmg = (if (h.role == Role.HUNTER) 1f else 0.7f) * (if (rnd.nextFloat() < 0.15f) 2f else 1f)
+            val dmg = (if (h.role == Role.HUNTER) 1f else 0.7f) * (if (rnd.nextFloat() < 0.15f) 2f else 1f) * damageBonus
             val killed = hurt(z, dmg)
             var endX = z.x
             var endY = z.y

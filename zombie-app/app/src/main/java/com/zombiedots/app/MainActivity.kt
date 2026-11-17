@@ -341,7 +341,6 @@ class MainActivity : Activity(), GameView.Listener {
             else -> "✈ PLANE\nReady"
         }
         healthBtn.text = when {
-            w.healthLevel >= World.MAX_HEALTH_LEVEL -> "❤ HEALTH\nMAX"
             !w.healthReady -> "❤ Lv ${w.healthLevel}\n${w.healthCooldown.toInt() + 1}s"
             else -> "❤ HEALTH\n+1 · Lv ${w.healthLevel}"
         }
@@ -372,9 +371,8 @@ class MainActivity : Activity(), GameView.Listener {
         val w = game.world
         if (w.phase != Phase.RUNNING) { onAnnounce("Tap the map to put your team down first."); return }
         when {
-            w.healthLevel >= World.MAX_HEALTH_LEVEL -> onAnnounce("Health is already at the top level.")
             !w.healthReady -> onAnnounce("Next health upgrade in ${w.healthCooldown.toInt() + 1} seconds.")
-            w.upgradeHealth() -> onAnnounce("Survivors are tougher! Health level ${w.healthLevel}.")
+            w.upgradeHealth() -> onAnnounce("Survivors are tougher and faster! Health level ${w.healthLevel}.")
         }
         updateHud()
     }
@@ -471,10 +469,10 @@ class MainActivity : Activity(), GameView.Listener {
         ))
         col.addView(card("🧟  Clear every zombie to finish a round. Each round brings more zombies, and they get tougher."))
         col.addView(card("✈  PLANE: press PLANE, then drag your finger across the map. A plane flies that way and drops bombs. It comes back after 20 seconds."))
-        col.addView(card("❤  HEALTH: makes all your survivors a little tougher, so bites infect them less. Use it again when the timer runs out (up to level 10)."))
+        col.addView(card("❤  HEALTH: makes all your survivors tougher AND faster, so bites infect them less and they can outrun more zombies. Use it again every time the timer runs out. No limit!"))
         col.addView(card("💊  CURE: removes the green infection rings from everyone. Comes back after 45 seconds."))
         col.addView(card("⏩  The 1x button at the top changes the game speed. ❚❚ pauses."))
-        col.addView(card("🏆  How long can your team survive?"))
+        col.addView(card("🏆  There's no last round. Keep upgrading, curing and bombing, and see how far your team can go!"))
         col.addView(menuRow("✔   Got it!", highlight = true) { show(returnTo) })
         return frame
     }
