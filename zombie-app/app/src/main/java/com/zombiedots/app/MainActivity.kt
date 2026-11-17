@@ -188,14 +188,20 @@ class MainActivity : Activity(), GameView.Listener {
             }
         }
 
-    /** Full-screen menu: XMB backdrop with a centred, scrollable column. */
+    /** Full-screen menu: dark backdrop with a centred, scrollable column. */
     private fun panel(opacity: Float = 0.95f): Pair<FrameLayout, LinearLayout> {
         val frame = FrameLayout(this).apply {
             visibility = View.GONE
             isClickable = true
             isFocusable = true
         }
-        frame.addView(XmbBackground(this, opacity))
+        // Plain dark backdrop (the old wavy PS3-style background is gone)
+        frame.addView(View(this).apply {
+            background = android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(Color.argb((opacity * 255).toInt(), 16, 20, 28), Color.argb((opacity * 255).toInt(), 6, 8, 12))
+            )
+        })
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24f), dp(28f), dp(24f), dp(28f))

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- A glowing translucent cube -->
+    <path android:fillColor="#3A7BFF" android:fillAlpha="0.25" android:pathData="M54,22 L84,38 L84,70 L54,86 L24,70 L24,38 Z" />
+    <path android:fillColor="#9CC4FF" android:fillAlpha="0.85" android:pathData="M54,22 L84,38 L54,54 L24,38 Z" />
+    <path android:fillColor="#4F8DFF" android:fillAlpha="0.75" android:pathData="M24,38 L54,54 L54,86 L24,70 Z" />
+    <path android:fillColor="#2C5FD6" android:fillAlpha="0.75" android:pathData="M84,38 L54,54 L54,86 L84,70 Z" />
+</vector>
