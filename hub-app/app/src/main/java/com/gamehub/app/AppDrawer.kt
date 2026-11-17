@@ -33,12 +33,15 @@ class AppItem(val label: String, val pkg: String, val isGame: Boolean) { var ico
  */
 @SuppressLint("ViewConstructor")
 class AppDrawer(private val a: Activity, private val sfx: Sfx,
-                private val onOpen: (AppItem) -> Unit, private val onAdd: (AppItem) -> Unit,
+                private val onOpen: (AppItem) -> Unit, private val onAdd: (List<AppItem>) -> Unit,
                 private val inNexus: (String) -> Boolean) : FrameLayout(a) {
 
     private val d = resources.displayMetrics.density
     private var apps: List<AppItem> = emptyList()
     private var addMode = false
+    /** Apps ticked for adding (by package). */
+    private val picked = LinkedHashSet<String>()
+    private val addBar = TextView(a)
     private val grid = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding((14 * d).toInt(), 0, (14 * d).toInt(), (40 * d).toInt()) }
     private val title = TextView(a)
     private val search = EditText(a)
@@ -86,6 +89,24 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         col.addView(ScrollView(a).apply { isVerticalScrollBarEnabled = false; addView(grid) },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         addView(col)
+        // Floating "Add N apps" bar for multi-select
+        addBar.apply {
+            setTextColor(Color.WHITE); textSize = 15f; letterSpacing = 0.2f; typeface = NexusUi.light
+            gravity = Gravity.CENTER
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = 26 * d
+                colors = intArrayOf(Color.rgb(70, 130, 245), Color.rgb(40, 85, 200))
+                setStroke((1 * d).toInt().coerceAtLeast(1), Color.argb(200, 190, 220, 255))
+            }
+            elevation = 8 * d
+            visibility = GONE
+            setOnClickListener {
+                val items = apps.filter { it.pkg in picked }
+                if (items.isEmpty()) return@setOnClickListener
+                sfx.confirm(); onAdd(items); close()
+            }
+        }
+        addView(addBar, LayoutParams((240 * d).toInt(), (52 * d).toInt(), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = (28 * d).toInt() })
     }
 
     /** Reads the phone's apps (in the background; icons too). */
@@ -104,8 +125,10 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         }.start()
     }
 
-    fun open(add: Boolean) {
+    fun open(add: Boolean, preselect: String? = null) {
         addMode = add
+        picked.clear(); preselect?.let { picked.add(it) }
+        updateBar()
         title.text = if (add) "ADD TO NEXUS" else "ALL APPS"
         search.setText("")
         fill()
@@ -123,12 +146,23 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         animate().alpha(0f).translationY(60 * d).setDuration(200).withEndAction { visibility = GONE }.start()
     }
 
+    private fun updateBar() {
+        val n = picked.size
+        addBar.text = if (n == 1) "ADD 1 APP" else "ADD $n APPS"
+        addBar.visibility = if (addMode && n > 0) VISIBLE else GONE
+        if (addMode) title.text = if (n > 0) "ADD TO NEXUS · $n SELECTED" else "ADD TO NEXUS"
+    }
+
     private fun fill() {
         grid.removeAllViews()
         val q = search.text.toString().trim().lowercase()
         val shown = apps.filter { q.isEmpty() || it.label.lowercase().contains(q) }
         if (apps.isEmpty()) { grid.addView(section("LOADING…")); return }
         if (shown.isEmpty()) { grid.addView(section("NO MATCHES")); return }
+        if (addMode) grid.addView(TextView(a).apply {
+            text = "Tap apps to select them, then tap Add."; setTextColor(NexusUi.MUTED); textSize = 12f; typeface = NexusUi.light
+            setPadding((6 * d).toInt(), (6 * d).toInt(), 0, 0)
+        })
         val games = shown.filter { it.isGame }
         if (games.isNotEmpty() && q.isEmpty()) { grid.addView(section("GAMES")); addRows(games) }
         grid.addView(section(if (q.isEmpty()) "ALL APPS" else "RESULTS"))
@@ -156,21 +190,27 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
 
     private fun cell(item: AppItem): View {
         val added = inNexus(item.pkg)
+        val sel = item.pkg in picked
         val box = LinearLayout(a).apply {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
             setPadding((4 * d).toInt(), (10 * d).toInt(), (4 * d).toInt(), (10 * d).toInt())
             isClickable = true
-            background = android.graphics.drawable.StateListDrawable().apply {
+            background = if (sel) NexusUi.glass(d, 8f, strong = true) else android.graphics.drawable.StateListDrawable().apply {
                 addState(intArrayOf(android.R.attr.state_pressed), NexusUi.glass(d, 8f, strong = true))
             }
         }
         val iconFrame = FrameLayout(a)
         iconFrame.addView(ImageView(a).apply { setImageDrawable(item.icon); alpha = if (addMode && added) 0.45f else 1f },
             FrameLayout.LayoutParams((52 * d).toInt(), (52 * d).toInt()))
-        if (addMode && added) iconFrame.addView(TextView(a).apply {
-            text = "✓"; setTextColor(Color.WHITE); textSize = 12f; gravity = Gravity.CENTER
-            background = android.graphics.drawable.GradientDrawable().apply { shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(Color.rgb(60, 120, 230)) }
-        }, FrameLayout.LayoutParams((20 * d).toInt(), (20 * d).toInt(), Gravity.END or Gravity.TOP))
+        if (addMode) iconFrame.addView(TextView(a).apply {
+            // Tick circle: filled when picked, grey when already in NEXUS, empty outline otherwise
+            text = if (sel || added) "✓" else ""; setTextColor(Color.WHITE); textSize = 12f; gravity = Gravity.CENTER
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(when { added -> Color.rgb(70, 80, 100); sel -> Color.rgb(60, 120, 230); else -> Color.argb(120, 0, 0, 0) })
+                setStroke((1.5f * d).toInt(), Color.argb(220, 200, 225, 255))
+            }
+        }, FrameLayout.LayoutParams((22 * d).toInt(), (22 * d).toInt(), Gravity.END or Gravity.TOP))
         box.addView(iconFrame, LinearLayout.LayoutParams((52 * d).toInt(), (52 * d).toInt()))
         box.addView(TextView(a).apply {
             text = item.label; setTextColor(NexusUi.TEXT); textSize = 11.5f; typeface = NexusUi.light
@@ -178,14 +218,17 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         })
         box.setOnClickListener {
             if (addMode) {
-                if (added) { sfx.tick(); return@setOnClickListener }
-                sfx.confirm(); onAdd(item); close()
+                if (added) { android.widget.Toast.makeText(a, "${item.label} is already in NEXUS", android.widget.Toast.LENGTH_SHORT).show(); return@setOnClickListener }
+                sfx.tick()
+                if (!picked.add(item.pkg)) picked.remove(item.pkg)
+                updateBar(); fill()
             } else { sfx.confirm(); onOpen(item) }
         }
         box.setOnLongClickListener {
             sfx.tick()
             val opts = ArrayList<NexusUi.Option>()
-            if (!added) opts.add(NexusUi.Option("Add to NEXUS", primary = true) { onAdd(item); fill() })
+            if (!added) opts.add(NexusUi.Option("Add to NEXUS", primary = true) { onAdd(listOf(item)); fill() })
+            if (!added && !addMode) opts.add(NexusUi.Option("Select multiple to add") { open(add = true, preselect = item.pkg) })
             opts.add(NexusUi.Option("Open") { onOpen(item) })
             opts.add(NexusUi.Option("App info") {
                 try { a.startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${item.pkg}"))) } catch (_: Exception) {}

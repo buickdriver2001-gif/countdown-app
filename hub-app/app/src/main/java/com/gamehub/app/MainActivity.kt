@@ -95,12 +95,15 @@ class MainActivity : Activity() {
         hub.games = list
     }
 
-    /** Adds an app from the drawer to the NEXUS list. */
-    private fun addApp(item: AppItem) {
-        if (item.pkg in hub.games.map { it.pkg }) return
-        prefs.edit().putString("custom", (customPkgs() + item.pkg).joinToString(",")).apply()
+    /** Adds one or more apps from the drawer to the NEXUS list. */
+    private fun addApps(items: List<AppItem>) {
+        val have = hub.games.map { it.pkg }.toSet()
+        val fresh = items.filter { it.pkg !in have }
+        if (fresh.isEmpty()) return
+        prefs.edit().putString("custom", (customPkgs() + fresh.map { it.pkg }).joinToString(",")).apply()
         refresh()
-        Toast.makeText(this, "${item.label} added to NEXUS", Toast.LENGTH_SHORT).show()
+        val msg = if (fresh.size == 1) "${fresh[0].label} added to NEXUS" else "${fresh.size} apps added to NEXUS"
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
 
     /** Opens any app from the drawer, with the same smooth fade. */
@@ -128,7 +131,7 @@ class MainActivity : Activity() {
         }
         hub = HubView(this, builtIn, { open(it) }, { drawer.open(add = true) }, { appOptions(it) }, sfx, { homeSettings() },
             { from, to -> moveApp(from, to) }, { drawer.open(add = false) })
-        drawer = AppDrawer(this, sfx, { openPkg(it.pkg) }, { addApp(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
+        drawer = AppDrawer(this, sfx, { openPkg(it.pkg) }, { addApps(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
         val root = android.widget.FrameLayout(this)
         root.addView(hub)
         root.addView(drawer)
