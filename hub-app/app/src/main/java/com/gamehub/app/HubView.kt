@@ -34,7 +34,7 @@ class GameEntry(val name: String, val pkg: String, val tagline: String, val acce
  */
 @SuppressLint("ViewConstructor")
 class HubView(context: Context, var games: List<GameEntry>, private val onPick: (GameEntry) -> Unit,
-              private val onAdd: () -> Unit, private val onRemove: (GameEntry) -> Unit) : View(context) {
+              private val onAdd: () -> Unit, private val onRemove: (GameEntry) -> Unit, private val sfx: Sfx) : View(context) {
 
     private val d = resources.displayMetrics.density
     private val rnd = Random(3)
@@ -60,6 +60,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private var selected = -1
     private var launchFlash = 0f
     private var pending: GameEntry? = null
+    /** Fade up from black when coming back from an app. */
+    private var enterFade = 0f
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
@@ -121,10 +123,22 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
         if (launchFlash > 0f) {
             launchFlash -= dt
-            val k = (launchFlash / 0.45f).coerceIn(0f, 1f)
-            fill.color = Color.argb(((1f - k) * 255).toInt().coerceIn(0, 255), 210, 230, 255)
+            val k = 1f - (launchFlash / LAUNCH_LEN).coerceIn(0f, 1f)
+            // A soft glow blooms out of the chosen row, then everything sinks into deep blue-black
+            val row = rows.getOrNull(selected)
+            if (row != null) {
+                val rad = max(1f, w * (0.2f + 1.4f * k))
+                fill.shader = RadialGradient(row.centerX(), row.centerY(), rad, intArrayOf(Color.argb((200 * (1f - k * 0.6f)).toInt(), 170, 210, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+                c.drawRect(0f, 0f, w, h, fill); fill.shader = null
+            }
+            fill.color = Color.argb((255 * (k * k)).toInt().coerceIn(0, 255), 2, 4, 14)
             c.drawRect(0f, 0f, w, h, fill)
             if (launchFlash <= 0f) { pending?.let(onPick); pending = null }
+        }
+        if (enterFade > 0f) {
+            enterFade -= dt
+            fill.color = Color.argb((255 * (enterFade / 0.7f).coerceIn(0f, 1f)).toInt(), 2, 4, 14)
+            c.drawRect(0f, 0f, w, h, fill)
         }
         // Fade in from black at start-up
         if (intro < 1f) { fill.color = Color.argb(((1f - intro) * 255).toInt(), 0, 0, 0); c.drawRect(0f, 0f, w, h, fill) }
@@ -440,19 +454,21 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (booting) { booting = false; t = 0f; return true }
+                if (booting) { booting = false; t = 0f; sfx.tick(); return true }
                 downRow = rows.indexOfFirst { it.contains(e.x, e.y) }
                 longFired = false
-                if (downRow in games.indices) { selected = downRow; postDelayed(longPress, 600) }
+                if (downRow >= 0) { if (downRow != selected) sfx.tick(); selected = downRow }
+                if (downRow in games.indices) postDelayed(longPress, 600)
             }
             MotionEvent.ACTION_UP -> {
                 removeCallbacks(longPress)
                 val r = rows.indexOfFirst { it.contains(e.x, e.y) }
                 if (!longFired && r >= 0 && r == downRow && launchFlash <= 0f && t > 1.5f) {
+                    sfx.confirm()
                     if (r == games.size) onAdd()
                     else {
                         pending = games[r]
-                        launchFlash = 0.45f
+                        launchFlash = LAUNCH_LEN
                     }
                     performClick()
                 }
@@ -466,5 +482,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     override fun performClick(): Boolean { super.performClick(); return true }
 
     /** Called when the screen comes back (e.g. after closing a game). */
-    fun resumed() { lastNs = 0L; launchFlash = 0f; pending = null }
+    fun resumed(fromApp: Boolean) {
+        lastNs = 0L; launchFlash = 0f; pending = null
+        if (fromApp) enterFade = 0.7f
+    }
+
+    private val LAUNCH_LEN = 0.6f
 }

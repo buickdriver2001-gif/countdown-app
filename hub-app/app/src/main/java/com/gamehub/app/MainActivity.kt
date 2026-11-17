@@ -22,6 +22,8 @@ class MainActivity : Activity() {
         GameEntry("SynthPad", "com.synthpad.app", "Make music with synths", Color.rgb(120, 220, 255), 2)
     )
     private lateinit var hub: HubView
+    private val sfx by lazy { Sfx() }
+    private var leftForApp = false
     private val prefs by lazy { getSharedPreferences("hub", MODE_PRIVATE) }
 
     /** Games the player added from their phone, in the order they were added. */
@@ -92,12 +94,14 @@ class MainActivity : Activity() {
             finish()
             return
         }
-        hub = HubView(this, builtIn, { open(it) }, { pickGame() }, { removeGame(it) })
+        hub = HubView(this, builtIn, { open(it) }, { pickGame() }, { removeGame(it) }, sfx)
         setContentView(hub)
         // Full screen: no status bar, no navigation buttons (swipe from an edge to peek at them)
         if (android.os.Build.VERSION.SDK_INT >= 28) window.attributes.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         window.decorView.post { hideBars() }
-        if (savedInstanceState == null) Thread { playChime() }.start()
+        val fromApp = intent?.getBooleanExtra("fromApp", false) == true
+        if (fromApp) { hub.booting = false; leftForApp = true }
+        else if (savedInstanceState == null) Thread { playChime() }.start()
     }
 
     private fun hideBars() {
@@ -116,16 +120,29 @@ class MainActivity : Activity() {
         if (hasFocus) hideBars()
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        sfx.release()
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        leftForApp = true // brought back from one of the apps
+    }
+
     override fun onResume() {
         super.onResume()
-        if (::hub.isInitialized) { refresh(); hub.resumed() }
+        if (::hub.isInitialized) { refresh(); hub.resumed(leftForApp) }
+        leftForApp = false
         hideBars()
     }
 
     private fun open(g: GameEntry) {
         val launch = packageManager.getLaunchIntentForPackage(g.pkg)
         if (launch != null) {
-            startActivity(launch)
+            // Cross-fade into the app
+            leftForApp = true
+            startActivity(launch, android.app.ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out).toBundle())
             return
         }
         // Not installed yet: open its download page

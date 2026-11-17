@@ -31,7 +31,9 @@ object HubLink {
             return
         }
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        a.startActivity(i)
+        i.putExtra("fromApp", true)
+        // Cross-fade back into NEXUS
+        a.startActivity(i, android.app.ActivityOptions.makeCustomAnimation(a, android.R.anim.fade_in, android.R.anim.fade_out).toBundle())
         // Close this app for good: off the recent apps list, then stop it entirely
         a.finishAndRemoveTask()
         Handler(Looper.getMainLooper()).postDelayed({ android.os.Process.killProcess(android.os.Process.myPid()) }, 400)
