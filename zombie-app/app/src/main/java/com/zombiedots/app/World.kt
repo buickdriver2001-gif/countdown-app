@@ -48,11 +48,11 @@ class Human(var x: Float, var y: Float, var role: Role) {
 
 /** What the squad is currently trying to do. */
 enum class Tactic(val label: String) {
-    SQUAD_UP("SQUADDING UP"),
-    HOLD("HOLDING THE LINE"),
-    ADVANCE("ADVANCING"),
-    RUN("RUNNING"),
-    SPLIT("SPLITTING UP")
+    SQUAD_UP("Grouping up"),
+    HOLD("Standing their ground"),
+    ADVANCE("Attacking!"),
+    RUN("Running away!"),
+    SPLIT("Spreading out")
 }
 
 class Tracer(val x1: Float, val y1: Float, val x2: Float, val y2: Float, var life: Float)
