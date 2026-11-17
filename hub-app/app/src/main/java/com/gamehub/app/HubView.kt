@@ -111,17 +111,18 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         }
         t += dt
         yaw += dt * 0.045f
+        adaptQuality(dt)
         val w = width.toFloat(); val h = height.toFloat()
         val intro = min(1f, t / 2.5f)
 
         // Deep blue-black void with a soft horizon glow (drawn once, then reused)
         c.drawBitmap(backdrop(), 0f, 0f, null)
 
-        drawGrid(c, intro)
-        drawOrbit(c, intro)
+        if (quality >= 2) drawGrid(c, intro)
+        if (quality >= 1) drawOrbit(c, intro)
         drawTowers(c, intro)
         drawMotes(c, dt, intro)
-        drawStreaks(c, dt, intro)
+        if (quality >= 1) drawStreaks(c, dt, intro)
         drawMenu(c, intro, dt)
 
         if (launchFlash > 0f) {
@@ -236,6 +237,24 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         while (e < edges.size) { c.drawLine(bx[edges[e]], by[edges[e]], bx[edges[e + 1]], by[edges[e + 1]], line); e += 2 }
     }
 
+    /**
+     * Detail level for the background: 2 = everything, 1 = no grid floor, 0 = also no far towers / extras.
+     * If the phone starts dropping frames, detail is lowered so taps and transitions stay smooth;
+     * when there's room again it comes back.
+     */
+    private var quality = 2
+    private var frameAvg = 1f / 60f
+    private var slowFor = 0f
+    private var fastFor = 0f
+
+    private fun adaptQuality(dt: Float) {
+        if (dt <= 0f || dt > 0.25f) return // ignore pauses (screen off, app switch)
+        frameAvg += (dt - frameAvg) * 0.08f
+        if (frameAvg > 1f / 45f) { slowFor += dt; fastFor = 0f } else if (frameAvg < 1f / 57f) { fastFor += dt; slowFor = 0f } else { slowFor = 0f; fastFor = 0f }
+        if (slowFor > 1.2f && quality > 0) { quality--; slowFor = 0f }
+        if (fastFor > 6f && quality < 2) { quality++; fastFor = 0f }
+    }
+
     private var bgBmp: android.graphics.Bitmap? = null
 
     private fun backdrop(): android.graphics.Bitmap {
@@ -290,6 +309,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         order.sortByDescending { val tw = towers[it]; tw.x * sy + tw.z * cy }
         for (i in order) {
             val tw = towers[i]
+            if (quality == 0 && (tw.x * sy + tw.z * cy) > 9f) continue
             // Glow pooled at the tower's base
             if (project(tw.x, -3.3f, tw.z)) glow(c, px, py, tw.size * width * 0.95f / pz * 1.6f, (90 * fogK(pz)).toInt())
             val bob = sin(t * 0.5f + tw.phase) * 0.15f
@@ -329,6 +349,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
     private val cx = FloatArray(8); private val cyA = FloatArray(8)
     private val faces = arrayOf(intArrayOf(4, 5, 7, 6), intArrayOf(0, 1, 5, 4), intArrayOf(2, 3, 7, 6), intArrayOf(0, 2, 6, 4), intArrayOf(1, 3, 7, 5))
+    private val quadOrder = intArrayOf(0, 1, 2, 0, 2, 3)
     private val edges = intArrayOf(0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7)
 
     /** Adds one glass cube's faces and edges to the batch. Returns its fog amount. */
@@ -351,10 +372,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val twinkle = min(1f, twinkle0 + sweep * 1.2f)
         val base = 26 + (40 * twinkle).toInt()
         if (vtx.size < (vn + 30) * 2) { vtx = vtx.copyOf(vtx.size * 2); vcol = vcol.copyOf(vcol.size * 2) }
-        for ((fi, f) in faces.withIndex()) {
+        for (fi in faces.indices) {
+            val f = faces[fi]
             val top = fi == 0
             val col = Color.argb(((if (top) base + 20 else base) * fog).toInt(), if (top) 120 else 60, if (top) 170 else 115, 255)
-            for (j in intArrayOf(0, 1, 2, 0, 2, 3)) {
+            for (j in quadOrder) {
                 vtx[vn * 2] = cx[f[j]]; vtx[vn * 2 + 1] = cyA[f[j]]; vcol[vn] = col; vn++
             }
         }
@@ -468,7 +490,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     private fun drawMotes(c: Canvas, dt: Float, intro: Float) {
-        for (m in motes) {
+        for (mi in motes.indices) {
+            val m = motes[mi]
+            if (quality == 0 && mi % 2 == 1) continue
             m.y += m.speed * dt
             if (m.y > 7f) { m.y = -4f }
             if (!project(m.x, m.y, m.z)) continue
@@ -597,7 +621,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.textSize = 10.5f * d; text.letterSpacing = 0.12f
         text.color = Color.argb((110 * a).toInt(), 160, 185, 230)
         // ALL APPS button (or swipe up from here)
-        val bob = sin(t * 2f) * 2 * d
         // RECENT (open apps) on the left, ALL APPS on the right
         recentRect.set(w / 2 - 150 * d, h - 54 * d, w / 2 - 8 * d, h - 18 * d)
         fill.color = Color.argb((60 * a).toInt(), 40, 80, 200)
@@ -624,8 +647,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.textAlign = Paint.Align.LEFT; text.textSize = 12.5f * d; text.letterSpacing = 0.25f
         text.color = Color.argb((230 * a).toInt(), 220, 235, 255)
         c.drawText("ALL APPS", allAppsRect.left + 42 * d, allAppsRect.centerY() + 4.5f * d, text)
-        line.color = Color.argb((90 * a).toInt(), 160, 200, 255)
-        c.drawLine(w / 2 - 8 * d, h - 62 * d + bob, w / 2, h - 66 * d + bob, line); c.drawLine(w / 2, h - 66 * d + bob, w / 2 + 8 * d, h - 62 * d + bob, line)
         text.textAlign = Paint.Align.CENTER
     }
 
@@ -829,8 +850,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     dragging = true
                     removeCallbacks(longPress)
                 }
-                // Swipe up from the bottom opens all apps
-                if (!swipedUp && downY > listBottom && downY - e.y > 50 * d) { swipedUp = true; sfx.tick(); onDrawer(); dragging = true }
                 if (dragging && !swipedUp) {
                     var dy = lastY - e.y
                     // Resist past the ends

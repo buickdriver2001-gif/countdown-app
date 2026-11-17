@@ -86,7 +86,8 @@ class SwitcherActivity : Activity() {
 class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View(a) {
     private val d = resources.displayMetrics.density
 
-    private class Card(val pkg: String, val label: String, val icon: Drawable?, val shot: Bitmap?, val used: Long) {
+    private class Card(val pkg: String, val label: String, val icon: Drawable?, var shot: Bitmap?, val used: Long) {
+        var shotFade = 1f
         var lift = 0f      // swipe-up offset (removing)
         var gone = false
     }
@@ -131,21 +132,29 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         return b
     }
 
+    /** Reads the recent apps and their pictures off the main thread, then fades the cards in. */
     fun load() {
         val pm = a.packageManager
+        // Names and icons first (quick), so the screen appears straight away
         val list = ArrayList<Card>()
         for ((pkg, used) in Recents.list(a)) {
             if (pm.getLaunchIntentForPackage(pkg) == null) continue
             val label = try { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { continue }
             val icon = try { pm.getApplicationIcon(pkg) } catch (_: Exception) { null }
-            val f = NexusAccessibility.snapFile(a, pkg)
-            val shot = if (f.exists()) try { BitmapFactory.decodeFile(f.absolutePath) } catch (_: Exception) { null } else null
-            list.add(Card(pkg, label, icon, shot, used))
+            list.add(Card(pkg, label, icon, null, used))
         }
         cards = list
-        // Start on the app you were just in, like the system screen does
         pos = 0f; vel = 0f; enter = 0f
         invalidate()
+        // Then the screenshots, decoded in the background
+        Thread {
+            for (cd in list) {
+                val f = NexusAccessibility.snapFile(a, cd.pkg)
+                if (!f.exists()) continue
+                val b = try { BitmapFactory.decodeFile(f.absolutePath) } catch (_: Exception) { null } ?: continue
+                post { cd.shot = b; cd.shotFade = 0f }
+            }
+        }.start()
     }
 
     private fun ago(ms: Long): String {
@@ -257,7 +266,8 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
             val scale = rr.width() / shot.width
             val src = android.graphics.Rect(0, 0, shot.width, min(shot.height, (rr.height() / scale).toInt()))
             val dst = RectF(rr.left, rr.top, rr.right, rr.top + src.height() * scale)
-            bmpPaint.alpha = (255 * fade).toInt()
+            card.shotFade = min(1f, card.shotFade + 0.12f)
+            bmpPaint.alpha = (255 * fade * card.shotFade).toInt()
             c.drawBitmap(shot, src, dst, bmpPaint)
         } else {
             // No screenshot (secure app, or not seen yet): big icon on glass

@@ -40,6 +40,10 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
     /** Apps ticked for adding (by package). */
     private val picked = LinkedHashSet<String>()
     private val addBar = TextView(a)
+    /** Cells currently on screen, by package (an app can appear twice: Games and All apps). */
+    private val cells = HashMap<String, MutableList<Pair<LinearLayout, TextView?>>>()
+    private var builtKey = ""
+    private var quiet = false
     private val grid = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding((14 * d).toInt(), 0, (14 * d).toInt(), (40 * d).toInt()) }
     private val title = TextView(a)
     private val search = EditText(a)
@@ -82,7 +86,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, af: Int) {}
                 override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
-                override fun afterTextChanged(s: Editable?) { fill() }
+                override fun afterTextChanged(s: Editable?) { if (!quiet) fill() }
             })
         }
         col.addView(search, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -129,17 +133,35 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
 
     fun open(add: Boolean, preselect: String? = null) {
         addMode = add
+        val old = HashSet(picked)
         picked.clear(); preselect?.let { picked.add(it) }
-        updateBar()
         title.text = if (add) "ADD TO NEXUS" else "ALL APPS"
-        search.setText("")
-        fill()
+        updateBar()
+        quiet = true; if (search.text.isNotEmpty()) search.setText(""); quiet = false
+        // Only rebuild the grid if something actually changed; otherwise just update the ticks
+        if (key() != builtKey) fill() else for (pkg in old + picked) refreshCell(pkg)
+        (grid.parent as? ScrollView)?.scrollTo(0, 0)
         isOpen = true
         onVisible(true)
         visibility = VISIBLE
-        alpha = 0f; translationY = 60 * d
-        animate().alpha(1f).translationY(0f).setDuration(260).start()
+        alpha = 0f; translationY = 48 * d
+        animate().alpha(1f).translationY(0f).setDuration(240).setInterpolator(android.view.animation.DecelerateInterpolator(1.6f)).withLayer().start()
         if (apps.isEmpty()) load()
+    }
+
+    private fun key() = "$addMode|${search.text}|${apps.size}|${apps.count { inNexus(it.pkg) }}"
+
+    /** Updates one app's tick and highlight without rebuilding the grid. */
+    private fun refreshCell(pkg: String) {
+        val sel = pkg in picked
+        val added = inNexus(pkg)
+        for ((box, tick) in cells[pkg] ?: return) {
+            box.background = if (sel) NexusUi.glass(d, 8f, strong = true) else android.graphics.drawable.StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_pressed), NexusUi.glass(d, 8f, strong = true))
+            }
+            tick?.text = if (sel || added) "✓" else ""
+            (tick?.background as? android.graphics.drawable.GradientDrawable)?.setColor(when { added -> Color.rgb(70, 80, 100); sel -> Color.rgb(60, 120, 230); else -> Color.argb(120, 0, 0, 0) })
+        }
     }
 
     fun close() {
@@ -147,7 +169,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         isOpen = false
         (a.getSystemService(Activity.INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(search.windowToken, 0)
         onVisible(false)
-        animate().alpha(0f).translationY(60 * d).setDuration(200).withEndAction { visibility = GONE }.start()
+        animate().alpha(0f).translationY(48 * d).setDuration(180).setInterpolator(android.view.animation.AccelerateInterpolator(1.4f)).withLayer().withEndAction { visibility = GONE }.start()
     }
 
     private fun updateBar() {
@@ -159,6 +181,8 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
 
     private fun fill() {
         grid.removeAllViews()
+        cells.clear()
+        builtKey = key()
         val q = search.text.toString().trim().lowercase()
         val shown = apps.filter { q.isEmpty() || it.label.lowercase().contains(q) }
         if (apps.isEmpty()) { grid.addView(section("LOADING…")); return }
@@ -206,7 +230,8 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         val iconFrame = FrameLayout(a)
         iconFrame.addView(ImageView(a).apply { setImageDrawable(item.icon); alpha = if (addMode && added) 0.45f else 1f },
             FrameLayout.LayoutParams((52 * d).toInt(), (52 * d).toInt()))
-        if (addMode) iconFrame.addView(TextView(a).apply {
+        var tickView: TextView? = null
+        if (addMode) iconFrame.addView(TextView(a).also { tickView = it }.apply {
             // Tick circle: filled when picked, grey when already in NEXUS, empty outline otherwise
             text = if (sel || added) "✓" else ""; setTextColor(Color.WHITE); textSize = 12f; gravity = Gravity.CENTER
             background = android.graphics.drawable.GradientDrawable().apply {
@@ -216,6 +241,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
             }
         }, FrameLayout.LayoutParams((22 * d).toInt(), (22 * d).toInt(), Gravity.END or Gravity.TOP))
         box.addView(iconFrame, LinearLayout.LayoutParams((52 * d).toInt(), (52 * d).toInt()))
+        cells.getOrPut(item.pkg) { ArrayList() }.add(box to tickView)
         box.addView(TextView(a).apply {
             text = item.label; setTextColor(NexusUi.TEXT); textSize = 11.5f; typeface = NexusUi.light
             gravity = Gravity.CENTER; maxLines = 2; setPadding(0, (6 * d).toInt(), 0, 0)
@@ -225,7 +251,8 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
                 if (added) { android.widget.Toast.makeText(a, "${item.label} is already in NEXUS", android.widget.Toast.LENGTH_SHORT).show(); return@setOnClickListener }
                 sfx.tick()
                 if (!picked.add(item.pkg)) picked.remove(item.pkg)
-                updateBar(); fill()
+                updateBar(); refreshCell(item.pkg)
+                box.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
             } else { sfx.confirm(); onOpen(item) }
         }
         box.setOnLongClickListener {
