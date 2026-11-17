@@ -439,12 +439,13 @@ class GameView(context: Context, private val listener: Listener) : View(context)
         behemothRim.strokeWidth = 2f * d
         behemothRim.color = Color.argb(200, 255, 80, 70)
         c.drawCircle(zx, zy, r * 0.75f, behemothRim)
-        drawBossBar(c, z, zx, zy, r)
         if (z.armor > 0f) {
             behemothRim.strokeWidth = 4f * d
             behemothRim.color = Color.argb((120 + 135 * (z.armor / z.armorMax).coerceIn(0f, 1f)).toInt(), 201, 209, 220)
             c.drawCircle(zx, zy, r + 3 * d, behemothRim)
         }
+        // Boss bar last, so nothing covers it. Same layout for normal and armored.
+        drawBossBar(c, z, zx, zy, r)
     }
 
     private val bossName = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -458,76 +459,36 @@ class GameView(context: Context, private val listener: Listener) : View(context)
     /** Boss bar that rides above the behemoth (kept on screen near the edges). */
     private fun drawBossBar(c: Canvas, z: Zombie, zx: Float, zy: Float, r: Float) {
         val barW = max(r * 2.4f, 120 * d)
+        val barH = 7 * d
         val left = (zx - barW / 2).coerceIn(6 * d, max(6 * d, width - barW - 6 * d))
         val right = left + barW
-        val barH = 6 * d
-        val armored = z.armorMax > 0f
-        var bottom = zy - r - 12 * d
-        if (bottom - barH - 30 * d < 0f) bottom = zy + r + 26 * d // too close to the top: show it underneath
+        // Above the boss; if that would go off the top, underneath it instead
+        var bottom = zy - r - 14 * d
+        if (bottom - barH - 18 * d < 0f) bottom = zy + r + 14 * d + barH
         bottom = bottom.coerceAtMost(height - 4 * d)
         val top = bottom - barH
+
+        // Name centred over the bar (kept on screen)
+        val armored = z.armorMax > 0f
+        val name = if (armored) "☠ ARMORED BEHEMOTH" else "☠ BEHEMOTH"
         bossName.textSize = 10 * d
-        c.drawText(if (armored) "☠ ARMORED BEHEMOTH" else "☠ BEHEMOTH", left, top - (if (armored) 10 else 4) * d, bossName)
+        val tw = bossName.measureText(name)
+        val nameX = ((left + right) / 2f - tw / 2f).coerceIn(4 * d, max(4 * d, width - tw - 4 * d))
+        c.drawText(name, nameX, top - 5 * d, bossName)
+
+        // One bar: red health; armor shows as a steel layer on the top half while it lasts
         bossRect.set(left, top, right, bottom)
         c.drawRoundRect(bossRect, 3 * d, 3 * d, hpBack)
         val hpFrac = (z.hp / z.maxHp).coerceIn(0f, 1f)
-        bossRect.set(left, top, left + (right - left) * hpFrac, bottom)
+        bossRect.set(left, top, left + barW * hpFrac, bottom)
         c.drawRoundRect(bossRect, 3 * d, 3 * d, hpFill)
+        if (armored && z.armor > 0f) {
+            val armorFrac = (z.armor / z.armorMax).coerceIn(0f, 1f)
+            bossRect.set(left, top, left + barW * armorFrac, top + barH / 2f)
+            c.drawRoundRect(bossRect, 3 * d, 3 * d, armorFill)
+        }
         bossRect.set(left, top, right, bottom)
         c.drawRoundRect(bossRect, 3 * d, 3 * d, bossFrame)
-        if (armored) {
-            val at = top - 6 * d
-            bossRect.set(left, at, right, at + 3.5f * d)
-            c.drawRoundRect(bossRect, 2 * d, 2 * d, hpBack)
-            bossRect.set(left, at, left + (right - left) * (z.armor / z.armorMax).coerceIn(0f, 1f), at + 3.5f * d)
-            c.drawRoundRect(bossRect, 2 * d, 2 * d, armorFill)
-        }
-    }
-
-    /** Muzzle flash, then a bright streak flying to the target, then impact sparks. */
-    private fun drawBullet(c: Canvas, t: Tracer) {
-        val ux = (t.x2 - t.x1) / t.length
-        val uy = (t.y2 - t.y1) / t.length
-        // Muzzle flash (bigger for the shotgun)
-        if (t.age < 0.05f) {
-            val a = 1f - t.age / 0.05f
-            flashPaint.color = Color.argb(((if (t.pellet) 120 else 230) * a).toInt(), 255, 230, 150)
-            c.drawCircle((t.x1 + ux * 5f) * d, (t.y1 + uy * 5f) * d, (if (t.pellet) 5f else 3.2f) * d * (0.6f + 0.4f * a), flashPaint)
-        }
-        if (t.age <= t.travel) {
-            val dist = t.length * (t.age / t.travel)
-            val tail = if (t.pellet) 6f else if (t.tracerRound) 22f else 11f
-            val hx = (t.x1 + ux * dist) * d; val hy = (t.y1 + uy * dist) * d
-            val tx = (t.x1 + ux * max(0f, dist - tail)) * d; val ty = (t.y1 + uy * max(0f, dist - tail)) * d
-            if (t.pellet) {
-                bulletGlow.color = Color.argb(70, 255, 210, 90); bulletGlow.strokeWidth = 3f * d
-                c.drawLine(tx, ty, hx, hy, bulletGlow)
-                bulletPaint.color = Color.parseColor("#FFE066"); bulletPaint.strokeWidth = 1.3f * d
-            } else if (t.tracerRound) {
-                bulletGlow.color = Color.argb(90, 255, 120, 40); bulletGlow.strokeWidth = 5f * d
-                c.drawLine(tx, ty, hx, hy, bulletGlow)
-                bulletPaint.color = Color.parseColor("#FFB15A"); bulletPaint.strokeWidth = 2.2f * d
-            } else {
-                bulletGlow.color = Color.argb(60, 255, 230, 160); bulletGlow.strokeWidth = 3.5f * d
-                c.drawLine(tx, ty, hx, hy, bulletGlow)
-                bulletPaint.color = Color.parseColor("#FFF1C2"); bulletPaint.strokeWidth = 1.5f * d
-            }
-            c.drawLine(tx, ty, hx, hy, bulletPaint)
-            // hot bullet head
-            flashPaint.color = Color.WHITE
-            c.drawCircle(hx, hy, 1.1f * d, flashPaint)
-        } else if (t.hit) {
-            // Impact sparks
-            val p = ((t.age - t.travel) / Tracer.IMPACT_TIME).coerceIn(0f, 1f)
-            val ex = t.x2 * d; val ey = t.y2 * d
-            sparkPaint.color = Color.argb(((1f - p) * 255).toInt(), 255, 200, 110)
-            for (k in 0 until 4) {
-                val ang = kotlin.math.atan2(-uy, -ux) + (k - 1.5f) * 0.6f
-                val r1 = (1.5f + 5f * p) * d; val r2 = (3.5f + 8f * p) * d
-                c.drawLine(ex + kotlin.math.cos(ang) * r1, ey + kotlin.math.sin(ang) * r1,
-                    ex + kotlin.math.cos(ang) * r2, ey + kotlin.math.sin(ang) * r2, sparkPaint)
-            }
-        }
     }
 
     private fun blend(a: Int, b: Int, t: Float): Int {
