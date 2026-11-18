@@ -137,6 +137,7 @@ class LockView(private val a: LockActivity) : View(a) {
     private var bg: Bitmap? = null
 
     fun restart() { t = 0f; lastNs = 0L; reset(); loadFaces(); invalidate() }
+    fun reset() { dragY = 0f; dragging = false; asked = false; invalidate() }
 
     /** Icons for the cube's six faces: the apps you have in NEXUS (in your NEXUS order). */
     @Volatile private var faces: List<Bitmap> = emptyList()
