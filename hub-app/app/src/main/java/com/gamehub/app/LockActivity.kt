@@ -136,7 +136,48 @@ class LockView(private val a: LockActivity) : View(a) {
     private val dateFmt = SimpleDateFormat("EEEE, MMMM d", Locale.getDefault())
     private var bg: Bitmap? = null
 
-    fun restart() { t = 0f; lastNs = 0L; reset(); invalidate() }
+    fun restart() { t = 0f; lastNs = 0L; reset(); loadFaces(); invalidate() }
+
+    /** Pictures for the cube's six faces: recent apps' icons, or (if allowed) their last screens. */
+    @Volatile private var faces: List<Bitmap> = emptyList()
+
+    private fun loadFaces() {
+        val showShots = a.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("lockShots", false)
+        Thread {
+            val pm = a.packageManager
+            val out = ArrayList<Bitmap>()
+            val size = 256
+            for ((pkg, _) in Recents.list(a)) {
+                if (out.size >= 6) break
+                if (pm.getLaunchIntentForPackage(pkg) == null) continue
+                val b = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+                val c = Canvas(b)
+                val p = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+                // Dark glass background
+                p.shader = LinearGradient(0f, 0f, 0f, size.toFloat(), Color.rgb(16, 30, 70), Color.rgb(6, 10, 26), Shader.TileMode.CLAMP)
+                c.drawRect(0f, 0f, size.toFloat(), size.toFloat(), p); p.shader = null
+                var drewShot = false
+                if (showShots) {
+                    val f = NexusAccessibility.snapFile(a, pkg)
+                    if (f.exists()) {
+                        val shot = try { android.graphics.BitmapFactory.decodeFile(f.absolutePath) } catch (_: Exception) { null }
+                        if (shot != null) {
+                            // Top square of the screen
+                            val sq = min(shot.width, shot.height)
+                            c.drawBitmap(shot, android.graphics.Rect(0, 0, sq, sq), android.graphics.Rect(0, 0, size, size), p)
+                            shot.recycle(); drewShot = true
+                        }
+                    }
+                }
+                if (!drewShot) {
+                    val icon = try { pm.getApplicationIcon(pkg) } catch (_: Exception) { null }
+                    icon?.setBounds(size / 4, size / 4, size * 3 / 4, size * 3 / 4); icon?.draw(c)
+                }
+                out.add(b)
+            }
+            post { faces = out }
+        }.start()
+    }
     fun reset() { dragY = 0f; dragging = false; asked = false; invalidate() }
 
     private fun backdrop(): Bitmap {
@@ -207,10 +248,10 @@ class LockView(private val a: LockActivity) : View(a) {
 
         // A smaller glass cube turning slowly in its own space below the text
         val cx = w / 2; val cy = h * 0.6f + lift * 0.3f
-        val s = min(w, h) * 0.13f * (0.85f + 0.15f * intro)
+        val s = min(w, h) * 0.16f * (0.85f + 0.15f * intro)
         fill.shader = RadialGradient(cx, cy, s * 3.2f, intArrayOf(Color.argb((80 * intro).toInt(), 60, 120, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
         c.drawCircle(cx, cy, s * 3.2f, fill); fill.shader = null
-        cube(c, cx, cy, s, t * 0.35f, 0.3f * fade)
+        cube(c, cx, cy, s, t * 0.35f, 0.9f * fade)
 
         // Swipe-up handle: chevrons that breathe, and a glow line
         val by = h - 70 * d + lift
@@ -232,19 +273,64 @@ class LockView(private val a: LockActivity) : View(a) {
     }
 
     private val px = FloatArray(8); private val py = FloatArray(8)
+    private val mtx = android.graphics.Matrix()
+    private val src = FloatArray(8)
+    private val dst = FloatArray(8)
+    private val facePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val rot = FloatArray(3)
+
+    /** Turns a cube point (±1 coordinates) the same way the cube is turned. */
+    private fun turn(x: Float, y: Float, z: Float, ang: Float) {
+        val ca = cos(ang); val sa = sin(ang); val cb = cos(0.5f); val sb = sin(0.5f)
+        val x1 = x * ca + z * sa; val z1 = -x * sa + z * ca
+        rot[0] = x1; rot[1] = y * cb - z1 * sb; rot[2] = y * sb + z1 * cb
+    }
+
+    // Each face: outward direction (n) and its "up" direction (u), so pictures sit the right way round
+    private val faceDefs = arrayOf(
+        floatArrayOf(0f, 0f, -1f, 0f, 1f, 0f), floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f),
+        floatArrayOf(0f, 0f, 1f, 0f, 1f, 0f), floatArrayOf(-1f, 0f, 0f, 0f, 1f, 0f),
+        floatArrayOf(0f, 1f, 0f, 0f, 0f, 1f), floatArrayOf(0f, -1f, 0f, 0f, 0f, -1f)
+    )
+    private val faceOrder = arrayOf(0, 1, 2, 3, 4, 5)
+    private val faceDepth = FloatArray(6)
 
     private fun cube(c: Canvas, cx: Float, cy: Float, s: Float, ang: Float, alpha: Float) {
-        val ca = cos(ang); val sa = sin(ang); val cb = cos(0.5f); val sb = sin(0.5f)
+        // Pictures on the faces that face you (far ones first), drawn in perspective
+        val pics = faces
+        if (pics.isNotEmpty()) {
+            for (f in 0 until 6) { val fd = faceDefs[f]; turn(fd[0], fd[1], fd[2], ang); faceDepth[f] = rot[2] }
+            val sorted = faceOrder.sortedByDescending { faceDepth[it] }
+            for (f in sorted) {
+                if (faceDepth[f] > -0.05f) continue // facing away
+                val fd = faceDefs[f]
+                val nx = fd[0]; val ny = fd[1]; val nz = fd[2]; val ux = fd[3]; val uy = fd[4]; val uz = fd[5]
+                // right = n × u
+                val rx = ny * uz - nz * uy; val ry = nz * ux - nx * uz; val rz = nx * uy - ny * ux
+                val corners = arrayOf(floatArrayOf(-1f, 1f), floatArrayOf(1f, 1f), floatArrayOf(1f, -1f), floatArrayOf(-1f, -1f))
+                for ((k, cr) in corners.withIndex()) {
+                    turn(nx + rx * cr[0] + ux * cr[1], ny + ry * cr[0] + uy * cr[1], nz + rz * cr[0] + uz * cr[1], ang)
+                    val pr = 3.2f / (3.2f + rot[2])
+                    dst[k * 2] = cx + rot[0] * s * pr; dst[k * 2 + 1] = cy - rot[1] * s * pr
+                }
+                val bmp = pics[f % pics.size]
+                src[0] = 0f; src[1] = 0f; src[2] = bmp.width.toFloat(); src[3] = 0f
+                src[4] = bmp.width.toFloat(); src[5] = bmp.height.toFloat(); src[6] = 0f; src[7] = bmp.height.toFloat()
+                mtx.setPolyToPoly(src, 0, dst, 0, 4)
+                // Faces turned further away are dimmer
+                facePaint.alpha = (255 * alpha * (0.45f + 0.55f * (-faceDepth[f]).coerceIn(0f, 1f))).toInt().coerceIn(0, 255)
+                c.drawBitmap(bmp, mtx, facePaint)
+            }
+        }
+        // Glowing edges
         var i = 0
         for (yy in 0..1) for (zz in 0..1) for (xx in 0..1) {
-            val x = (xx * 2 - 1).toFloat(); val y = (yy * 2 - 1).toFloat(); val z = (zz * 2 - 1).toFloat()
-            val x1 = x * ca + z * sa; val z1 = -x * sa + z * ca
-            val y2 = y * cb - z1 * sb; val z2 = y * sb + z1 * cb
-            val pr = 3.2f / (3.2f + z2)
-            px[i] = cx + x1 * s * pr; py[i] = cy - y2 * s * pr
+            turn((xx * 2 - 1).toFloat(), (yy * 2 - 1).toFloat(), (zz * 2 - 1).toFloat(), ang)
+            val pr = 3.2f / (3.2f + rot[2])
+            px[i] = cx + rot[0] * s * pr; py[i] = cy - rot[1] * s * pr
             i++
         }
-        line.strokeWidth = 1.4f * d; line.color = Color.argb((255 * alpha).toInt(), 170, 210, 255)
+        line.strokeWidth = 1.4f * d; line.color = Color.argb((255 * min(1f, alpha * 2.4f)).toInt(), 170, 210, 255)
         val e = intArrayOf(0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7)
         var k = 0
         while (k < e.size) { c.drawLine(px[e[k]], py[e[k]], px[e[k + 1]], py[e[k + 1]], line); k += 2 }
