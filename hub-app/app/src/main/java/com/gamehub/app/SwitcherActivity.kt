@@ -99,6 +99,9 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         var shotFade = 1f
         var lift = 0f      // swipe-up offset (removing)
         var gone = false
+        var flying = false // swiped away: flying off the top
+        var flyV = 0f
+        var ax = Float.NaN // animated position (in card steps from the centre)
     }
     private var cards = ArrayList<Card>()
 
@@ -188,8 +191,23 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         fill.shader = LinearGradient(w * 0.3f, 0f, w * 0.7f, 0f, intArrayOf(Color.TRANSPARENT, Color.argb(180, 130, 180, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
         c.drawRect(w * 0.3f, 76 * d, w * 0.7f, 77.2f * d, fill); fill.shader = null
 
-        val live = cards.filter { !it.gone }
-        if (live.isEmpty()) {
+        val live = cards.filter { !it.gone && !it.flying }
+        val cwF = w * 0.62f; val chF = min(cwF * 1.9f, h * 0.6f); val cyF = h * 0.47f
+        // Cards that were swiped away keep flying up, speeding up, shrinking and fading
+        for (card in cards) {
+            if (!card.flying || card.gone) continue
+            card.lift += card.flyV * dt
+            card.flyV *= 1f + dt * 4f
+            val k = (card.lift / (h * 0.75f)).coerceIn(0f, 1f)
+            val sc = 1f - 0.18f * k
+            val x = w / 2 + (if (card.ax.isNaN()) 0f else card.ax) * cwF * 0.78f
+            val cwS = cwF * sc; val chS = chF * sc
+            val top = cyF - chS / 2 - card.lift
+            r.set(x - cwS / 2, top, x + cwS / 2, top + chS)
+            drawCard(c, card, r, (1f - k).coerceIn(0f, 1f), false)
+            if (card.lift > h) card.gone = true
+        }
+        if (live.isEmpty() && cards.none { it.flying && !it.gone }) {
             val on = Recents.serviceOn(a)
             text.textSize = 16 * d; text.letterSpacing = 0.05f; text.color = Color.argb(220, 200, 220, 250)
             c.drawText(if (on) "No recent apps yet" else "The NEXUS helper is off", w / 2, h * 0.36f, text)
@@ -208,7 +226,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
                 c.drawText("TURN ON HELPER", helperRect.centerX(), helperRect.centerY() + 5 * d, text)
                 pill(c, restrictRect, "ALLOW RESTRICTED SETTINGS", true)
             } else { helperRect.setEmpty(); restrictRect.setEmpty() }
-        } else {
+        } else if (live.isNotEmpty()) {
             // Carousel physics: glide, then settle on the nearest card
             if (!dragging) {
                 pos += vel * dt
@@ -221,9 +239,15 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
             val cy = h * 0.47f
             // Draw back-to-front so the centre card is on top
             val order = live.indices.sortedByDescending { abs(it - pos) }
+            val glide = min(1f, dt * 12f)
             for (i in order) {
                 val card = live[i]
-                val off = i - pos
+                // Each card glides to its slot (so closing one makes the others slide over smoothly)
+                val want = i - pos
+                card.ax = if (card.ax.isNaN() || (dragging && mode == 1)) want else card.ax + (want - card.ax) * glide
+                // Springs back down if it wasn't swiped far enough
+                if (!(dragging && mode == 2)) card.lift *= 1f - min(1f, dt * 12f)
+                val off = card.ax
                 val sc = (1f - min(1f, abs(off)) * 0.16f) * (0.9f + 0.1f * enter)
                 val x = w / 2 + off * cw * 0.78f
                 if (x < -cw || x > w + cw) continue
@@ -313,7 +337,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
     private var tracker: VelocityTracker? = null
     private val slop = android.view.ViewConfiguration.get(a).scaledTouchSlop.toFloat()
 
-    private fun live() = cards.filter { !it.gone }
+    private fun live() = cards.filter { !it.gone && !it.flying }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
@@ -342,10 +366,12 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
                         val card = l.getOrNull(pos.roundToInt())
                         if (card != null) {
                             if (card.lift > height * 0.18f || vy < -1500f) {
-                                // Swiped away: close it
-                                card.gone = true; sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY); a.closeApp(card.pkg)
+                                // Swiped away: it flies off the top (keeping your swipe's speed) and closes
+                                card.flying = true
+                                card.flyV = max(1600f * d, -vy)
+                                sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY); a.closeApp(card.pkg)
                                 pos = pos.coerceAtMost((live().size - 1).coerceAtLeast(0).toFloat())
-                            } else card.lift = 0f
+                            }
                         }
                     }
                     else -> tap(e.x, e.y, l)

@@ -44,12 +44,24 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private val d = resources.displayMetrics.density
     private val rnd = Random(3)
 
-    private class Tower(val x: Float, val z: Float, val cubes: Int, val size: Float, val phase: Float)
-    private val towers = List(26) {
-        val a = rnd.nextFloat() * 6.283f
-        val r = 5.5f + rnd.nextFloat() * 11f
-        Tower(sin(a) * r, cos(a) * r, 2 + rnd.nextInt(9), 0.7f + rnd.nextFloat() * 0.35f, rnd.nextFloat() * 6.283f)
+    /** A column of small glass blocks. Heights slowly rise and fall. */
+    private class Tower(val x: Float, val z: Float, val cubes: Int, val size: Float, val phase: Float, val swing: Float)
+    /** Towers stand in clusters around you, like a city of light. */
+    private class Cluster(val x: Float, val z: Float)
+    private val clusters = List(8) {
+        val a = it / 8f * 6.283f + rnd.nextFloat() * 0.5f
+        val r = 7f + rnd.nextFloat() * 8f
+        Cluster(sin(a) * r, cos(a) * r)
     }
+    private val towers = clusters.flatMap { cl ->
+        List(4 + rnd.nextInt(4)) {
+            val ox = (rnd.nextFloat() - 0.5f) * 2.6f; val oz = (rnd.nextFloat() - 0.5f) * 2.6f
+            Tower(cl.x + ox, cl.z + oz, 3 + rnd.nextInt(13), 0.42f + rnd.nextFloat() * 0.12f, rnd.nextFloat() * 6.283f, 1f + rnd.nextFloat() * 3f)
+        }
+    }
+    /** Soft clouds of blue haze drifting through the scene (screen space). */
+    private class Haze(var x: Float, val y: Float, val r: Float, val speed: Float, val alpha: Int)
+    private val haze = List(7) { Haze(rnd.nextFloat(), 0.15f + rnd.nextFloat() * 0.7f, 0.35f + rnd.nextFloat() * 0.45f, (rnd.nextFloat() - 0.5f) * 0.02f, 18 + rnd.nextInt(22)) }
     private class Mote(var x: Float, var y: Float, var z: Float, val speed: Float)
     private val motes = List(70) { Mote((rnd.nextFloat() - 0.5f) * 30f, -4f + rnd.nextFloat() * 10f, (rnd.nextFloat() - 0.5f) * 30f, 0.15f + rnd.nextFloat() * 0.3f) }
 
@@ -121,11 +133,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         // Deep blue-black void with a soft horizon glow (drawn once, then reused)
         c.drawBitmap(backdrop(), 0f, 0f, null)
 
-        if (quality >= 2) drawGrid(c, intro)
-        if (quality >= 1) drawOrbit(c, intro)
+        drawHaze(c, dt, intro)
         drawTowers(c, intro)
+        drawOrb(c, intro)
         drawMotes(c, dt, intro)
-        if (quality >= 1) drawStreaks(c, dt, intro)
         drawMenu(c, intro, dt)
 
         if (launchFlash > 0f) {
@@ -270,7 +281,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
         p.shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(Color.rgb(2, 3, 10), Color.rgb(6, 12, 34), Color.rgb(1, 2, 6)), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
         c.drawRect(0f, 0f, w, h, p)
-        p.shader = RadialGradient(w / 2, h * 0.45f, w * 0.9f, intArrayOf(Color.argb(70, 40, 90, 220), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        p.shader = RadialGradient(w / 2, h * 0.45f, w * 0.9f, intArrayOf(Color.argb(80, 40, 90, 220), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p)
+        // Dark vignette around the edges
+        p.shader = RadialGradient(w / 2, h * 0.45f, max(w, h) * 0.75f, intArrayOf(Color.TRANSPARENT, Color.TRANSPARENT, Color.argb(170, 0, 0, 4)), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
         c.drawRect(0f, 0f, w, h, p)
         bgBmp = b
         return b
@@ -312,19 +326,48 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         order.sortByDescending { val tw = towers[it]; tw.x * sy + tw.z * cy }
         for (i in order) {
             val tw = towers[i]
-            if (quality == 0 && (tw.x * sy + tw.z * cy) > 9f) continue
-            // Glow pooled at the tower's base
-            if (project(tw.x, -3.3f, tw.z)) glow(c, px, py, tw.size * width * 0.95f / pz * 1.6f, (90 * fogK(pz)).toInt())
-            val bob = sin(t * 0.5f + tw.phase) * 0.15f
-            val built = (intro * 1.4f * tw.cubes).toInt().coerceAtMost(tw.cubes)
+            if (quality == 0 && (tw.x * sy + tw.z * cy) > 11f) continue
+            val bob = sin(t * 0.4f + tw.phase) * 0.06f
+            // Heights breathe slowly, like the towers are alive
+            val live = (tw.cubes + sin(t * 0.28f + tw.phase * 2f) * tw.swing).coerceAtLeast(1f)
+            val built = (intro * 1.4f * live).toInt().coerceAtMost(live.toInt())
             vn = 0; lineN.fill(0)
             var fogT = 1f
             for (k in 0 until built) {
-                val y0 = -3.2f + k * tw.size * 1.08f + bob
+                val y0 = -3.4f + k * tw.size * 1.12f + bob
                 fogT = addCube(tw.x, y0, tw.z, tw.size, k, tw)
             }
             flushTower(c, fogT)
         }
+    }
+
+    /** Glow pooled under each cluster of towers. */
+    private fun clusterGlows(c: Canvas) {
+        for (cl in clusters) if (project(cl.x, -3.5f, cl.z)) glow(c, px, py, width * 2.2f / pz, (110 * fogK(pz)).toInt())
+    }
+
+    private fun drawHaze(c: Canvas, dt: Float, intro: Float) {
+        val w = width.toFloat(); val h = height.toFloat()
+        for (hz in haze) {
+            hz.x += hz.speed * dt
+            if (hz.x < -0.6f) hz.x += 2.2f
+            if (hz.x > 1.6f) hz.x -= 2.2f
+            glow(c, hz.x * w, hz.y * h, hz.r * w, (hz.alpha * intro).toInt())
+        }
+        clusterGlows(c)
+    }
+
+    /** A soft orb of light wandering slowly through the towers. */
+    private fun drawOrb(c: Canvas, intro: Float) {
+        val ox = sin(t * 0.07f) * 6f; val oz = cos(t * 0.05f) * 6f + 2f
+        val oy = 0.8f + sin(t * 0.23f) * 1.2f
+        if (!project(ox, oy, oz)) return
+        val r = width * 0.9f / pz
+        val pulse = 0.8f + 0.2f * sin(t * 1.7f)
+        glow(c, px, py, r * 2.6f, (70 * intro * pulse).toInt())
+        glow(c, px, py, r, (190 * intro * pulse).toInt())
+        fill.color = Color.argb((235 * intro).toInt(), 235, 245, 255)
+        c.drawCircle(px, py, max(1.5f, r * 0.14f), fill)
     }
 
     private fun flushTower(c: Canvas, fog: Float) {
@@ -540,8 +583,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         gearRect.set(w - 50 * d, 40 * d, w - 14 * d, 76 * d)
         drawGear(c, gearRect.centerX(), gearRect.centerY(), 8 * d, Color.argb((150 * a).toInt(), 180, 205, 245))
         line.strokeWidth = 1f * d; line.color = Color.argb((70 * a).toInt(), 140, 190, 255)
-        bracket(c, 12 * d, 12 * d, 1, 1); bracket(c, w - 12 * d, 12 * d, -1, 1)
-        bracket(c, 12 * d, h - 12 * d, 1, -1); bracket(c, w - 12 * d, h - 12 * d, -1, -1)
+
 
         // App tiles on a home-screen grid (scrollable)
         rows.clear()
