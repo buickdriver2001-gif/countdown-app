@@ -76,7 +76,7 @@ class SystemActivity : Activity() {
         graph = GraphView(this)
         col.addView(card("LAST FEW MINUTES", graph, (120 * d).toInt()))
 
-        col.addView(section("BATTERY", listOf("Level", "Status", "Time to full", "Temperature", "Voltage", "Current", "Health", "Type")))
+        col.addView(section("BATTERY", listOf("Level", "Status", "Temperature", "Voltage", "Current", "Health", "Type")))
         col.addView(section("MEMORY & STORAGE", listOf("Memory used", "Memory free", "Storage used", "Storage free", "NEXUS pictures")))
         cores = CoresView(this)
         col.addView(section("PROCESSOR", listOf("Chip", "Cores", "Architecture")).also { (it as LinearLayout).addView(cores, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (70 * d).toInt())) })
@@ -266,8 +266,6 @@ class SystemActivity : Activity() {
                 BatteryManager.BATTERY_STATUS_DISCHARGING, BatteryManager.BATTERY_STATUS_NOT_CHARGING -> if (plugged != 0) "Plugged in, not charging" else "On battery"
                 else -> "Unknown"
             })
-            val full = if (Build.VERSION.SDK_INT >= 28) bm.computeChargeTimeRemaining() else -1L
-            set("Time to full", if (full > 0) { val m = (full / 60000).toInt(); if (m >= 60) "${m / 60}h ${m % 60}m" else "${max(1, m)}m" } else "—")
             set("Temperature", "%.1f °C  (%.0f °F)".format(temp, temp * 9 / 5 + 32))
             set("Voltage", "%.2f V".format(volt))
             set("Current", if (currentUa != Int.MIN_VALUE && currentUa != 0) "%.0f mA".format(kotlin.math.abs(currentUa) / (if (kotlin.math.abs(currentUa) > 20000) 1000f else 1f)) else "—")

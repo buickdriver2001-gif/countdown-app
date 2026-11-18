@@ -222,7 +222,6 @@ class LockView(private val a: LockActivity) : View(a) {
             val status = st?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
             val plugged = (st?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
             batCharging = plugged && (status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL)
-            batFullIn = if (batCharging && android.os.Build.VERSION.SDK_INT >= 28) bm.computeChargeTimeRemaining() else -1L
         } catch (_: Exception) {}
     }
 
