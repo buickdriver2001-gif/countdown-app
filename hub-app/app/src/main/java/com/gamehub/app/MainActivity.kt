@@ -379,10 +379,10 @@ class MainActivity : Activity() {
         val isHome = HomeMode.isDefault(this)
         val version = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Exception) { "" }
         NexusUi.panel(this, "NEXUS settings", "Version $version", listOf(
+            NexusUi.Option("System", primary = true) { openSystem() },
             NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
             NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
             NexusUi.Option("Choose my normal home screen") { chooseNormalHome() },
-            NexusUi.Option("System information & tools") { openSystem() },
             NexusUi.Option("Recent apps (square button)") { openAppsSettings() },
             NexusUi.Option("NEXUS lock screen:  " + (if (LockActivity.enabled(this)) "ON" else "OFF")) { lockSettings() },
             NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },

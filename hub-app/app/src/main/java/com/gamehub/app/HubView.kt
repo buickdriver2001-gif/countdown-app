@@ -682,15 +682,13 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.textAlign = Paint.Align.CENTER
         text.textSize = 10.5f * d; text.letterSpacing = 0.12f
         text.color = Color.argb((110 * a).toInt(), 160, 185, 230)
-        // ALL APPS button (or swipe up from here)
-        // Bottom bar: RECENT · SYSTEM · ALL APPS
-        val pw = min(128 * d, (w - 48 * d) / 3f); val gapB = 8 * d
-        val bx0 = w / 2 - (pw * 3 + gapB * 2) / 2
+        // Bottom bar: RECENT · ALL APPS
+        val pw = min(142 * d, (w - 48 * d) / 2f); val gapB = 12 * d
+        val bx0 = w / 2 - (pw * 2 + gapB) / 2
         recentRect.set(bx0, h - 54 * d, bx0 + pw, h - 18 * d)
-        systemRect.set(bx0 + pw + gapB, h - 54 * d, bx0 + pw * 2 + gapB, h - 18 * d)
-        allAppsRect.set(bx0 + (pw + gapB) * 2, h - 54 * d, bx0 + pw * 3 + gapB * 2, h - 18 * d)
+        allAppsRect.set(bx0 + pw + gapB, h - 54 * d, bx0 + pw * 2 + gapB, h - 18 * d)
+        systemRect.setEmpty()
         bottomPill(c, recentRect, "RECENT", 0, a)
-        bottomPill(c, systemRect, "SYSTEM", 1, a)
         bottomPill(c, allAppsRect, "ALL APPS", 2, a)
         text.textAlign = Paint.Align.CENTER
     }
