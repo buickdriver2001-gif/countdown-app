@@ -28,6 +28,18 @@ class App : Application() {
 
     companion object {
         fun crashFile(app: android.content.Context) = File(app.filesDir, "last_crash.txt")
+        fun helperErrorFile(c: android.content.Context) = File(c.filesDir, "helper_error.txt")
+
+        /** A problem inside the Recent Apps helper: noted (for "Report a problem"), but NEXUS keeps running. */
+        fun saveHelperError(ctx: android.content.Context, error: Throwable) {
+            try {
+                helperErrorFile(ctx).writeText(
+                    "NEXUS helper problem\nAndroid ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), " +
+                        "${Build.MANUFACTURER} ${Build.MODEL}\n\n" + Log.getStackTraceString(error)
+                )
+            } catch (_: Exception) {
+            }
+        }
 
         fun saveCrash(ctx: android.content.Context, where: String, error: Throwable) {
             try {

@@ -51,30 +51,40 @@ class NexusAccessibility : AccessibilityService() {
      * If it somehow isn't there when the screen turns on, it's shown then as a fallback.
      */
     private val screenOn = object : android.content.BroadcastReceiver() {
-        override fun onReceive(c: Context, i: Intent) {
-            if (i.action == Intent.ACTION_SCREEN_OFF) leftByScreenOff = true
-            if (!LockActivity.enabled(c)) { if (!coverWanted()) dropCover(); return }
-            // Never cover a phone call or a ringing call/alarm (the screen also turns off during calls)
-            val am = getSystemService(android.media.AudioManager::class.java)
-            val mode = am?.mode ?: android.media.AudioManager.MODE_NORMAL
-            if (mode == android.media.AudioManager.MODE_RINGTONE || mode == android.media.AudioManager.MODE_IN_CALL ||
-                mode == android.media.AudioManager.MODE_IN_COMMUNICATION) { removeCover(); return }
-            when (i.action) {
-                Intent.ACTION_SCREEN_OFF -> { otherAppSinceOff = false; leftByScreenOff = true; coverToken++; h.removeCallbacks(safety); cover?.showBlack(); addCover(); showLock(c) }
-                Intent.ACTION_SCREEN_ON -> {
-                    ensureCover()
-                    val km = getSystemService(KeyguardManager::class.java)
-                    if (otherAppSinceOff) {
-                        // Something else came up while the screen was off (an alarm, a timer, the camera...):
-                        // never hide it or push NEXUS over it
-                        removeCover()
-                    } else if (km?.isKeyguardLocked == true) {
-                        // Fallback only: normally the lock screen is already in place from screen-off
-                        if (!LockActivity.alive) showLock(c)
-                        // Safety: the cover never stays more than a moment, whatever happens
-                        armSafety(1300)
-                    } else armSafety(120) // not locked: nothing to hide
-                }
+        override fun onReceive(c: Context, i: Intent) = safe { handleScreen(c, i) }
+    }
+
+    /**
+     * Runs a piece of the helper so that if something ever goes wrong in it, only that piece is skipped:
+     * the problem is noted for "Report a problem" in NEXUS settings, and NEXUS (your home screen) keeps running.
+     */
+    private fun safe(block: () -> Unit) {
+        try { block() } catch (t: Throwable) { App.saveHelperError(this, t) }
+    }
+
+    private fun handleScreen(c: Context, i: Intent) {
+        if (i.action == Intent.ACTION_SCREEN_OFF) leftByScreenOff = true
+        if (!LockActivity.enabled(c)) { if (!coverWanted()) dropCover(); return }
+        // Never cover a phone call or a ringing call/alarm (the screen also turns off during calls)
+        val am = getSystemService(android.media.AudioManager::class.java)
+        val mode = am?.mode ?: android.media.AudioManager.MODE_NORMAL
+        if (mode == android.media.AudioManager.MODE_RINGTONE || mode == android.media.AudioManager.MODE_IN_CALL ||
+            mode == android.media.AudioManager.MODE_IN_COMMUNICATION) { removeCover(); return }
+        when (i.action) {
+            Intent.ACTION_SCREEN_OFF -> { otherAppSinceOff = false; leftByScreenOff = true; coverToken++; h.removeCallbacks(safety); cover?.showBlack(); addCover(); showLock(c) }
+            Intent.ACTION_SCREEN_ON -> {
+                ensureCover()
+                val km = getSystemService(KeyguardManager::class.java)
+                if (otherAppSinceOff) {
+                    // Something else came up while the screen was off (an alarm, a timer, the camera...):
+                    // never hide it or push NEXUS over it
+                    removeCover()
+                } else if (km?.isKeyguardLocked == true) {
+                    // Fallback only: normally the lock screen is already in place from screen-off
+                    if (!LockActivity.alive) showLock(c)
+                    // Safety: the cover never stays more than a moment, whatever happens
+                    armSafety(1300)
+                } else armSafety(120) // not locked: nothing to hide
             }
         }
     }
@@ -158,7 +168,7 @@ class NexusAccessibility : AccessibilityService() {
     private val FADE_MS = 150L
 
     /** Whatever happens, the cover is lifted after [ms]. */
-    private val safety = Runnable { fadeCover() }
+    private val safety = Runnable { safe { fadeCover() } }
     private fun armSafety(ms: Long) { h.removeCallbacks(safety); h.postDelayed(safety, ms) }
 
     /** Called when the lock screen or Recent Apps settings change (main thread). */
@@ -248,7 +258,9 @@ class NexusAccessibility : AccessibilityService() {
         return packageManager.getLaunchIntentForPackage(pkg) != null
     }
 
-    override fun onAccessibilityEvent(e: AccessibilityEvent?) {
+    override fun onAccessibilityEvent(e: AccessibilityEvent?) = safe { handleEvent(e) }
+
+    private fun handleEvent(e: AccessibilityEvent?) {
         if (e == null || e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = e.packageName?.toString() ?: return
         val cls = e.className?.toString() ?: ""
@@ -306,10 +318,12 @@ class NexusAccessibility : AccessibilityService() {
                 current = pkg
                 val token = ++openToken
                 h.postDelayed({
-                    if (token == openToken && current == pkg && pm?.isInteractive == true && km?.isKeyguardLocked != true) {
-                        Recents.touch(this, pkg)
-                        AppCache.warm(this, listOf(pkg))
-                        snap()
+                    safe {
+                        if (token == openToken && current == pkg && pm?.isInteractive == true && km?.isKeyguardLocked != true) {
+                            Recents.touch(this, pkg)
+                            AppCache.warm(this, listOf(pkg))
+                            snap()
+                        }
                     }
                 }, 1500)
             }
@@ -323,7 +337,7 @@ class NexusAccessibility : AccessibilityService() {
                 if (app != null && app in OWN_APPS && !leftByScreenOff) {
                     // A moment later, once it has fully left the screen
                     pendingClose = app
-                    h.postDelayed({ if (pendingClose == app) { pendingClose = null; closeOwnApp(this, app) } }, 800)
+                    h.postDelayed({ safe { if (pendingClose == app) { pendingClose = null; closeOwnApp(this, app) } } }, 800)
                 }
             }
         }
@@ -356,7 +370,7 @@ class NexusAccessibility : AccessibilityService() {
     /** Every couple of seconds, refresh the current app's screenshot. */
     private val tick = object : Runnable {
         override fun run() {
-            snap()
+            safe { snap() }
             h.postDelayed(this, 3000)
         }
     }

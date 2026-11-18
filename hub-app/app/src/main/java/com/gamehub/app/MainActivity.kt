@@ -266,7 +266,11 @@ class MainActivity : Activity() {
     private fun openAppsSettings() {
         val on = Recents.serviceOn(this)
         val replace = prefs.getBoolean("replaceRecents", true)
-        val status = if (on) "Helper is ON. Recent apps are being remembered." else "Helper is OFF. Follow the two steps below to turn it on."
+        val status = when {
+            on && NexusAccessibility.running -> "Helper is ON. Recent apps are being remembered."
+            on -> "The helper is switched on but Android has stopped it. Open Accessibility, switch NEXUS Recent Apps off and back on."
+            else -> "Helper is OFF. Follow the two steps below to turn it on."
+        }
         val opts = ArrayList<NexusUi.Option>()
         if (!on) {
             opts.add(NexusUi.Option("1.  Turn on helper", primary = true) { openAccessibility() })
@@ -327,6 +331,21 @@ class MainActivity : Activity() {
                 NexusUi.Option("Home and lock screen") { setNexusWallpaper(lock = true) }), cancel = "Not now")
     }
 
+    /** Something went wrong inside the Recent Apps helper (NEXUS kept running): show the details to copy. */
+    private fun reportProblem() {
+        val f = App.helperErrorFile(this)
+        val text = try { f.readText() } catch (_: Exception) { "" }
+        val opts = ArrayList<NexusUi.Option>()
+        opts.add(NexusUi.Option("Copy the details", primary = true) {
+            val cm = getSystemService(android.content.ClipboardManager::class.java)
+            cm?.setPrimaryClip(android.content.ClipData.newPlainText("NEXUS problem", text))
+            Toast.makeText(this, "Copied: paste it to Claude", Toast.LENGTH_SHORT).show()
+        })
+        opts.add(NexusUi.Option("Clear it") { f.delete(); Toast.makeText(this, "Cleared", Toast.LENGTH_SHORT).show() })
+        NexusUi.panel(this, "Report a problem", "Something went wrong in the Recent Apps helper. NEXUS kept running, " +
+            "but if something isn't working, copy these details and send them to Claude.\n\n" + text.take(600), opts, cancel = "Close")
+    }
+
     /** NEXUS lock screen: explanation and on/off. */
     private fun lockSettings() {
         val on = LockActivity.enabled(this)
@@ -380,10 +399,15 @@ class MainActivity : Activity() {
             NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
             NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
             NexusUi.Option("Choose my normal home screen") { chooseNormalHome() },
-            NexusUi.Option("Recent apps (square button)") { openAppsSettings() },
+            NexusUi.Option("Recent apps (square button):  " + when {
+                Recents.serviceOn(this) && NexusAccessibility.running -> "ON"
+                Recents.serviceOn(this) -> "NOT RUNNING"
+                else -> "OFF"
+            }) { openAppsSettings() },
             NexusUi.Option("NEXUS lock screen:  " + (if (LockActivity.enabled(this)) "ON" else "OFF")) { lockSettings() },
             NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
             NexusUi.Option("Tutorial") { showTutorial() },
+            *(if (App.helperErrorFile(this).exists()) arrayOf(NexusUi.Option("Report a problem") { reportProblem() }) else emptyArray()),
             NexusUi.Option("How it works") {
                 NexusUi.panel(this, "How it works",
                     "• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on.\n• Close NEXUS (Back, or Close NEXUS here) and Home goes to your normal home screen.\n• Open NEXUS from its icon to make it your home again.\n• Swipe up or tap ALL APPS to see every app. Hold an app in the list to move it.\n• Tap RECENT (or press the square button, once the helper is on) for your recent apps.\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.",
