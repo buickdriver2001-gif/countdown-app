@@ -77,6 +77,16 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private var bootT = 0f
     var booting = true
     private val BOOT_LEN = 5.2f
+    /** How long the home screen takes to fade up: slow after the start-up show, quick otherwise. */
+    private var introLen = 2.5f
+    /** Taps count once the home screen has been fading up this long. */
+    private var readyT = 1.2f
+
+    /**
+     * Straight to the home screen with a quick fade (no start-up show): used whenever Android simply
+     * brings NEXUS back (after unlocking, from Recent Apps, or if it had to restart NEXUS in the background).
+     */
+    fun skipIntro() { booting = false; t = 0f; introLen = 0.45f; readyT = 0.12f; lastNs = 0L; invalidate() }
     private class Spark(val a: Float, val r0: Float, val speed: Float, val size: Float)
     private val bootSparks = List(140) { Spark(rnd.nextFloat() * 6.283f, 0.6f + rnd.nextFloat() * 0.8f, 0.6f + rnd.nextFloat() * 0.8f, 0.6f + rnd.nextFloat() * 1.6f) }
     private var lastNs = 0L
@@ -94,6 +104,37 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private val clock = SimpleDateFormat("h:mm a", Locale.getDefault())
 
     private val rows = ArrayList<RectF>()
+    /** Reused every frame: the tiles' touch areas, and the cached tile layout. */
+    private val hitPool = ArrayList<RectF>()
+    private val tileR = RectF()
+    private val glyphR = RectF()
+    private val dashes = android.graphics.DashPathEffect(floatArrayOf(7 * d, 5 * d), 0f)
+    private var packGames: List<GameEntry>? = null
+    private var packSig = 0
+    private var packOrder = ArrayList<Int>()
+    private var packPos: Array<IntArray> = emptyArray()
+
+    // Shaders made once and placed by moving/scaling the canvas, so drawing a frame creates no new objects
+    private val hLine3 = LinearGradient(-1f, 0f, 1f, 0f, intArrayOf(Color.TRANSPARENT, Color.WHITE, Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+    private val ruleShader = LinearGradient(-1f, 0f, 1f, 0f, intArrayOf(Color.TRANSPARENT, Color.rgb(130, 180, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+    private val streakShader = LinearGradient(0f, 0f, 1f, 0f, Color.TRANSPARENT, Color.rgb(190, 220, 255), Shader.TileMode.CLAMP)
+    private val shotShade = LinearGradient(0f, 0f, 0f, 1f, Color.argb(40, 2, 4, 14), Color.argb(235, 2, 4, 14), Shader.TileMode.CLAMP)
+    private val flashGlow = RadialGradient(0f, 0f, 1f, Color.argb(200, 170, 210, 255), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+    private val emberGlow = RadialGradient(0f, 0f, 1f, Color.argb(110, 255, 140, 50), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+    private val topFade = LinearGradient(0f, 0f, 0f, 1f, Color.rgb(4, 8, 24), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+    private val bottomFade = LinearGradient(0f, 0f, 0f, 1f, Color.TRANSPARENT, Color.rgb(2, 4, 12), Shader.TileMode.CLAMP)
+
+    // Date and clock text, worked out once a second rather than every frame
+    private var clockSec = -1L
+    private var dateText = ""
+    private var clockText = ""
+    private fun updateClock() {
+        val now = System.currentTimeMillis()
+        if (now / 1000 == clockSec) return
+        clockSec = now / 1000
+        val date = Date(now)
+        dateText = dateFmt.format(date).uppercase(); clockText = clock.format(date)
+    }
 
     // ------------------------------------------------------------------ 3D helpers
 
@@ -137,7 +178,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         if (booting) {
             bootT += dt
             drawBoot(c)
-            if (bootT >= BOOT_LEN) { booting = false; t = 0f }
+            if (bootT >= BOOT_LEN) { booting = false; t = 0f; introLen = 2.5f; readyT = 1.2f }
             postInvalidateOnAnimation()
             return
         }
@@ -145,7 +186,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         yaw += dt * 0.045f
         adaptQuality(dt)
         val w = width.toFloat(); val h = height.toFloat()
-        val intro = min(1f, t / 2.5f)
+        val intro = min(1f, t / introLen)
 
         // Deep blue-black void with a soft horizon glow (drawn once, then reused)
         c.drawBitmap(backdrop(), 0f, 0f, null)
@@ -163,16 +204,21 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             val row = rows.getOrNull(selected)
             if (row != null) {
                 val rad = max(1f, w * (0.2f + 1.4f * k))
-                fill.shader = RadialGradient(row.centerX(), row.centerY(), rad, intArrayOf(Color.argb((200 * (1f - k * 0.6f)).toInt(), 170, 210, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-                c.drawRect(0f, 0f, w, h, fill); fill.shader = null
+                c.save(); c.translate(row.centerX(), row.centerY()); c.scale(rad, rad)
+                fill.color = Color.WHITE; fill.alpha = (255 * (1f - k * 0.6f)).toInt(); fill.shader = flashGlow
+                c.drawRect(-row.centerX() / rad, -row.centerY() / rad, (w - row.centerX()) / rad, (h - row.centerY()) / rad, fill); fill.shader = null
+                c.restore()
             }
             fill.color = Color.argb((255 * (k * k)).toInt().coerceIn(0, 255), 2, 4, 14)
             c.drawRect(0f, 0f, w, h, fill)
-            if (launchFlash <= 0f) { pending?.let(onPick); pending = null }
+            // The app starts opening just after the glow begins (no waiting for the animation to finish);
+            // the rest of the animation plays underneath as the app rises in over it
+            if (k >= LAUNCH_START || launchFlash <= 0f) { val p = pending; pending = null; p?.let(onPick) }
         }
         if (enterFade > 0f) {
             enterFade -= dt
-            fill.color = Color.argb((255 * (enterFade / 0.7f).coerceIn(0f, 1f)).toInt(), 2, 4, 14)
+            val r = (enterFade / ENTER_LEN).coerceIn(0f, 1f)
+            fill.color = Color.argb((255 * r * r).toInt(), 2, 4, 14)
             c.drawRect(0f, 0f, w, h, fill)
         }
         // Fade in from black at start-up
@@ -547,8 +593,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             s.x += s.speed * dt
             if (s.x < -400 * d || s.x > width + 400 * d) { it.remove(); continue }
             val tail = s.x - kotlin.math.sign(s.speed) * s.len
-            fill.shader = LinearGradient(tail, 0f, s.x, 0f, intArrayOf(Color.TRANSPARENT, Color.argb((s.alpha * intro).toInt(), 190, 220, 255)), null, Shader.TileMode.CLAMP)
-            c.drawRect(min(tail, s.x), s.y, max(tail, s.x), s.y + 1f * d, fill); fill.shader = null
+            val span = s.x - tail
+            if (kotlin.math.abs(span) < 0.5f) continue
+            c.save(); c.translate(tail, 0f); c.scale(span, 1f)
+            fill.color = Color.WHITE; fill.alpha = (s.alpha * intro).toInt().coerceIn(0, 255); fill.shader = streakShader
+            c.drawRect(0f, s.y, 1f, s.y + 1f * d, fill); fill.shader = null
+            c.restore()
         }
     }
 
@@ -591,16 +641,19 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         c.drawText("NEXUS", w / 2 + 6 * d, h * 0.12f, text)
         text.setShadowLayer(0f, 0f, 0f, 0)
         val ruleY = h * 0.12f + 16 * d
-        fill.shader = LinearGradient(w * 0.25f, 0f, w * 0.75f, 0f, intArrayOf(Color.TRANSPARENT, Color.argb((200 * a).toInt(), 130, 180, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-        c.drawRect(w * 0.25f, ruleY, w * 0.75f, ruleY + 1.2f * d, fill); fill.shader = null
+        c.save(); c.translate(w / 2, 0f); c.scale(w * 0.25f, 1f)
+        fill.color = Color.WHITE; fill.alpha = (200 * a).toInt(); fill.shader = ruleShader
+        c.drawRect(-1f, ruleY, 1f, ruleY + 1.2f * d, fill); fill.shader = null
+        c.restore()
         // A spark travelling along the rule
         val sx = w * 0.25f + (w * 0.5f) * ((t * 0.35f) % 1f)
         fill.color = Color.argb((220 * a).toInt(), 220, 235, 255); c.drawCircle(sx, ruleY + 0.6f * d, 1.8f * d, fill)
         // Status corners: date left, clock right, thin brackets
         text.letterSpacing = 0.12f; text.textSize = 11.5f * d
         text.color = Color.argb((170 * a).toInt(), 190, 210, 245)
-        text.textAlign = Paint.Align.LEFT; c.drawText(dateFmt.format(Date()).uppercase(), 20 * d, 32 * d, text)
-        text.textAlign = Paint.Align.RIGHT; c.drawText(clock.format(Date()), w - 20 * d, 32 * d, text)
+        updateClock()
+        text.textAlign = Paint.Align.LEFT; c.drawText(dateText, 20 * d, 32 * d, text)
+        text.textAlign = Paint.Align.RIGHT; c.drawText(clockText, w - 20 * d, 32 * d, text)
         // Settings gear under the clock
         gearRect.set(w - 50 * d, 40 * d, w - 14 * d, 76 * d)
         drawGear(c, gearRect.centerX(), gearRect.centerY(), 8 * d, Color.argb((150 * a).toInt(), 180, 205, 245))
@@ -618,9 +671,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         cellH = ((listBottom - listTop - gap * (gridRows - 1)) / gridRows).coerceIn(cellW * 0.7f, cellW * 1.3f)
         val stepX = cellW + gap; val stepY = cellH + gap
         // Pack tiles in order (first free spot that fits, like a phone home screen); the add tile goes last
-        val order = ArrayList<Int>(games.size + 1)
         var target = -1
+        val order: ArrayList<Int>
+        val pos: Array<IntArray>
         if (moveIndex in games.indices) {
+            order = ArrayList(games.size + 1)
             // Where would the dragged tile land? Look at the layout without it and find the tile under the finger
             val rest = games.indices.filter { it != moveIndex }
             val restPos = pack(rest, cols)
@@ -635,9 +690,19 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             target = hit.coerceIn(0, rest.size)
             if (target != lastTarget) { if (lastTarget >= 0) sfx.tick(); lastTarget = target }
             order.addAll(rest); order.add(target, moveIndex)
-        } else order.addAll(games.indices)
-        order.add(-1) // the + ADD tile
-        val pos = pack(order, cols)
+            order.add(-1) // the + ADD tile
+            pos = pack(order, cols)
+        } else {
+            // Not moving anything: the layout only changes when the apps, their sizes or the grid change
+            var sig = cols * 31 + games.size
+            for (g in games) sig = (sig * 31 + g.tileW) * 31 + rowsFor(g, cols)
+            if (games !== packGames || sig != packSig || packOrder.size != games.size + 1) {
+                packGames = games; packSig = sig
+                packOrder = ArrayList<Int>(games.size + 1).apply { addAll(games.indices); add(-1) }
+                packPos = pack(packOrder, cols)
+            }
+            order = packOrder; pos = packPos
+        }
         var usedRows = 0
         for (p in pos) usedRows = max(usedRows, p[1] + p[3])
         val total = usedRows * stepY - gap
@@ -649,35 +714,51 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             if (kotlin.math.abs(scroll) < 0.5f) { scroll = 0f; homing = false }
         }
         if (!dragging) {
-            scroll += scrollVel * dt
-            scrollVel *= kotlin.math.exp(-dt * 3.5f)
-            if (kotlin.math.abs(scrollVel) < 5f) scrollVel = 0f
-            if (scroll < 0f) { scroll += (0f - scroll) * min(1f, dt * 12f); scrollVel = 0f }
-            if (scroll > maxScroll) { scroll += (maxScroll - scroll) * min(1f, dt * 12f); scrollVel = 0f }
+            val bound = scroll.coerceIn(0f, maxScroll)
+            if (bound != scroll) {
+                if (scrollVel * (scroll - bound) > 0f) {
+                    // Gliding past an end: it eases a little way past, then springs back (no hard stop)
+                    scrollVel *= kotlin.math.exp(-dt * 26f)
+                    if (kotlin.math.abs(scrollVel) < 60f * d) scrollVel = 0f
+                    scroll += scrollVel * dt
+                } else {
+                    scrollVel = 0f
+                    scroll += (bound - scroll) * min(1f, dt * 11f)
+                    if (kotlin.math.abs(bound - scroll) < 0.5f) scroll = bound
+                }
+            } else {
+                scroll += scrollVel * dt
+                // Lighter friction than before, so a flick glides on naturally
+                scrollVel *= kotlin.math.exp(-dt * 2.3f)
+                if (kotlin.math.abs(scrollVel) < 5f) scrollVel = 0f
+            }
         }
         val startY = listTop - scroll
         if (anim.size != games.size) anim = Array(games.size) { RectF(Float.NaN, 0f, 0f, 0f) }
         val k = min(1f, dt * 14f)
-        val hitRects = arrayOfNulls<RectF>(games.size + 1)
+        while (hitPool.size < games.size + 1) hitPool.add(RectF())
+        for (hi in 0..games.size) hitPool[hi].setEmpty()
         c.save()
         c.clipRect(0f, listTop - 8 * d, w, listBottom + 8 * d)
-        for ((oi, idx) in order.withIndex()) {
+        for (oi in order.indices) {
+            val idx = order[oi]
             val p = pos[oi]
             val x0 = left + p[0] * stepX; val y0 = startY + p[1] * stepY
-            val tr = RectF(x0, y0, x0 + p[2] * stepX - gap, y0 + p[3] * stepY - gap)
+            val tr = tileR
+            tr.set(x0, y0, x0 + p[2] * stepX - gap, y0 + p[3] * stepY - gap)
             if (idx < 0) {
-                hitRects[games.size] = tr
+                hitPool[games.size].set(tr)
                 if (moveIndex < 0) drawAddTile(c, tr, selected == games.size, a)
                 continue
             }
-            hitRects[idx] = RectF(tr)
+            hitPool[idx].set(tr)
             val ar = anim[idx]
             // Tiles glide to their new spots (while moving apps, and just after dropping)
             if (ar.left.isNaN() || (moveIndex < 0 && !settling)) ar.set(tr)
             else ar.set(ar.left + (tr.left - ar.left) * k, ar.top + (tr.top - ar.top) * k, ar.right + (tr.right - ar.right) * k, ar.bottom + (tr.bottom - ar.bottom) * k)
             if (idx != moveIndex && ar.bottom > listTop - 10 * d && ar.top < listBottom + 10 * d) drawTile(c, games[idx], ar, idx == selected && moveIndex < 0, a)
         }
-        for (hr in hitRects) rows.add(hr ?: RectF())
+        for (hi in 0..games.size) rows.add(hitPool[hi])
         if (settling) { settleT -= dt; if (settleT <= 0f) settling = false }
         c.restore()
         // The tile being moved floats above everything, a little bigger and glowing
@@ -695,16 +776,20 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         }
         // Soft fades where the list scrolls under the edges
         if (maxScroll > 0f) {
-            fill.shader = LinearGradient(0f, listTop - 6 * d, 0f, listTop + 24 * d, intArrayOf(Color.rgb(4, 8, 24), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-            c.drawRect(0f, listTop - 6 * d, w, listTop + 24 * d, fill)
-            fill.shader = LinearGradient(0f, listBottom - 24 * d, 0f, listBottom + 6 * d, intArrayOf(Color.TRANSPARENT, Color.rgb(2, 4, 12)), null, Shader.TileMode.CLAMP)
-            c.drawRect(0f, listBottom - 24 * d, w, listBottom + 6 * d, fill); fill.shader = null
+            fill.color = Color.WHITE
+            c.save(); c.translate(0f, listTop - 6 * d); c.scale(1f, 30 * d)
+            fill.shader = topFade; c.drawRect(0f, 0f, w, 1f, fill)
+            c.restore()
+            c.save(); c.translate(0f, listBottom - 24 * d); c.scale(1f, 30 * d)
+            fill.shader = bottomFade; c.drawRect(0f, 0f, w, 1f, fill)
+            c.restore(); fill.shader = null
             // Thin scroll indicator
             val trackH = listBottom - listTop
             val thumbH = max(30 * d, trackH * trackH / (trackH + maxScroll))
             val ty = listTop + (trackH - thumbH) * (scroll / maxScroll).coerceIn(0f, 1f)
             fill.color = Color.argb((120 * a).toInt(), 140, 190, 255)
-            c.drawRoundRect(RectF(w - 9 * d, ty, w - 7 * d, ty + thumbH), d, d, fill)
+            glyphR.set(w - 9 * d, ty, w - 7 * d, ty + thumbH)
+            c.drawRoundRect(glyphR, d, d, fill)
         }
         text.textAlign = Paint.Align.CENTER
         text.textSize = 10.5f * d; text.letterSpacing = 0.12f
@@ -749,11 +834,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         line.color = Color.argb((220 * a).toInt(), 200, 225, 255); fill.color = Color.argb((220 * a).toInt(), 200, 225, 255)
         when (glyph) {
             0 -> { // stacked cards
-                c.drawRoundRect(RectF(x0, cy - 6 * d, x0 + 10 * d, cy + 7 * d), 2 * d, 2 * d, line)
+                glyphR.set(x0, cy - 6 * d, x0 + 10 * d, cy + 7 * d); c.drawRoundRect(glyphR, 2 * d, 2 * d, line)
                 c.drawLine(x0 + 3 * d, cy - 9 * d, x0 + 13 * d, cy - 9 * d, line); c.drawLine(x0 + 13 * d, cy - 9 * d, x0 + 13 * d, cy + 4 * d, line)
             }
             1 -> { // gauge
-                c.drawArc(RectF(x0, cy - 7 * d, x0 + 14 * d, cy + 7 * d), 150f, 240f, false, line)
+                glyphR.set(x0, cy - 7 * d, x0 + 14 * d, cy + 7 * d); c.drawArc(glyphR, 150f, 240f, false, line)
                 c.drawLine(x0 + 7 * d, cy, x0 + 11 * d, cy - 4 * d, line)
             }
             else -> for (gx in 0..2) for (gy in 0..2) c.drawRect(x0 + gx * 5 * d, cy - 7 * d + gy * 5 * d, x0 + 3 * d + gx * 5 * d, cy - 4 * d + gy * 5 * d, fill)
@@ -802,15 +887,22 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     /** Pictures of each app's last screen, shown behind large tiles. */
     private val liveShots = HashMap<String, android.graphics.Bitmap>()
 
+    /** When each tile's picture file was last read (so unchanged pictures aren't read again). */
+    private val liveStamp = HashMap<String, Long>()
+
     fun loadLiveShots() {
         val pkgs = games.filter { it.tileH >= 2 }.map { it.pkg }
+        if (pkgs.isEmpty()) return
+        val known = HashMap(liveStamp)
         Thread {
             for (p in pkgs) {
                 val f = NexusAccessibility.snapFile(context, p)
                 if (!f.exists()) continue
+                val stamp = f.lastModified()
+                if (known[p] == stamp) continue
                 val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 }
                 val b = try { android.graphics.BitmapFactory.decodeFile(f.absolutePath, opts) } catch (_: Exception) { null } ?: continue
-                post { liveShots[p] = b }
+                post { liveShots[p] = b; liveStamp[p] = stamp }
             }
         }.start()
     }
@@ -889,8 +981,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             shotDst.set(r.centerX() - dw / 2, r.top, r.centerX() + dw / 2, r.top + shot.height * sc)
             shotPaint.alpha = (150 * a).toInt()
             c.drawBitmap(shot, null, shotDst, shotPaint)
-            fill.shader = LinearGradient(0f, r.top, 0f, r.bottom, intArrayOf(Color.argb((40 * a).toInt(), 2, 4, 14), Color.argb((235 * a).toInt(), 2, 4, 14)), null, Shader.TileMode.CLAMP)
-            c.drawRect(r, fill); fill.shader = null
+            c.save(); c.translate(0f, r.top); c.scale(1f, max(1f, r.height()))
+            fill.color = Color.WHITE; fill.alpha = (255 * a).toInt(); fill.shader = shotShade
+            c.drawRect(r.left, 0f, r.right, 1f, fill); fill.shader = null
+            c.restore()
             c.restore()
         }
         line.strokeWidth = 1f * d
@@ -901,8 +995,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             val k = (t * 0.7f) % 1.6f
             val sx = r.left + (r.width() + 120 * d) * k - 60 * d
             c.save(); c.clipRect(r)
-            fill.shader = LinearGradient(sx - 50 * d, 0f, sx + 50 * d, 0f, intArrayOf(Color.TRANSPARENT, Color.argb((70 * a).toInt(), 255, 255, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-            c.drawRect(sx - 50 * d, r.top, sx + 50 * d, r.bottom, fill); fill.shader = null
+            c.translate(sx, 0f); c.scale(50 * d, 1f)
+            fill.color = Color.WHITE; fill.alpha = (70 * a).toInt(); fill.shader = hLine3
+            c.drawRect(-1f, r.top, 1f, r.bottom, fill); fill.shader = null
             c.restore()
             line.strokeWidth = 2f * d; line.color = Color.argb((230 * a).toInt(), 200, 225, 255)
             val l = 10 * d
@@ -957,7 +1052,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private fun drawAddTile(c: Canvas, r: RectF, sel: Boolean, a: Float) {
         line.strokeWidth = (if (sel) 1.6f else 1f) * d
         line.color = Color.argb(((if (sel) 200 else 90) * a).toInt(), 140, 190, 255)
-        line.pathEffect = android.graphics.DashPathEffect(floatArrayOf(7 * d, 5 * d), 0f)
+        line.pathEffect = dashes
         c.drawRoundRect(r, 8 * d, 8 * d, line)
         line.pathEffect = null
         val s = min(r.width(), r.height()) * 0.16f
@@ -999,8 +1094,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 fill.color = Color.argb(al, 255, 224, 102); c.drawCircle(cxm, cym - 0.4f * u, 0.95f * u, fill)
             }
             1 -> { // Ashen Vow: an upright sword with an ember glow
-                fill.shader = RadialGradient(cxm, cym - 2f * u, 4f * u, intArrayOf(Color.argb((110 * a).toInt(), 255, 140, 50), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-                c.drawCircle(cxm, cym - 2f * u, 4f * u, fill); fill.shader = null
+                c.save(); c.translate(cxm, cym - 2f * u); c.scale(4f * u, 4f * u)
+                fill.color = Color.WHITE; fill.alpha = (255 * a).toInt(); fill.shader = emberGlow
+                c.drawCircle(0f, 0f, 1f, fill); fill.shader = null
+                c.restore()
                 fill.color = Color.argb(al, 214, 220, 230)
                 path.reset(); path.moveTo(cxm, cym - 4.2f * u); path.lineTo(cxm + 0.55f * u, cym - 3.3f * u); path.lineTo(cxm + 0.55f * u, cym + 1.6f * u)
                 path.lineTo(cxm - 0.55f * u, cym + 1.6f * u); path.lineTo(cxm - 0.55f * u, cym - 3.3f * u); path.close(); c.drawPath(path, fill)
@@ -1135,22 +1232,22 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     return true
                 }
                 val pullDy = e.y - downY
-                if (!tap && pullArmed && !longFired && t > 1.2f && pullDy > 64 * d && kotlin.math.abs(e.x - downX) < pullDy * 0.6f && vy > -200 * d) {
+                if (!tap && pullArmed && !longFired && t > readyT && pullDy > 64 * d && kotlin.math.abs(e.x - downX) < pullDy * 0.6f && vy > -200 * d) {
                     // Swipe down at the top of the list: notifications, like other launchers
                     onPullDown()
                 } else if (!tap) {
                     // Swipe: let the list glide on (a short flick that never got going still moves it)
                     val inList = downY >= listTop - 6 * d && downY <= listBottom + 6 * d
                     if (!swipedUp && (dragging || (flick && inList))) scrollVel = -vy
-                } else if (!longFired && launchFlash <= 0f && t > 1.2f && systemRect.contains(e.x, e.y)) {
+                } else if (!longFired && launchFlash <= 0f && t > readyT && systemRect.contains(e.x, e.y)) {
                     sfx.tick(); onSystem()
-                } else if (!longFired && launchFlash <= 0f && t > 1.2f && recentRect.contains(e.x, e.y)) {
+                } else if (!longFired && launchFlash <= 0f && t > readyT && recentRect.contains(e.x, e.y)) {
                     sfx.tick(); onRecent()
-                } else if (!longFired && launchFlash <= 0f && t > 1.2f && allAppsRect.contains(e.x, e.y)) {
+                } else if (!longFired && launchFlash <= 0f && t > readyT && allAppsRect.contains(e.x, e.y)) {
                     sfx.tick(); onDrawer()
-                } else if (!longFired && launchFlash <= 0f && t > 1.2f && gearRect.contains(e.x, e.y)) {
+                } else if (!longFired && launchFlash <= 0f && t > readyT && gearRect.contains(e.x, e.y)) {
                     sfx.tick(); onSettings()
-                } else if (!longFired && !caught && launchFlash <= 0f && t > 1.2f) {
+                } else if (!longFired && !caught && launchFlash <= 0f && t > readyT) {
                     val r = rowAt(e.x, e.y)
                     if (r >= 0 && r == downRow) {
                         if (r != selected) { selected = r; sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK) }
@@ -1182,9 +1279,13 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     /** Called when the screen comes back (e.g. after closing a game). */
     fun resumed(fromApp: Boolean) {
         lastNs = 0L; launchFlash = 0f; pending = null
-        if (fromApp) enterFade = 0.7f
+        if (fromApp) enterFade = ENTER_LEN
     }
 
     /** Tile tap → the screen settles into the dark (then the app rises out of it). */
     private val LAUNCH_LEN = 0.34f
+    /** How far into the launch glow the app is asked to open. */
+    private val LAUNCH_START = 0.28f
+    /** Coming back from an app: a short fade up from the dark. */
+    private val ENTER_LEN = 0.32f
 }

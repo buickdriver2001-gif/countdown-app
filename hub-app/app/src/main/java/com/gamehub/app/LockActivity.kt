@@ -145,6 +145,9 @@ class LockActivity : Activity() {
          */
         @Volatile var alive = false
 
+        /** How long the lock screen takes to fade up once it's on screen (seconds). */
+        const val INTRO_LEN = 0.42f
+
         /** Whether the NEXUS lock screen is switched on (off unless the user turns it on). */
         fun enabled(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("lockScreen", false)
     }
@@ -165,6 +168,25 @@ class LockView(private val a: LockActivity) : View(a) {
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textAlign = Paint.Align.CENTER; typeface = Typeface.create("sans-serif-thin", Typeface.NORMAL) }
     private val timeFmt = SimpleDateFormat("h:mm", Locale.getDefault())
     private val dateFmt = SimpleDateFormat("EEEE, MMMM d", Locale.getDefault())
+    private val thin: Typeface = Typeface.create("sans-serif-thin", Typeface.NORMAL)
+    private val light: Typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+    // Clock and date text, worked out once a second rather than every frame
+    private var clockSec = -1L
+    private var clockText = ""
+    private var dateText = ""
+    private fun updateClock() {
+        val now = System.currentTimeMillis()
+        if (now / 1000 == clockSec) return
+        clockSec = now / 1000
+        val date = Date(now)
+        clockText = timeFmt.format(date); dateText = dateFmt.format(date).uppercase()
+    }
+    // Shaders made once and placed by moving the canvas (no new objects while drawing)
+    private val glowShader = RadialGradient(0f, 0f, 1f, Color.rgb(60, 120, 255), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+    private val ruleShader = LinearGradient(-1f, 0f, 1f, 0f, intArrayOf(Color.TRANSPARENT, Color.rgb(140, 190, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+    private val edges = intArrayOf(0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7)
+    private val corners = arrayOf(floatArrayOf(-1f, 1f), floatArrayOf(1f, 1f), floatArrayOf(1f, -1f), floatArrayOf(-1f, -1f))
+    private val sortedFaces = arrayOf(0, 1, 2, 3, 4, 5)
     private var bg: Bitmap? = null
 
     fun restart() { t = 0f; lastNs = 0L; reset(); loadFaces(); notified = false; invalidate() }
@@ -275,7 +297,9 @@ class LockView(private val a: LockActivity) : View(a) {
         val dt = if (lastNs == 0L) 0f else min(0.05f, (now - lastNs) / 1e9f)
         lastNs = now; t += dt
         val w = width.toFloat(); val h = height.toFloat()
-        val intro = min(1f, t / 1.1f)
+        // Quick, eased reveal once it's on screen (ease-out: most of it shows in the first moment)
+        val introK = min(1f, t / LockActivity.INTRO_LEN)
+        val intro = 1f - (1f - introK) * (1f - introK) * (1f - introK)
         val lift = -dragY // content follows the finger up
         c.drawBitmap(backdrop(), 0f, 0f, null)
         // Lift the black wake-up cover only once the NEXUS lock screen is really what's on screen:
@@ -289,24 +313,25 @@ class LockView(private val a: LockActivity) : View(a) {
 
         val fade = (1f - dragY / (h * 0.35f)).coerceIn(0f, 1f) * intro
 
+        updateClock()
         // NEXUS wordmark at the very top
-        text.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+        text.typeface = light
         text.textSize = 12 * d; text.letterSpacing = 0.6f
         text.color = Color.argb((110 * fade).toInt(), 170, 200, 255)
         c.drawText("NEXUS", w / 2 + 4 * d, 56 * d + lift * 0.2f, text)
 
         // Clock, date and battery: top third, clear of everything else
         val clockY = h * 0.24f + lift * 0.5f
-        text.typeface = Typeface.create("sans-serif-thin", Typeface.NORMAL)
+        text.typeface = thin
         text.textSize = 88 * d; text.letterSpacing = 0.02f
         text.color = Color.argb((255 * fade).toInt(), 240, 246, 255)
         text.setShadowLayer(16 * d, 0f, 0f, Color.argb((150 * fade).toInt(), 60, 130, 255))
-        c.drawText(timeFmt.format(Date()), w / 2, clockY, text)
+        c.drawText(clockText, w / 2, clockY, text)
         text.setShadowLayer(0f, 0f, 0f, 0)
-        text.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+        text.typeface = light
         text.textSize = 15 * d; text.letterSpacing = 0.14f
         text.color = Color.argb((210 * fade).toInt(), 190, 210, 245)
-        c.drawText(dateFmt.format(Date()).uppercase(), w / 2, clockY + 40 * d, text)
+        c.drawText(dateText, w / 2, clockY + 40 * d, text)
         readBattery()
         val bat = batLevel
         if (bat >= 0) {
@@ -350,8 +375,10 @@ class LockView(private val a: LockActivity) : View(a) {
         // A smaller glass cube turning slowly in its own space below the text
         val cx = w / 2; val cy = h * 0.6f + lift * 0.3f
         val s = min(w, h) * 0.16f * (0.85f + 0.15f * intro)
-        fill.shader = RadialGradient(cx, cy, s * 3.2f, intArrayOf(Color.argb((80 * intro).toInt(), 60, 120, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-        c.drawCircle(cx, cy, s * 3.2f, fill); fill.shader = null
+        c.save(); c.translate(cx, cy); c.scale(s * 3.2f, s * 3.2f)
+        fill.color = Color.WHITE; fill.alpha = (80 * intro).toInt(); fill.shader = glowShader
+        c.drawCircle(0f, 0f, 1f, fill); fill.shader = null
+        c.restore()
         cube(c, cx, cy, s, t * 0.35f, 0.9f * fade)
 
         // Swipe-up handle: chevrons that breathe, and a glow line
@@ -363,8 +390,10 @@ class LockView(private val a: LockActivity) : View(a) {
             val yy = by - k * 10 * d
             c.drawLine(w / 2 - 12 * d, yy + 6 * d, w / 2, yy, line); c.drawLine(w / 2, yy, w / 2 + 12 * d, yy + 6 * d, line)
         }
-        fill.shader = LinearGradient(w * 0.3f, 0f, w * 0.7f, 0f, intArrayOf(Color.TRANSPARENT, Color.argb((150 * fade).toInt(), 140, 190, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-        c.drawRect(w * 0.3f, by + 22 * d, w * 0.7f, by + 23.2f * d, fill); fill.shader = null
+        c.save(); c.translate(w / 2, 0f); c.scale(w * 0.2f, 1f)
+        fill.color = Color.WHITE; fill.alpha = (150 * fade).toInt(); fill.shader = ruleShader
+        c.drawRect(-1f, by + 22 * d, 1f, by + 23.2f * d, fill); fill.shader = null
+        c.restore()
 
         // Spring back when let go
         if (!dragging && dragY > 0f) dragY = max(0f, dragY - dt * h * 2.5f)
@@ -394,7 +423,6 @@ class LockView(private val a: LockActivity) : View(a) {
         floatArrayOf(0f, 0f, 1f, 0f, 1f, 0f), floatArrayOf(-1f, 0f, 0f, 0f, 1f, 0f),
         floatArrayOf(0f, 1f, 0f, 0f, 0f, 1f), floatArrayOf(0f, -1f, 0f, 0f, 0f, -1f)
     )
-    private val faceOrder = arrayOf(0, 1, 2, 3, 4, 5)
 
 
     private val faceDepth = FloatArray(6)
@@ -404,15 +432,17 @@ class LockView(private val a: LockActivity) : View(a) {
         val pics = faces
         if (pics.isNotEmpty()) {
             for (f in 0 until 6) { val fd = faceDefs[f]; turn(fd[0], fd[1], fd[2], ang); faceDepth[f] = rot[2] }
-            val sorted = faceOrder.sortedByDescending { faceDepth[it] }
-            for (f in sorted) {
+            // Far faces first (sorted in place: no new lists while drawing)
+            for (x in 0 until 6) sortedFaces[x] = x
+            for (x in 1 until 6) { val v = sortedFaces[x]; var y = x - 1; while (y >= 0 && faceDepth[sortedFaces[y]] < faceDepth[v]) { sortedFaces[y + 1] = sortedFaces[y]; y-- }; sortedFaces[y + 1] = v }
+            for (f in sortedFaces) {
                 if (faceDepth[f] > -0.05f) continue // facing away
                 val fd = faceDefs[f]
                 val nx = fd[0]; val ny = fd[1]; val nz = fd[2]; val ux = fd[3]; val uy = fd[4]; val uz = fd[5]
                 // right = n × u
                 val rx = ny * uz - nz * uy; val ry = nz * ux - nx * uz; val rz = nx * uy - ny * ux
-                val corners = arrayOf(floatArrayOf(-1f, 1f), floatArrayOf(1f, 1f), floatArrayOf(1f, -1f), floatArrayOf(-1f, -1f))
-                for ((k, cr) in corners.withIndex()) {
+                for (k in 0 until 4) {
+                    val cr = corners[k]
                     turn(nx + rx * cr[0] + ux * cr[1], ny + ry * cr[0] + uy * cr[1], nz + rz * cr[0] + uz * cr[1], ang)
                     val pr = 3.2f / (3.2f + rot[2])
                     dst[k * 2] = cx + rot[0] * s * pr; dst[k * 2 + 1] = cy - rot[1] * s * pr
@@ -435,7 +465,7 @@ class LockView(private val a: LockActivity) : View(a) {
             i++
         }
         line.strokeWidth = 1.4f * d; line.color = Color.argb((255 * min(1f, alpha * 2.4f)).toInt(), 170, 210, 255)
-        val e = intArrayOf(0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7)
+        val e = edges
         var k = 0
         while (k < e.size) { c.drawLine(px[e[k]], py[e[k]], px[e[k + 1]], py[e[k + 1]], line); k += 2 }
     }

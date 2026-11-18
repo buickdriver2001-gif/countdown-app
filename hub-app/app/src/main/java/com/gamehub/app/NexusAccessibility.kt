@@ -194,7 +194,7 @@ class NexusAccessibility : AccessibilityService() {
     }
 
     /** Called by the NEXUS lock screen once it is lit and in front (the phone's own lock screen is no longer drawn). */
-    fun lockReady() { LockTrace.log(this, "  lock screen lit and in front: lifting cover"); armSafety(50) }
+    fun lockReady() { LockTrace.log(this, "  lock screen lit and in front: lifting cover"); armSafety(0) }
 
     /** Called by NEXUS Recent Apps once it is drawn and in front: the cover fades away to reveal it
      *  (after the app has finished shrinking into its card). */

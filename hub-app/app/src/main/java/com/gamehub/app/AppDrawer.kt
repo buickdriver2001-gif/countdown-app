@@ -22,7 +22,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 
 /** One app icon on the phone (an app can have more than one, each its own [component]). */
-class AppItem(val label: String, val pkg: String, val isGame: Boolean, val component: android.content.ComponentName? = null) { var icon: Drawable? = null }
+class AppItem(val label: String, val pkg: String, val isGame: Boolean, val component: android.content.ComponentName? = null,
+              /** Changes when the app is updated (so its new icon is picked up). */ val stamp: String = "") { var icon: Drawable? = null }
 
 /**
  * Full-screen app drawer in NEXUS style: search, Games first, then every app A–Z in a grid.
@@ -127,16 +128,24 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
     private var loadGen = 0
     /** Goes up whenever a fresh list arrives (names or icons may have changed even if the count didn't). */
     private var appsVersion = 0
+    private var appsSig: Int? = null
 
     /** Reads every app icon on the phone, the way launchers do (in the background; icons too). */
     fun load() {
         val gen = ++loadGen
         Thread {
             val list = try { readLauncherApps() } catch (_: Exception) { null } ?: try { readByIntent() } catch (_: Exception) { null }
+            val sig = list?.joinToString("\n") { "${it.component}|${it.label}|${it.stamp}" }?.hashCode()
             post {
                 if (gen != loadGen || list == null) return@post
-                apps = list; loadedAt = android.os.SystemClock.uptimeMillis(); appsVersion++
+                loadedAt = android.os.SystemClock.uptimeMillis()
+                // Nothing changed: keep the list as it is (no rebuilding while you're looking at it)
+                if (sig == appsSig && apps.isNotEmpty()) return@post
+                appsSig = sig
+                apps = list; appsVersion++
                 if (isOpen) fill()
+                // Build the list ahead of time (a little each frame) so All Apps opens instantly
+                else { removeCallbacks(prebuild); postDelayed(prebuild, 1500) }
             }
         }.start()
     }
@@ -152,7 +161,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
             .distinctBy { it.componentName }
             .map { info ->
                 AppItem(info.label.toString().trim().ifEmpty { info.componentName.packageName }, info.componentName.packageName,
-                    info.applicationInfo.category == ApplicationInfo.CATEGORY_GAME, info.componentName).also {
+                    info.applicationInfo.category == ApplicationInfo.CATEGORY_GAME, info.componentName, info.applicationInfo.sourceDir ?: "").also {
                     it.icon = try { info.getIcon(0) } catch (_: Exception) { null }
                 }
             }
@@ -169,7 +178,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
             .map { r ->
                 val ai = r.activityInfo
                 AppItem(r.loadLabel(pm).toString().trim(), ai.packageName, ai.applicationInfo.category == ApplicationInfo.CATEGORY_GAME,
-                    android.content.ComponentName(ai.packageName, ai.name)).also { it.icon = try { r.loadIcon(pm) } catch (_: Exception) { null } }
+                    android.content.ComponentName(ai.packageName, ai.name), ai.applicationInfo.sourceDir ?: "").also { it.icon = try { r.loadIcon(pm) } catch (_: Exception) { null } }
             }
             .sortedWith(byName())
     }
@@ -191,6 +200,14 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         animate().alpha(1f).translationY(0f).setDuration(240).setInterpolator(android.view.animation.DecelerateInterpolator(1.6f)).withLayer().start()
         // Refresh the list if it's empty or a while old (in case an app was installed or updated meanwhile)
         if (apps.isEmpty() || android.os.SystemClock.uptimeMillis() - loadedAt > 60_000) load()
+    }
+
+    /** Builds All Apps in the background (a couple of rows per frame) while it is closed. */
+    private val prebuild = Runnable {
+        if (isOpen || apps.isEmpty()) return@Runnable
+        addMode = false; picked.clear()
+        quiet = true; if (search.text.isNotEmpty()) search.setText(""); quiet = false
+        if (key() != builtKey) fill(firstRows = 0, perFrame = 2)
     }
 
     private fun key() = "$addMode|${search.text}|$appsVersion|${apps.count { inNexus(it.pkg) }}"
@@ -226,7 +243,21 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         if (addMode) title.text = if (n > 0) "ADD TO NEXUS · $n SELECTED" else "ADD TO NEXUS"
     }
 
-    private fun fill() {
+    // The list is built a few rows at a time: what's on screen first, the rest over the next frames,
+    // so opening All Apps (and typing a search) never stalls the animation
+    private val queue = ArrayDeque<() -> View>()
+    private var rowsPerFrame = 3
+    private val drain = object : Runnable {
+        override fun run() {
+            var n = 0
+            while (queue.isNotEmpty() && n < rowsPerFrame) { grid.addView(queue.removeFirst()()); n++ }
+            if (queue.isNotEmpty()) grid.postOnAnimation(this)
+        }
+    }
+
+    private fun fill(firstRows: Int = 7, perFrame: Int = 3) {
+        grid.removeCallbacks(drain)
+        queue.clear()
         grid.removeAllViews()
         cells.clear()
         builtKey = key()
@@ -239,9 +270,14 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
             setPadding((6 * d).toInt(), (6 * d).toInt(), 0, 0)
         })
         val games = shown.filter { it.isGame }
-        if (games.isNotEmpty() && q.isEmpty()) { grid.addView(section("GAMES")); addRows(games) }
-        grid.addView(section(if (q.isEmpty()) "ALL APPS" else "RESULTS"))
+        if (games.isNotEmpty() && q.isEmpty()) { queue.addLast { section("GAMES") }; addRows(games) }
+        val head = if (q.isEmpty()) "ALL APPS" else "RESULTS"
+        queue.addLast { section(head) }
         addRows(shown)
+        var n = 0
+        while (queue.isNotEmpty() && n < firstRows) { grid.addView(queue.removeFirst()()); n++ }
+        rowsPerFrame = perFrame
+        if (queue.isNotEmpty()) grid.postOnAnimation(drain)
     }
 
     private fun section(t: String) = TextView(a).apply {
@@ -253,12 +289,16 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         val perRow = 4
         var i = 0
         while (i < list.size) {
-            val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
-            for (k in 0 until perRow) {
-                val item = list.getOrNull(i + k)
-                row.addView(if (item != null) cell(item) else View(a), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val start = i
+            queue.addLast {
+                LinearLayout(a).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    for (k in 0 until perRow) {
+                        val item = list.getOrNull(start + k)
+                        addView(if (item != null) cell(item) else View(a), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    }
+                }
             }
-            grid.addView(row)
             i += perRow
         }
     }

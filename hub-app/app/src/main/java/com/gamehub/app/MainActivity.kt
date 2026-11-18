@@ -31,14 +31,35 @@ class MainActivity : Activity() {
     /** Games the player added from their phone, in the order they were added. */
     private fun customPkgs(): List<String> = prefs.getString("custom", "")!!.split(",").filter { it.isNotBlank() }
 
+    /**
+     * Added apps' tiles (name and icon), read from Android once and kept: coming back to NEXUS doesn't
+     * ask Android again. An app's tile is read afresh when it's installed, updated or removed.
+     */
+    private val entries = HashMap<String, GameEntry>()
+    /** Whether each app can be opened (also only re-checked when apps change). */
+    private val installed = HashMap<String, Boolean>()
+
+    /** Forget what's known about [pkg] (it was installed, updated or removed). */
+    private fun forgetApp(pkg: String) { entries.remove(pkg); installed.remove(pkg) }
+
     private fun buildList(): List<GameEntry> {
         val list = ArrayList(builtIn)
         for (pkg in customPkgs()) {
+            val known = entries[pkg]
+            if (known != null) {
+                val desc = description(pkg, known.name)
+                if (known.tagline == desc) { list.add(known); continue }
+                // Description edited: same tile, new words
+                list.add(GameEntry(known.name, pkg, desc, known.accent, -1, custom = true, drawable = known.drawable).also { entries[pkg] = it })
+                continue
+            }
             try {
                 val info = packageManager.getApplicationInfo(pkg, 0)
                 val label = packageManager.getApplicationLabel(info).toString()
-                list.add(GameEntry(label, pkg, description(pkg, label), Color.rgb(170, 200, 255), -1, custom = true,
-                    drawable = packageManager.getApplicationIcon(pkg)))
+                val g = GameEntry(label, pkg, description(pkg, label), Color.rgb(170, 200, 255), -1, custom = true,
+                    drawable = packageManager.getApplicationIcon(pkg))
+                entries[pkg] = g
+                list.add(g)
             } catch (_: Exception) { /* uninstalled since: skip it */ }
         }
         return list
@@ -127,7 +148,7 @@ class MainActivity : Activity() {
             list.sortBy { g -> order.indexOf(g.pkg).let { if (it < 0) 10_000 + (natural[g.pkg] ?: 0) else it } }
         }
         for (g in list) {
-            g.installed = packageManager.getLaunchIntentForPackage(g.pkg) != null
+            g.installed = installed.getOrPut(g.pkg) { packageManager.getLaunchIntentForPackage(g.pkg) != null }
             val t = prefs.getString("tile_${g.pkg}", "2x1")!!.split("x")
             g.tileW = t.getOrNull(0)?.toIntOrNull() ?: 2; g.tileH = t.getOrNull(1)?.toIntOrNull() ?: 1
         }
@@ -192,20 +213,34 @@ class MainActivity : Activity() {
         if (android.os.Build.VERSION.SDK_INT >= 28) window.attributes.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         window.decorView.post { hideBars() }
         val fromApp = intent?.getBooleanExtra("fromApp", false) == true
-        if (fromApp) { hub.booting = false; leftForApp = true }
+        val newBoot = firstStartSincePhoneOn()
+        if (fromApp) { hub.skipIntro(); leftForApp = true }
         else if (isHomeIntent(intent) && !HomeMode.isOn(this) && HomeMode.goNormalHome(this)) {
             // NEXUS was closed on purpose: Home goes to the normal home screen
-            hub.booting = false
+            hub.skipIntro()
         } else {
             // Opened from its icon (or Home while NEXUS mode is on): NEXUS mode on
             HomeMode.setOn(this, true)
-            if (savedInstanceState == null) Thread { playChime() }.start()
+            // The start-up show (and chime) plays when the phone has just been turned on, or when NEXUS is
+            // started from its icon. When Android just brings NEXUS back as the Home app, it's there at once.
+            val fromIcon = intent?.hasCategory(Intent.CATEGORY_LAUNCHER) == true && !isHomeIntent(intent)
+            if ((newBoot || fromIcon) && savedInstanceState == null) Thread { playChime() }.start()
+            else hub.skipIntro()
             // First time: show the guide once the start-up animation has finished
             if (!prefs.getBoolean("tutorialSeen", false)) waitThenTutorial()
         }
     }
 
     private fun isHomeIntent(i: Intent?) = i?.hasCategory(Intent.CATEGORY_HOME) == true
+
+    /** True the first time NEXUS starts after the phone was turned on (remembered, so only once). */
+    private fun firstStartSincePhoneOn(): Boolean {
+        val bootAt = System.currentTimeMillis() - android.os.SystemClock.elapsedRealtime()
+        val last = prefs.getLong("introBootAt", 0L)
+        if (kotlin.math.abs(bootAt - last) < 120_000L) return false
+        prefs.edit().putLong("introBootAt", bootAt).apply()
+        return true
+    }
 
     private var pausedAt = 0L
 
@@ -500,7 +535,7 @@ class MainActivity : Activity() {
     }
     private val appsChanged = object : android.content.pm.LauncherApps.Callback() {
         private fun changed(pkgs: Array<out String>?) {
-            pkgs?.forEach { AppCache.forget(it) }
+            pkgs?.forEach { AppCache.forget(it); forgetApp(it) }
             window.decorView.removeCallbacks(reloadApps)
             window.decorView.postDelayed(reloadApps, 400)
         }

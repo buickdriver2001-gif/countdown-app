@@ -342,7 +342,9 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
     private var opened = false
     private val openFrom = RectF()
     private val openRect = RectF()
-    private val OPEN_LEN = 0.38f
+    private val OPEN_LEN = 0.34f
+    /** How far into the card's growth the app is asked to open (it finishes growing underneath as the app appears). */
+    private val OPEN_START = 0.6f
 
     /** Opens [pkg]: if its card is the one in the middle, the card grows into the app first. */
     fun openWithZoom(pkg: String) {
@@ -381,7 +383,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
             it.alpha = 255; it.draw(c)
         }
         c.restore()
-        if (k >= 1f && !opened) {
+        if (k >= OPEN_START && !opened) {
             opened = true
             // With its last picture filling the screen the app just comes alive; without one it rises in.
             // If it can't be opened (e.g. it was just uninstalled), put the cards back.
