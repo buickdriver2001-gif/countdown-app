@@ -23,7 +23,7 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 /** One game in the hub. */
-class GameEntry(val name: String, val pkg: String, val tagline: String, val accent: Int, val icon: Int,
+class GameEntry(val name: String, val pkg: String, val accent: Int, val icon: Int,
                 val custom: Boolean = false, val drawable: android.graphics.drawable.Drawable? = null) {
     var installed = false
     /** Tile size in grid cells (width × height). */
@@ -919,11 +919,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         measurePaint.textSize = size; measurePaint.letterSpacing = spacing; measurePaint.measureText(str)
     }
 
-    private fun subOf(g: GameEntry) = if (!g.installed) "Not installed" else g.tagline
+    /** The small line under a tile's name: only shown for a NEXUS game that isn't installed yet. */
+    private fun subOf(g: GameEntry) = if (!g.installed) "Not installed" else ""
 
     /**
      * How many grid rows a tile takes: the size the user picked, plus extra rows if its full name
-     * (and description) need more room than that, so nothing is ever cut off.
+     * (and "Not installed", if shown) need more room than that, so nothing is ever cut off.
      */
     private fun rowsFor(g: GameEntry, cols: Int): Int {
         val gap = 10 * d
@@ -1011,7 +1012,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         c.save(); c.clipRect(r)
         when {
             wide -> {
-                // Wide: icon on the left, the full name and description beside it
+                // Wide: icon on the left, the full name beside it
                 fill.color = accent; c.drawRect(r.left, r.top + r.height() * 0.2f, r.left + 2.5f * d, r.bottom - r.height() * 0.2f, fill)
                 val isz = plan.icon
                 tmpRect.set(r.left + 14 * d, r.centerY() - isz / 2, r.left + 14 * d + isz, r.centerY() + isz / 2)
@@ -1022,7 +1023,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 if (plan.sub.isNotEmpty()) drawLines(c, plan.sub, tx, y + 5 * d, plan.subSize, TileText.SUB_SPACING, subCol, TileText.subLineH(plan.subSize))
             }
             large || tall -> {
-                // Large / tall: icon top-left, the full name and description along the bottom
+                // Large / tall: icon top-left, the full name along the bottom
                 fill.color = accent; c.drawRect(r.left + 12 * d, r.top, r.left + 12 * d + r.width() * 0.25f, r.top + 2.5f * d, fill)
                 val isz = plan.icon
                 tmpRect.set(r.left + 12 * d, r.top + 14 * d, r.left + 12 * d + isz, r.top + 14 * d + isz)

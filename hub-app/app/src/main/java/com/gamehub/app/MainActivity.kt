@@ -17,9 +17,9 @@ import kotlin.math.sin
 class MainActivity : Activity() {
 
     private val builtIn = listOf(
-        GameEntry("Zombie Dots", "com.zombiedots.app", "Survive the endless horde", Color.rgb(255, 80, 80), 0),
-        GameEntry("Ashen Vow", "com.ashenvow.app", "Defeat Hollow Warden", Color.rgb(230, 150, 60), 1),
-        GameEntry("SynthPad", "com.synthpad.app", "Make music with synths", Color.rgb(120, 220, 255), 2)
+        GameEntry("Zombie Dots", "com.zombiedots.app", Color.rgb(255, 80, 80), 0),
+        GameEntry("Ashen Vow", "com.ashenvow.app", Color.rgb(230, 150, 60), 1),
+        GameEntry("SynthPad", "com.synthpad.app", Color.rgb(120, 220, 255), 2)
     )
     private lateinit var hub: HubView
     private lateinit var drawer: AppDrawer
@@ -46,17 +46,11 @@ class MainActivity : Activity() {
         val list = ArrayList(builtIn)
         for (pkg in customPkgs()) {
             val known = entries[pkg]
-            if (known != null) {
-                val desc = description(pkg, known.name)
-                if (known.tagline == desc) { list.add(known); continue }
-                // Description edited: same tile, new words
-                list.add(GameEntry(known.name, pkg, desc, known.accent, -1, custom = true, drawable = known.drawable).also { entries[pkg] = it })
-                continue
-            }
+            if (known != null) { list.add(known); continue }
             try {
                 val info = packageManager.getApplicationInfo(pkg, 0)
                 val label = packageManager.getApplicationLabel(info).toString()
-                val g = GameEntry(label, pkg, description(pkg, label), Color.rgb(170, 200, 255), -1, custom = true,
+                val g = GameEntry(label, pkg, Color.rgb(170, 200, 255), -1, custom = true,
                     drawable = packageManager.getApplicationIcon(pkg))
                 entries[pkg] = g
                 list.add(g)
@@ -65,35 +59,19 @@ class MainActivity : Activity() {
         return list
     }
 
-    /** A description the player wrote, or a built-in one for apps we know, or a plain fallback. */
-    private fun description(pkg: String, label: String): String {
-        prefs.getString("desc_$pkg", null)?.let { if (it.isNotBlank()) return it }
-        val l = label.lowercase()
-        return when {
-            "ellipse" in l -> "Space Flight Simulation"
-            "gta" in l || "grand theft auto" in l -> "Become a Dangerous Criminal"
-            else -> "On your phone"
-        }
+    /** Descriptions are gone: tidy away any that were saved by older versions. */
+    private fun dropOldDescriptions() {
+        val old = prefs.all.keys.filter { it.startsWith("desc_") }
+        if (old.isNotEmpty()) prefs.edit().apply { old.forEach { remove(it) } }.apply()
     }
 
-    private fun editDescription(g: GameEntry) {
-        var field: android.widget.EditText? = null
-        field = NexusUi.panel(this, "Description", "Shown under ${g.name} in NEXUS.", listOf(
-            NexusUi.Option("Save", primary = true) {
-                prefs.edit().putString("desc_${g.pkg}", field?.text?.toString()?.trim() ?: "").apply()
-                refresh()
-            }
-        ), input = g.tagline)
-    }
-
-    /** Hold an app (without moving it): tile size, and for added apps edit / remove. */
+    /** Hold an app (without moving it): its shortcuts, tile size, App info, and remove / uninstall. */
     private fun appOptions(g: GameEntry) {
         val opts = ArrayList<NexusUi.Option>()
         // The app's own shortcuts first (Android shares them with the Home app), then NEXUS's options
         opts.addAll(AppActions.shortcutOptions(this, g.pkg))
         opts.add(NexusUi.Option("Tile size:  ${sizeName(g.tileW, g.tileH)}", primary = true) { chooseTileSize(g) })
         opts.add(NexusUi.Option("Open") { open(g) })
-        if (g.custom) opts.add(NexusUi.Option("Edit description") { editDescription(g) })
         if (g.installed) opts.add(AppActions.infoOption(this, g.pkg))
         if (g.custom) opts.add(NexusUi.Option("Remove from NEXUS", danger = true) { removeGame(g) })
         if (g.installed) AppActions.uninstallOption(this, g.pkg)?.let { opts.add(it) }
@@ -206,6 +184,7 @@ class MainActivity : Activity() {
         }).apply { visibility = android.view.View.GONE }
         root.addView(tutorial)
         setContentView(root)
+        dropOldDescriptions()
         drawer.load()
         // Keep up with apps being installed, updated or removed (an app being updated briefly disappears)
         try { getSystemService(android.content.pm.LauncherApps::class.java)?.registerCallback(appsChanged, android.os.Handler(mainLooper)) } catch (_: Exception) {}

@@ -9,7 +9,7 @@ import kotlin.math.min
  * An app's name is never cut short with "…": it is shown in full, first by easing the text size down a
  * little, then by wrapping it over more lines (and shrinking the icon to make room). If even that isn't
  * enough, [plan] reports that it doesn't fit and the home screen makes the tile taller until it does.
- * The description is shown in full the same way.
+ * The small status line ("Not installed") is shown in full the same way.
  */
 object TileText {
     enum class Kind { WIDE, LARGE, TALL, SMALL }
@@ -33,7 +33,7 @@ object TileText {
     fun nameLineH(size: Float) = size * 1.2f
     fun subLineH(size: Float) = size * 1.28f
 
-    /** Height of the name + description block. */
+    /** Height of the name + status line block. */
     fun blockHeight(p: Plan, d: Float): Float {
         var hgt = p.name.size * nameLineH(p.nameSize)
         if (p.sub.isNotEmpty()) hgt += 5 * d + p.sub.size * subLineH(p.subSize)
