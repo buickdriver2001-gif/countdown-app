@@ -343,6 +343,7 @@ class MainActivity : Activity() {
         if (!helper) opts.add(NexusUi.Option("Turn on helper first", primary = true) { openAppsSettings() })
         opts.add(NexusUi.Option(if (on) "Turn NEXUS lock screen OFF" else "Turn NEXUS lock screen ON", primary = helper && !on) {
             prefs.edit().putBoolean("lockScreen", !on).apply()
+            NexusAccessibility.instance?.refreshCover()
             Toast.makeText(this, if (!on) "NEXUS lock screen on. Turn your screen off and on to see it." else "NEXUS lock screen off", Toast.LENGTH_SHORT).show()
         })
         NexusUi.panel(this, "NEXUS lock screen", msg, opts, cancel = "Done")

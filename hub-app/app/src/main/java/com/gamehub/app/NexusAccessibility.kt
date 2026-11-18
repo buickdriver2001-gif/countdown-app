@@ -42,7 +42,7 @@ class NexusAccessibility : AccessibilityService() {
      */
     private val screenOn = object : android.content.BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
-            if (!LockActivity.enabled(c)) return
+            if (!LockActivity.enabled(c)) { dropCover(); return }
             // Never cover a phone call or a ringing call/alarm (the screen also turns off during calls)
             val am = getSystemService(android.media.AudioManager::class.java)
             val mode = am?.mode ?: android.media.AudioManager.MODE_NORMAL
@@ -51,6 +51,7 @@ class NexusAccessibility : AccessibilityService() {
             when (i.action) {
                 Intent.ACTION_SCREEN_OFF -> { addCover(); showLock(c) }
                 Intent.ACTION_SCREEN_ON -> {
+                    ensureCover()
                     val km = getSystemService(KeyguardManager::class.java)
                     if (km?.isKeyguardLocked == true) {
                         if (!LockActivity.showing) showLock(c)
@@ -63,14 +64,17 @@ class NexusAccessibility : AccessibilityService() {
     }
 
     // ------------------------------------------------------------------ wake-up cover
-    // A plain black layer added while the screen is off, so when it turns on you see black (what the
-    // NEXUS lock screen fades in from) instead of a flash of the phone's own lock screen. It ignores
-    // touches and always removes itself within about a second.
+    // A black layer that is created in advance (fully see-through) while the screen is on, and switched
+    // to solid when the screen turns off. Switching see-through/solid needs no drawing, so it is already
+    // in place the instant the screen wakes: you see black (what the NEXUS lock screen fades in from)
+    // instead of a flash of the phone's own lock screen. It ignores touches and is cleared within a second.
 
     private var cover: android.view.View? = null
+    private var coverLp: android.view.WindowManager.LayoutParams? = null
 
-    private fun addCover() {
-        if (cover != null) return
+    /** Makes sure the (see-through) cover exists. Only call while the screen is on. */
+    private fun ensureCover() {
+        if (cover != null || !LockActivity.enabled(this)) return
         try {
             val wm = getSystemService(android.view.WindowManager::class.java) ?: return
             val v = android.view.View(this).apply { setBackgroundColor(android.graphics.Color.BLACK) }
@@ -79,16 +83,32 @@ class NexusAccessibility : AccessibilityService() {
                 android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                android.graphics.PixelFormat.OPAQUE)
+                android.graphics.PixelFormat.TRANSLUCENT)
             if (Build.VERSION.SDK_INT >= 28) lp.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            lp.alpha = 0f
             wm.addView(v, lp)
-            cover = v
-        } catch (_: Throwable) { cover = null }
+            cover = v; coverLp = lp
+        } catch (_: Throwable) { cover = null; coverLp = null }
     }
 
-    fun removeCover() {
+    private fun setCover(solid: Boolean) {
         val v = cover ?: return
-        cover = null
+        val lp = coverLp ?: return
+        if ((lp.alpha > 0.5f) == solid) return
+        lp.alpha = if (solid) 1f else 0f
+        try { getSystemService(android.view.WindowManager::class.java)?.updateViewLayout(v, lp) } catch (_: Throwable) {}
+    }
+
+    private fun addCover() = setCover(true)
+    fun removeCover() = setCover(false)
+
+    /** Called when the lock screen setting changes (main thread). */
+    fun refreshCover() { h.post { if (LockActivity.enabled(this)) ensureCover() else dropCover() } }
+
+    /** Takes the cover away completely (lock screen switched off, or the helper stopping). */
+    private fun dropCover() {
+        val v = cover ?: return
+        cover = null; coverLp = null
         try { getSystemService(android.view.WindowManager::class.java)?.removeView(v) } catch (_: Throwable) {}
     }
 
@@ -107,6 +127,7 @@ class NexusAccessibility : AccessibilityService() {
         instance = this
         refreshHomes()
         h.postDelayed(tick, 2000)
+        ensureCover()
         val f = android.content.IntentFilter(Intent.ACTION_SCREEN_ON).apply { addAction(Intent.ACTION_SCREEN_OFF) }
         try {
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOn, f, Context.RECEIVER_NOT_EXPORTED) else registerReceiver(screenOn, f)
@@ -115,7 +136,7 @@ class NexusAccessibility : AccessibilityService() {
 
     override fun onDestroy() {
         try { unregisterReceiver(screenOn) } catch (_: Exception) {}
-        removeCover()
+        dropCover()
         instance = null
         running = false
         h.removeCallbacksAndMessages(null)
