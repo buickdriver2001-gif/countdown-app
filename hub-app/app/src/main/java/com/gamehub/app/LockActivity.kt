@@ -188,9 +188,32 @@ class LockView(private val a: LockActivity) : View(a) {
         return b
     }
 
-    private fun battery(): Int = try {
-        (a.getSystemService(Context.BATTERY_SERVICE) as BatteryManager).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-    } catch (_: Exception) { -1 }
+    // Battery info, refreshed every couple of seconds (not every frame)
+    private var batLevel = -1
+    private var batCharging = false
+    private var batFullIn = -1L
+    private var batReadAt = 0L
+
+    private fun readBattery() {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - batReadAt < 2000 && batReadAt != 0L) return
+        batReadAt = now
+        try {
+            val bm = a.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            batLevel = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            val st = a.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            val status = st?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+            val plugged = (st?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+            batCharging = plugged && (status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL)
+            batFullIn = if (batCharging && android.os.Build.VERSION.SDK_INT >= 28) bm.computeChargeTimeRemaining() else -1L
+        } catch (_: Exception) {}
+    }
+
+    private fun fullInText(ms: Long): String? {
+        if (ms <= 0L) return null
+        val m = (ms / 60000L).toInt()
+        return if (m >= 60) "Full in ${m / 60}h ${m % 60}m" else "Full in ${max(1, m)}m"
+    }
 
     override fun onDraw(c: Canvas) {
         val now = System.nanoTime()
@@ -221,20 +244,51 @@ class LockView(private val a: LockActivity) : View(a) {
         text.textSize = 15 * d; text.letterSpacing = 0.14f
         text.color = Color.argb((210 * fade).toInt(), 190, 210, 245)
         c.drawText(dateFmt.format(Date()).uppercase(), w / 2, clockY + 40 * d, text)
-        val bat = battery()
+        readBattery()
+        val bat = batLevel
         if (bat >= 0) {
-            // Small battery outline with the level
+            val charging = batCharging
+            val label = when {
+                charging && bat >= 100 -> "Charged"
+                charging -> "Charging  ·  $bat%"
+                else -> "$bat%"
+            }
+            text.textSize = 12 * d; text.letterSpacing = 0.15f; text.textAlign = Paint.Align.LEFT
+            val labelW = text.measureText(label)
+            // Battery outline + label, centred together
             val bw = 22 * d; val bh = 11 * d
-            val bx = w / 2 - bw / 2 - 18 * d; val byy = clockY + 62 * d
-            line.strokeWidth = 1.2f * d; line.color = Color.argb((160 * fade).toInt(), 170, 200, 245)
+            val total = bw + 3 * d + 8 * d + labelW
+            val bx = w / 2 - total / 2; val byy = clockY + 62 * d
+            line.strokeWidth = 1.2f * d; line.color = Color.argb((170 * fade).toInt(), 170, 200, 245)
             c.drawRoundRect(bx, byy, bx + bw, byy + bh, 2 * d, 2 * d, line)
             c.drawRect(bx + bw + 1 * d, byy + bh * 0.3f, bx + bw + 3 * d, byy + bh * 0.7f, line)
-            fill.color = Color.argb((190 * fade).toInt(), if (bat <= 15) 255 else 170, if (bat <= 15) 120 else 210, if (bat <= 15) 110 else 255)
+            val low = bat <= 15 && !charging
+            val pulse = if (charging) 0.65f + 0.35f * sin(t * 3f) else 1f
+            fill.color = when {
+                charging -> Color.argb((220 * fade * pulse).toInt(), 110, 230, 150)
+                low -> Color.argb((200 * fade).toInt(), 255, 120, 110)
+                else -> Color.argb((190 * fade).toInt(), 170, 210, 255)
+            }
             c.drawRect(bx + 2 * d, byy + 2 * d, bx + 2 * d + (bw - 4 * d) * bat / 100f, byy + bh - 2 * d, fill)
-            text.textSize = 12 * d; text.letterSpacing = 0.15f; text.textAlign = Paint.Align.LEFT
-            text.color = Color.argb((170 * fade).toInt(), 170, 200, 245)
-            c.drawText("$bat%", bx + bw + 9 * d, byy + bh - 1 * d, text)
+            if (charging) {
+                // Lightning bolt over the battery
+                bolt.reset()
+                val mx = bx + bw / 2; val top = byy - 2 * d; val bot = byy + bh + 2 * d
+                bolt.moveTo(mx + 2 * d, top); bolt.lineTo(mx - 3.5f * d, byy + bh * 0.55f); bolt.lineTo(mx, byy + bh * 0.55f)
+                bolt.lineTo(mx - 2 * d, bot); bolt.lineTo(mx + 3.5f * d, byy + bh * 0.42f); bolt.lineTo(mx, byy + bh * 0.42f); bolt.close()
+                fill.color = Color.argb((255 * fade).toInt(), 255, 255, 255)
+                c.drawPath(bolt, fill)
+            }
+            text.color = if (charging) Color.argb((220 * fade).toInt(), 150, 235, 175) else Color.argb((170 * fade).toInt(), 170, 200, 245)
+            c.drawText(label, bx + bw + 11 * d, byy + bh - 1 * d, text)
             text.textAlign = Paint.Align.CENTER
+            fullInText(batFullIn)?.let {
+                if (charging && bat < 100) {
+                    text.textSize = 11 * d; text.letterSpacing = 0.12f
+                    text.color = Color.argb((140 * fade).toInt(), 160, 200, 230)
+                    c.drawText(it, w / 2, byy + bh + 20 * d, text)
+                }
+            }
         }
 
         // A smaller glass cube turning slowly in its own space below the text
@@ -263,6 +317,7 @@ class LockView(private val a: LockActivity) : View(a) {
         postInvalidateOnAnimation()
     }
 
+    private val bolt = android.graphics.Path()
     private val px = FloatArray(8); private val py = FloatArray(8)
     private val mtx = android.graphics.Matrix()
     private val src = FloatArray(8)
