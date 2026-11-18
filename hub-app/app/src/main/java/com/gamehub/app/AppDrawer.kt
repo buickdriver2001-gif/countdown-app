@@ -256,6 +256,11 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
     }
 
     private fun fill(firstRows: Int = 7, perFrame: Int = 3) {
+        // Rebuilding while it's open (e.g. after adding an app): build down to where you are at once,
+        // so the list doesn't jump back to the top
+        val sv = grid.parent as? ScrollView
+        val upTo = if (isOpen && sv != null) ((sv.scrollY + sv.height) / (80 * d)).toInt() + 3 else 0
+        val first = maxOf(firstRows, upTo)
         grid.removeCallbacks(drain)
         queue.clear()
         grid.removeAllViews()
@@ -275,7 +280,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         queue.addLast { section(head) }
         addRows(shown)
         var n = 0
-        while (queue.isNotEmpty() && n < firstRows) { grid.addView(queue.removeFirst()()); n++ }
+        while (queue.isNotEmpty() && n < first) { grid.addView(queue.removeFirst()()); n++ }
         rowsPerFrame = perFrame
         if (queue.isNotEmpty()) grid.postOnAnimation(drain)
     }
