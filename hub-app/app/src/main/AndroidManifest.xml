@@ -26,6 +26,8 @@
     <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
     <!-- Only used when you tap "Match wallpaper to NEXUS" -->
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
+    <!-- System screen: shows the connection type and speed estimate -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:name=".App"
@@ -62,6 +64,14 @@
             android:taskAffinity="com.gamehub.app.switcher"
             android:launchMode="singleTask"
             android:noHistory="true"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize" />
+
+        <!-- NEXUS System: diagnostics, device info, tests and shortcuts -->
+        <activity
+            android:name=".SystemActivity"
+            android:exported="false"
+            android:theme="@style/SwitcherTheme"
             android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize" />
 

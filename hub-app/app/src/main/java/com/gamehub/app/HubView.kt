@@ -39,7 +39,8 @@ class GameEntry(val name: String, val pkg: String, val tagline: String, val acce
 class HubView(context: Context, var games: List<GameEntry>, private val onPick: (GameEntry) -> Unit,
               private val onAdd: () -> Unit, private val onRemove: (GameEntry) -> Unit, private val sfx: Sfx,
               private val onSettings: () -> Unit, private val onReorder: (Int, Int) -> Unit,
-              private val onDrawer: () -> Unit, private val onRecent: () -> Unit) : View(context) {
+              private val onDrawer: () -> Unit, private val onRecent: () -> Unit,
+              private val onSystem: () -> Unit) : View(context) {
 
     private val d = resources.displayMetrics.density
     private val rnd = Random(3)
@@ -682,32 +683,15 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.textSize = 10.5f * d; text.letterSpacing = 0.12f
         text.color = Color.argb((110 * a).toInt(), 160, 185, 230)
         // ALL APPS button (or swipe up from here)
-        // RECENT (open apps) on the left, ALL APPS on the right
-        recentRect.set(w / 2 - 150 * d, h - 54 * d, w / 2 - 8 * d, h - 18 * d)
-        fill.color = Color.argb((60 * a).toInt(), 40, 80, 200)
-        c.drawRoundRect(recentRect, 18 * d, 18 * d, fill)
-        line.strokeWidth = 1f * d; line.color = Color.argb((120 * a).toInt(), 140, 190, 255)
-        c.drawRoundRect(recentRect, 18 * d, 18 * d, line)
-        // stacked-cards glyph
-        line.color = Color.argb((220 * a).toInt(), 200, 225, 255)
-        c.drawRoundRect(RectF(recentRect.left + 18 * d, recentRect.centerY() - 6 * d, recentRect.left + 30 * d, recentRect.centerY() + 8 * d), 2 * d, 2 * d, line)
-        c.drawLine(recentRect.left + 21 * d, recentRect.centerY() - 9 * d, recentRect.left + 33 * d, recentRect.centerY() - 9 * d, line)
-        c.drawLine(recentRect.left + 33 * d, recentRect.centerY() - 9 * d, recentRect.left + 33 * d, recentRect.centerY() + 5 * d, line)
-        text.textAlign = Paint.Align.LEFT; text.textSize = 12.5f * d; text.letterSpacing = 0.25f
-        text.color = Color.argb((230 * a).toInt(), 220, 235, 255)
-        c.drawText("RECENT", recentRect.left + 44 * d, recentRect.centerY() + 4.5f * d, text)
-        allAppsRect.set(w / 2 + 8 * d, h - 54 * d, w / 2 + 150 * d, h - 18 * d)
-        fill.color = Color.argb((60 * a).toInt(), 40, 80, 200)
-        c.drawRoundRect(allAppsRect, 18 * d, 18 * d, fill)
-        line.strokeWidth = 1f * d; line.color = Color.argb((120 * a).toInt(), 140, 190, 255)
-        c.drawRoundRect(allAppsRect, 18 * d, 18 * d, line)
-        // little 3x3 grid glyph
-        fill.color = Color.argb((220 * a).toInt(), 200, 225, 255)
-        for (gx in 0..2) for (gy in 0..2) c.drawRect(allAppsRect.left + 18 * d + gx * 5 * d, allAppsRect.centerY() - 7 * d + gy * 5 * d,
-            allAppsRect.left + 21 * d + gx * 5 * d, allAppsRect.centerY() - 4 * d + gy * 5 * d, fill)
-        text.textAlign = Paint.Align.LEFT; text.textSize = 12.5f * d; text.letterSpacing = 0.25f
-        text.color = Color.argb((230 * a).toInt(), 220, 235, 255)
-        c.drawText("ALL APPS", allAppsRect.left + 42 * d, allAppsRect.centerY() + 4.5f * d, text)
+        // Bottom bar: RECENT · SYSTEM · ALL APPS
+        val pw = min(128 * d, (w - 48 * d) / 3f); val gapB = 8 * d
+        val bx0 = w / 2 - (pw * 3 + gapB * 2) / 2
+        recentRect.set(bx0, h - 54 * d, bx0 + pw, h - 18 * d)
+        systemRect.set(bx0 + pw + gapB, h - 54 * d, bx0 + pw * 2 + gapB, h - 18 * d)
+        allAppsRect.set(bx0 + (pw + gapB) * 2, h - 54 * d, bx0 + pw * 3 + gapB * 2, h - 18 * d)
+        bottomPill(c, recentRect, "RECENT", 0, a)
+        bottomPill(c, systemRect, "SYSTEM", 1, a)
+        bottomPill(c, allAppsRect, "ALL APPS", 2, a)
         text.textAlign = Paint.Align.CENTER
     }
 
@@ -724,6 +708,35 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     private val allAppsRect = RectF()
+    private val systemRect = RectF()
+
+    /** A glass pill with a small glyph and a label (glyph 0 = stacked cards, 1 = gauge, 2 = grid). */
+    private fun bottomPill(c: Canvas, r: RectF, label: String, glyph: Int, a: Float) {
+        fill.color = Color.argb((60 * a).toInt(), 40, 80, 200)
+        c.drawRoundRect(r, 18 * d, 18 * d, fill)
+        line.strokeWidth = 1f * d; line.color = Color.argb((120 * a).toInt(), 140, 190, 255)
+        c.drawRoundRect(r, 18 * d, 18 * d, line)
+        text.textAlign = Paint.Align.LEFT; text.textSize = 11 * d; text.letterSpacing = 0.18f
+        val tw = text.measureText(label)
+        val gw = 14 * d
+        val x0 = r.centerX() - (gw + 8 * d + tw) / 2
+        val cy = r.centerY()
+        line.color = Color.argb((220 * a).toInt(), 200, 225, 255); fill.color = Color.argb((220 * a).toInt(), 200, 225, 255)
+        when (glyph) {
+            0 -> { // stacked cards
+                c.drawRoundRect(RectF(x0, cy - 6 * d, x0 + 10 * d, cy + 7 * d), 2 * d, 2 * d, line)
+                c.drawLine(x0 + 3 * d, cy - 9 * d, x0 + 13 * d, cy - 9 * d, line); c.drawLine(x0 + 13 * d, cy - 9 * d, x0 + 13 * d, cy + 4 * d, line)
+            }
+            1 -> { // gauge
+                c.drawArc(RectF(x0, cy - 7 * d, x0 + 14 * d, cy + 7 * d), 150f, 240f, false, line)
+                c.drawLine(x0 + 7 * d, cy, x0 + 11 * d, cy - 4 * d, line)
+            }
+            else -> for (gx in 0..2) for (gy in 0..2) c.drawRect(x0 + gx * 5 * d, cy - 7 * d + gy * 5 * d, x0 + 3 * d + gx * 5 * d, cy - 4 * d + gy * 5 * d, fill)
+        }
+        text.color = Color.argb((230 * a).toInt(), 220, 235, 255)
+        c.drawText(label, x0 + gw + 8 * d, cy + 4 * d, text)
+        text.textAlign = Paint.Align.CENTER
+    }
     private val recentRect = RectF()
     private var swipedUp = false
 
@@ -1037,6 +1050,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 if (dragging && !swipedUp) {
                     tracker?.computeCurrentVelocity(1000)
                     scrollVel = -(tracker?.yVelocity ?: 0f)
+                } else if (!longFired && launchFlash <= 0f && t > 1.2f && systemRect.contains(e.x, e.y)) {
+                    sfx.tick(); onSystem()
                 } else if (!longFired && launchFlash <= 0f && t > 1.2f && recentRect.contains(e.x, e.y)) {
                     sfx.tick(); onRecent()
                 } else if (!longFired && launchFlash <= 0f && t > 1.2f && allAppsRect.contains(e.x, e.y)) {

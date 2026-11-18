@@ -176,7 +176,7 @@ class MainActivity : Activity() {
             return
         }
         hub = HubView(this, builtIn, { open(it) }, { drawer.open(add = true) }, { appOptions(it) }, sfx, { homeSettings() },
-            { from, to -> moveApp(from, to) }, { drawer.open(add = false) }, { openSwitcher() })
+            { from, to -> moveApp(from, to) }, { drawer.open(add = false) }, { openSwitcher() }, { openSystem() })
         drawer = AppDrawer(this, sfx, { openPkg(it.pkg) }, { addApps(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
         drawer.onVisible = { open -> hub.covered = open; if (open) hub.clearSelection() }
         val root = android.widget.FrameLayout(this)
@@ -243,6 +243,12 @@ class MainActivity : Activity() {
     private fun closeTutorial() {
         prefs.edit().putBoolean("tutorialSeen", true).apply()
         tutorial.animate().alpha(0f).setDuration(250).withEndAction { tutorial.visibility = android.view.View.GONE }.start()
+    }
+
+    private fun openSystem() {
+        val o = android.app.ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out)
+        if (android.os.Build.VERSION.SDK_INT >= 33) o.setSplashScreenStyle(android.window.SplashScreen.SPLASH_SCREEN_STYLE_SOLID_COLOR)
+        startActivity(Intent(this, SystemActivity::class.java), o.toBundle())
     }
 
     private fun openSwitcher() {
@@ -376,6 +382,7 @@ class MainActivity : Activity() {
             NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
             NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
             NexusUi.Option("Choose my normal home screen") { chooseNormalHome() },
+            NexusUi.Option("System information & tools") { openSystem() },
             NexusUi.Option("Recent apps (square button)") { openAppsSettings() },
             NexusUi.Option("NEXUS lock screen:  " + (if (LockActivity.enabled(this)) "ON" else "OFF")) { lockSettings() },
             NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
