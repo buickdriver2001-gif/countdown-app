@@ -41,8 +41,12 @@ class SwitcherActivity : Activity() {
     private lateinit var view: SwitcherView
     private val sfx by lazy { Sfx() }
 
+    /** Opened from the square button: the helper's black cover is up until this screen is ready. */
+    var coverPending = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        coverPending = intent.getBooleanExtra("fromSquare", false)
         view = SwitcherView(this, sfx)
         setContentView(view)
         if (android.os.Build.VERSION.SDK_INT >= 30) window.decorView.post {
@@ -51,6 +55,12 @@ class SwitcherActivity : Activity() {
                 window.insetsController?.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             } catch (_: Exception) {}
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra("fromSquare", false)) coverPending = true
     }
 
     override fun onResume() { super.onResume(); view.load() }
@@ -179,6 +189,12 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         val dt = if (lastNs == 0L) 0f else min(0.05f, (now - lastNs) / 1e9f)
         lastNs = now; t += dt; enter = min(1f, enter + dt * 3.5f)
         val w = width.toFloat(); val h = height.toFloat()
+        // Drawn and in front: let the helper fade its cover away, and fade the cards in with it
+        if (a.coverPending && a.hasWindowFocus()) {
+            a.coverPending = false
+            enter = 0f
+            NexusAccessibility.instance?.switcherReady()
+        }
 
         // Backdrop: deep blue with a faint grid and a glow behind the cards (drawn once, reused)
         c.drawBitmap(backdrop(), 0f, 0f, null)

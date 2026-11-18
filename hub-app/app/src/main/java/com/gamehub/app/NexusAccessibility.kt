@@ -42,14 +42,14 @@ class NexusAccessibility : AccessibilityService() {
      */
     private val screenOn = object : android.content.BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
-            if (!LockActivity.enabled(c)) { dropCover(); return }
+            if (!LockActivity.enabled(c)) { if (!coverWanted()) dropCover(); return }
             // Never cover a phone call or a ringing call/alarm (the screen also turns off during calls)
             val am = getSystemService(android.media.AudioManager::class.java)
             val mode = am?.mode ?: android.media.AudioManager.MODE_NORMAL
             if (mode == android.media.AudioManager.MODE_RINGTONE || mode == android.media.AudioManager.MODE_IN_CALL ||
                 mode == android.media.AudioManager.MODE_IN_COMMUNICATION) { removeCover(); return }
             when (i.action) {
-                Intent.ACTION_SCREEN_OFF -> { otherAppSinceOff = false; addCover(); showLock(c) }
+                Intent.ACTION_SCREEN_OFF -> { otherAppSinceOff = false; h.removeCallbacks(safety); addCover(); showLock(c) }
                 Intent.ACTION_SCREEN_ON -> {
                     ensureCover()
                     val km = getSystemService(KeyguardManager::class.java)
@@ -61,8 +61,8 @@ class NexusAccessibility : AccessibilityService() {
                         // Fallback only: normally the lock screen is already in place from screen-off
                         if (!LockActivity.alive) showLock(c)
                         // Safety: the cover never stays more than a moment, whatever happens
-                        h.postDelayed({ removeCover() }, 1300)
-                    } else h.postDelayed({ removeCover() }, 120) // not locked: nothing to hide
+                        armSafety(1300)
+                    } else armSafety(120) // not locked: nothing to hide
                 }
             }
         }
@@ -73,13 +73,19 @@ class NexusAccessibility : AccessibilityService() {
     // to solid when the screen turns off. Switching see-through/solid needs no drawing, so it is already
     // in place the instant the screen wakes: you see black (what the NEXUS lock screen fades in from)
     // instead of a flash of the phone's own lock screen. It ignores touches and is cleared within a second.
+    // The same cover hides the phone's own recent-apps screen while NEXUS Recent Apps opens (square button).
+    // Once the NEXUS screen underneath is ready, the cover fades away, so it hands over smoothly.
 
     private var cover: android.view.View? = null
     private var coverLp: android.view.WindowManager.LayoutParams? = null
 
+    /** The cover is only kept when something uses it: the NEXUS lock screen, or NEXUS Recent Apps on the square button. */
+    private fun coverWanted(): Boolean =
+        LockActivity.enabled(this) || (takeOverRecents() && HomeMode.isOn(this) && HomeMode.isDefault(this))
+
     /** Makes sure the (see-through) cover exists. Only call while the screen is on. */
-    private fun ensureCover() {
-        if (cover != null || !LockActivity.enabled(this)) return
+    private fun ensureCover(force: Boolean = false) {
+        if (cover != null || (!force && !coverWanted())) return
         try {
             val wm = getSystemService(android.view.WindowManager::class.java) ?: return
             val v = android.view.View(this).apply { setBackgroundColor(android.graphics.Color.BLACK) }
@@ -99,16 +105,39 @@ class NexusAccessibility : AccessibilityService() {
     private fun setCover(solid: Boolean) {
         val v = cover ?: return
         val lp = coverLp ?: return
+        // Stop any fade in progress
+        v.animate().cancel()
+        if (v.alpha != 1f) v.alpha = 1f
         if ((lp.alpha > 0.5f) == solid) return
         lp.alpha = if (solid) 1f else 0f
         try { getSystemService(android.view.WindowManager::class.java)?.updateViewLayout(v, lp) } catch (_: Throwable) {}
     }
 
     private fun addCover() = setCover(true)
-    fun removeCover() = setCover(false)
+    /** Takes the cover away at once (calls, alarms and other apps never wait). */
+    fun removeCover() { h.removeCallbacks(safety); setCover(false) }
 
-    /** Called when the lock screen setting changes (main thread). */
-    fun refreshCover() { h.post { if (LockActivity.enabled(this)) ensureCover() else dropCover() } }
+    /** Lifts the cover with a short fade, so the NEXUS screen underneath appears smoothly. */
+    private fun fadeCover() {
+        h.removeCallbacks(safety)
+        val v = cover ?: return
+        val lp = coverLp ?: return
+        if (lp.alpha < 0.5f) return
+        v.animate().cancel()
+        v.animate().alpha(0f).setDuration(170).setInterpolator(android.view.animation.DecelerateInterpolator())
+            .withEndAction {
+                lp.alpha = 0f
+                try { getSystemService(android.view.WindowManager::class.java)?.updateViewLayout(v, lp) } catch (_: Throwable) {}
+                v.alpha = 1f
+            }.start()
+    }
+
+    /** Whatever happens, the cover is lifted after [ms]. */
+    private val safety = Runnable { fadeCover() }
+    private fun armSafety(ms: Long) { h.removeCallbacks(safety); h.postDelayed(safety, ms) }
+
+    /** Called when the lock screen or Recent Apps settings change (main thread). */
+    fun refreshCover() { h.post { if (coverWanted()) ensureCover() else dropCover() } }
 
     /** Takes the cover away completely (lock screen switched off, or the helper stopping). */
     private fun dropCover() {
@@ -118,7 +147,10 @@ class NexusAccessibility : AccessibilityService() {
     }
 
     /** Called by the NEXUS lock screen once it is lit and in front (the phone's own lock screen is no longer drawn). */
-    fun lockReady() { h.postDelayed({ removeCover() }, 50) }
+    fun lockReady() { armSafety(50) }
+
+    /** Called by NEXUS Recent Apps once it is drawn and in front: the cover fades away to reveal it. */
+    fun switcherReady() { armSafety(30) }
 
     /** Another app's screen appeared after the screen went off (alarm, timer, camera, call...). */
     @Volatile private var otherAppSinceOff = false
@@ -137,6 +169,8 @@ class NexusAccessibility : AccessibilityService() {
         running = true
         instance = this
         refreshHomes()
+        // Usage counts were kept by an earlier version for the lock screen cube; it no longer needs them
+        getSharedPreferences("hub", MODE_PRIVATE).edit().remove("usecount").apply()
         h.postDelayed(tick, 2000)
         ensureCover()
         val f = android.content.IntentFilter(Intent.ACTION_SCREEN_ON).apply { addAction(Intent.ACTION_SCREEN_OFF) }
@@ -175,7 +209,7 @@ class NexusAccessibility : AccessibilityService() {
         val pkg = e.packageName?.toString() ?: return
         val cls = e.className?.toString() ?: ""
         // Another app put up a screen (alarm, timer, camera, call...): the wake-up cover must never hide it
-        if (pkg != packageName && pkg != "com.android.systemui" && pkg != "android" &&
+        if (pkg != packageName && pkg != "com.android.systemui" && pkg != "android" && pkg !in homePkgs &&
             "inputmethod" !in pkg && "keyboard" !in pkg) {
             val pm = getSystemService(android.os.PowerManager::class.java)
             if (pm?.isInteractive == true) removeCover() else otherAppSinceOff = true
@@ -190,12 +224,16 @@ class NexusAccessibility : AccessibilityService() {
             val now = SystemClock.uptimeMillis()
             if (now - lastSwitcher > 800) {
                 lastSwitcher = now
-                // Cover the system screen straight away (no delay, no animation)
+                // Black out the phone's own screen straight away (like the lock screen does), open NEXUS Recent
+                // Apps underneath, and fade the cover away once it's ready. Never longer than a moment.
+                ensureCover(force = true)
+                addCover()
+                armSafety(900)
                 try {
                     startActivity(Intent(this, SwitcherActivity::class.java)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                         .putExtra("fromSquare", true), SwitcherActivity.noIconSplash(this))
-                } catch (_: Exception) {}
+                } catch (_: Exception) { removeCover() }
             }
             return
         }
@@ -261,18 +299,7 @@ object Recents {
         val l = list(c).filter { it.first != pkg }.toMutableList()
         l.add(0, pkg to System.currentTimeMillis())
         save(c, l.take(20))
-        // Count how often each app is opened (for "apps you use most")
-        val counts = useCounts(c).toMutableMap()
-        counts[pkg] = (counts[pkg] ?: 0) + 1
-        c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit()
-            .putString("usecount", counts.entries.sortedByDescending { it.value }.take(60).joinToString(",") { "${it.key}|${it.value}" }).apply()
     }
-
-    /** How many times each app has been opened (most used first). */
-    fun useCounts(c: Context): Map<String, Int> =
-        c.getSharedPreferences("hub", Context.MODE_PRIVATE).getString("usecount", "")!!
-            .split(",").mapNotNull { e -> val p = e.split("|"); if (p.size == 2) p[0] to (p[1].toIntOrNull() ?: 0) else null }
-            .toMap()
 
     fun remove(c: Context, pkg: String) {
         save(c, list(c).filter { it.first != pkg })

@@ -171,22 +171,16 @@ class LockView(private val a: LockActivity) : View(a) {
     fun reset() { dragY = 0f; dragging = false; asked = false; invalidate() }
 
     /**
-     * Icons for the cube's six faces: your most recent apps first, then the apps you use most,
-     * then the apps in your NEXUS list, so the cube is never empty.
+     * Icons for the cube's faces: only the apps that are open right now (the ones in NEXUS Recent Apps,
+     * newest first). Close an app there and it leaves the cube. Icons only, never what's on screen.
      */
     @Volatile private var faces: List<Bitmap> = emptyList()
 
     private fun loadFaces() {
         Thread {
             val pm = a.packageManager
-            val prefs = a.getSharedPreferences("hub", Context.MODE_PRIVATE)
-            val recent = Recents.list(a).map { it.first }
-            val mostUsed = Recents.useCounts(a).entries.sortedByDescending { it.value }.map { it.key }
-            val builtIn = listOf("com.zombiedots.app", "com.ashenvow.app", "com.synthpad.app")
-            val custom = prefs.getString("custom", "")!!.split(",").filter { it.isNotBlank() }
-            val order = prefs.getString("order", "")!!.split(",").filter { it.isNotBlank() }
-            val nexusApps = (order + builtIn + custom).distinct()
-            val pkgs = (recent + mostUsed + nexusApps).distinct()
+            // Same apps, same order as the Recent Apps screen
+            val pkgs = Recents.list(a).map { it.first }
                 .filter { it != a.packageName && pm.getLaunchIntentForPackage(it) != null }
             val out = ArrayList<Bitmap>()
             val size = 256
@@ -375,6 +369,15 @@ class LockView(private val a: LockActivity) : View(a) {
         floatArrayOf(0f, 1f, 0f, 0f, 0f, 1f), floatArrayOf(0f, -1f, 0f, 0f, 0f, -1f)
     )
     private val faceOrder = arrayOf(0, 1, 2, 3, 4, 5)
+
+    /**
+     * Which open app goes on each face (front, right, back, left, top, bottom). With fewer than six apps
+     * open, an app also appears on the face opposite it, so the faces you see together show different apps.
+     */
+    private val slotTable = arrayOf(
+        intArrayOf(0, 0, 0, 0, 0, 0), intArrayOf(0, 1, 0, 1, 0, 1), intArrayOf(0, 1, 0, 1, 2, 2),
+        intArrayOf(0, 1, 2, 3, 2, 3), intArrayOf(0, 1, 2, 3, 4, 2), intArrayOf(0, 1, 2, 3, 4, 5))
+    private fun faceSlots(n: Int): IntArray = slotTable[n.coerceIn(1, 6) - 1]
     private val faceDepth = FloatArray(6)
 
     private fun cube(c: Canvas, cx: Float, cy: Float, s: Float, ang: Float, alpha: Float) {
@@ -383,6 +386,7 @@ class LockView(private val a: LockActivity) : View(a) {
         if (pics.isNotEmpty()) {
             for (f in 0 until 6) { val fd = faceDefs[f]; turn(fd[0], fd[1], fd[2], ang); faceDepth[f] = rot[2] }
             val sorted = faceOrder.sortedByDescending { faceDepth[it] }
+            val slots = faceSlots(pics.size)
             for (f in sorted) {
                 if (faceDepth[f] > -0.05f) continue // facing away
                 val fd = faceDefs[f]
@@ -395,7 +399,7 @@ class LockView(private val a: LockActivity) : View(a) {
                     val pr = 3.2f / (3.2f + rot[2])
                     dst[k * 2] = cx + rot[0] * s * pr; dst[k * 2 + 1] = cy - rot[1] * s * pr
                 }
-                val bmp = pics[f % pics.size]
+                val bmp = pics[slots[f]]
                 src[0] = 0f; src[1] = 0f; src[2] = bmp.width.toFloat(); src[3] = 0f
                 src[4] = bmp.width.toFloat(); src[5] = bmp.height.toFloat(); src[6] = 0f; src[7] = bmp.height.toFloat()
                 mtx.setPolyToPoly(src, 0, dst, 0, 4)
