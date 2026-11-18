@@ -29,6 +29,8 @@ class NexusAccessibility : AccessibilityService() {
 
     companion object {
         @Volatile var running = false
+        /** The running helper (so the NEXUS lock screen can say when it's ready). */
+        @Volatile var instance: NexusAccessibility? = null
         fun snapDir(c: Context) = File(c.filesDir, "snaps").apply { mkdirs() }
         fun snapFile(c: Context, pkg: String) = File(snapDir(c), "$pkg.jpg")
     }
@@ -45,16 +47,53 @@ class NexusAccessibility : AccessibilityService() {
             val am = getSystemService(android.media.AudioManager::class.java)
             val mode = am?.mode ?: android.media.AudioManager.MODE_NORMAL
             if (mode == android.media.AudioManager.MODE_RINGTONE || mode == android.media.AudioManager.MODE_IN_CALL ||
-                mode == android.media.AudioManager.MODE_IN_COMMUNICATION) return
+                mode == android.media.AudioManager.MODE_IN_COMMUNICATION) { removeCover(); return }
             when (i.action) {
-                Intent.ACTION_SCREEN_OFF -> showLock(c)
+                Intent.ACTION_SCREEN_OFF -> { addCover(); showLock(c) }
                 Intent.ACTION_SCREEN_ON -> {
                     val km = getSystemService(KeyguardManager::class.java)
-                    if (km?.isKeyguardLocked == true && !LockActivity.showing) showLock(c)
+                    if (km?.isKeyguardLocked == true) {
+                        if (!LockActivity.showing) showLock(c)
+                        // Safety: the cover never stays more than a moment, whatever happens
+                        h.postDelayed({ removeCover() }, 1300)
+                    } else h.postDelayed({ removeCover() }, 120) // not locked: nothing to hide
                 }
             }
         }
     }
+
+    // ------------------------------------------------------------------ wake-up cover
+    // A plain black layer added while the screen is off, so when it turns on you see black (what the
+    // NEXUS lock screen fades in from) instead of a flash of the phone's own lock screen. It ignores
+    // touches and always removes itself within about a second.
+
+    private var cover: android.view.View? = null
+
+    private fun addCover() {
+        if (cover != null) return
+        try {
+            val wm = getSystemService(android.view.WindowManager::class.java) ?: return
+            val v = android.view.View(this).apply { setBackgroundColor(android.graphics.Color.BLACK) }
+            val lp = android.view.WindowManager.LayoutParams(
+                android.view.WindowManager.LayoutParams.MATCH_PARENT, android.view.WindowManager.LayoutParams.MATCH_PARENT,
+                android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                android.graphics.PixelFormat.OPAQUE)
+            if (Build.VERSION.SDK_INT >= 28) lp.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            wm.addView(v, lp)
+            cover = v
+        } catch (_: Throwable) { cover = null }
+    }
+
+    fun removeCover() {
+        val v = cover ?: return
+        cover = null
+        try { getSystemService(android.view.WindowManager::class.java)?.removeView(v) } catch (_: Throwable) {}
+    }
+
+    /** Called by the NEXUS lock screen once it has drawn on a lit screen. */
+    fun lockReady() { h.postDelayed({ removeCover() }, 32) }
 
     private fun showLock(c: Context) {
         try {
@@ -65,6 +104,7 @@ class NexusAccessibility : AccessibilityService() {
 
     override fun onServiceConnected() {
         running = true
+        instance = this
         refreshHomes()
         h.postDelayed(tick, 2000)
         val f = android.content.IntentFilter(Intent.ACTION_SCREEN_ON).apply { addAction(Intent.ACTION_SCREEN_OFF) }
@@ -75,6 +115,8 @@ class NexusAccessibility : AccessibilityService() {
 
     override fun onDestroy() {
         try { unregisterReceiver(screenOn) } catch (_: Exception) {}
+        removeCover()
+        instance = null
         running = false
         h.removeCallbacksAndMessages(null)
         super.onDestroy()

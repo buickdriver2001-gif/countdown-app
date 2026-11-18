@@ -151,7 +151,9 @@ class LockView(private val a: LockActivity) : View(a) {
     private val dateFmt = SimpleDateFormat("EEEE, MMMM d", Locale.getDefault())
     private var bg: Bitmap? = null
 
-    fun restart() { t = 0f; lastNs = 0L; reset(); loadFaces(); invalidate() }
+    fun restart() { t = 0f; lastNs = 0L; reset(); loadFaces(); notified = false; invalidate() }
+    private var notified = false
+    private val power = a.getSystemService(android.os.PowerManager::class.java)
     fun reset() { dragY = 0f; dragging = false; asked = false; invalidate() }
 
     /** Icons for the cube's six faces: the apps you have in NEXUS (in your NEXUS order). */
@@ -238,6 +240,8 @@ class LockView(private val a: LockActivity) : View(a) {
         val intro = min(1f, t / 1.1f)
         val lift = -dragY // content follows the finger up
         c.drawBitmap(backdrop(), 0f, 0f, null)
+        // First frame on a lit screen: tell the helper it can lift its black wake-up cover
+        if (!notified && power?.isInteractive == true) { notified = true; NexusAccessibility.instance?.lockReady() }
 
         val fade = (1f - dragY / (h * 0.35f)).coerceIn(0f, 1f) * intro
 
