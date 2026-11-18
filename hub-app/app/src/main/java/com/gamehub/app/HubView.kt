@@ -1006,9 +1006,17 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     // ------------------------------------------------------------------ touch
-    // Tap = highlight; tap the highlighted one again = open. Dragging scrolls and never selects.
+    // Tap = highlight; tap the highlighted one again = open. Swiping scrolls and never highlights:
+    //  - any finger movement past a few dp, or a quick flick (even a short one), counts as a swipe
+    //  - the finger's position when it lifts counts too (a fast flick can jump a long way in that last step)
+    //  - touching the list while it's still gliding just stops it, it doesn't pick what's under the thumb
 
     private var downRow = -1
+    /** This touch landed on a list that was still moving: it only stops the list. */
+    private var caught = false
+    /** Furthest the finger has been from where it touched down. */
+    private var maxTravel = 0f
+    private fun travel(x: Float, y: Float) { maxTravel = max(maxTravel, kotlin.math.hypot(x - downX, y - downY)) }
     private var longFired = false
     private var dragging = false
     private var downX = 0f; private var downY = 0f; private var lastY = 0f
@@ -1045,20 +1053,24 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 if (booting) return true // the intro always plays in full
                 downX = e.x; downY = e.y; lastY = e.y; lastX = e.x
                 dragging = false; longFired = false
+                maxTravel = 0f
+                caught = kotlin.math.abs(scrollVel) > 40 * d || scroll < -2 * d || scroll > maxScroll + 2 * d
                 scrollVel = 0f
                 downRow = rowAt(e.x, e.y)
                 swipedUp = false
-                if (downRow in games.indices) postDelayed(longPress, 600)
+                if (downRow in games.indices && !caught) postDelayed(longPress, 600)
             }
             MotionEvent.ACTION_MOVE -> {
                 lastX = e.x
+                for (k in 0 until e.historySize) travel(e.getHistoricalX(k), e.getHistoricalY(k))
+                travel(e.x, e.y)
                 if (moveIndex >= 0) {
                     moveY = e.y
                     if (kotlin.math.abs(e.y - downY) > slop) movedWhileHeld = true
                     lastY = e.y
                     return true
                 }
-                if (!dragging && (kotlin.math.abs(e.y - downY) > slop || kotlin.math.abs(e.x - downX) > slop)) {
+                if (!dragging && maxTravel > slop) {
                     dragging = true
                     removeCallbacks(longPress)
                 }
@@ -1072,6 +1084,13 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             }
             MotionEvent.ACTION_UP -> {
                 removeCallbacks(longPress)
+                travel(e.x, e.y)
+                tracker?.computeCurrentVelocity(1000)
+                val vy = tracker?.yVelocity ?: 0f
+                val vx = tracker?.xVelocity ?: 0f
+                // A flick, however short, is a swipe, not a tap
+                val flick = kotlin.math.hypot(vx, vy) > 350 * d
+                val tap = !dragging && !flick && maxTravel <= slop * 0.75f
                 if (moveIndex >= 0) {
                     val from = moveIndex
                     moveIndexForDrop = from
@@ -1091,9 +1110,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     tracker?.recycle(); tracker = null
                     return true
                 }
-                if (dragging && !swipedUp) {
-                    tracker?.computeCurrentVelocity(1000)
-                    scrollVel = -(tracker?.yVelocity ?: 0f)
+                if (!tap) {
+                    // Swipe: let the list glide on (a short flick that never got going still moves it)
+                    val inList = downY >= listTop - 6 * d && downY <= listBottom + 6 * d
+                    if (!swipedUp && (dragging || (flick && inList))) scrollVel = -vy
                 } else if (!longFired && launchFlash <= 0f && t > 1.2f && systemRect.contains(e.x, e.y)) {
                     sfx.tick(); onSystem()
                 } else if (!longFired && launchFlash <= 0f && t > 1.2f && recentRect.contains(e.x, e.y)) {
@@ -1102,7 +1122,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     sfx.tick(); onDrawer()
                 } else if (!longFired && launchFlash <= 0f && t > 1.2f && gearRect.contains(e.x, e.y)) {
                     sfx.tick(); onSettings()
-                } else if (!longFired && launchFlash <= 0f && t > 1.2f) {
+                } else if (!longFired && !caught && launchFlash <= 0f && t > 1.2f) {
                     val r = rowAt(e.x, e.y)
                     if (r >= 0 && r == downRow) {
                         if (r != selected) { selected = r; sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK) }
