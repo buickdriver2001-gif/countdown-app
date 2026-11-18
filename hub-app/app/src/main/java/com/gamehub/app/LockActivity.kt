@@ -138,47 +138,37 @@ class LockView(private val a: LockActivity) : View(a) {
 
     fun restart() { t = 0f; lastNs = 0L; reset(); loadFaces(); invalidate() }
 
-    /** Pictures for the cube's six faces: recent apps' icons, or (if allowed) their last screens. */
+    /** Icons for the cube's six faces: the apps you have in NEXUS (in your NEXUS order). */
     @Volatile private var faces: List<Bitmap> = emptyList()
 
     private fun loadFaces() {
-        val showShots = a.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("lockShots", false)
         Thread {
             val pm = a.packageManager
+            val prefs = a.getSharedPreferences("hub", Context.MODE_PRIVATE)
+            val builtIn = listOf("com.zombiedots.app", "com.ashenvow.app", "com.synthpad.app")
+            val custom = prefs.getString("custom", "")!!.split(",").filter { it.isNotBlank() }
+            val all = (builtIn + custom).distinct()
+            val order = prefs.getString("order", "")!!.split(",").filter { it.isNotBlank() }
+            val pkgs = (order.filter { it in all } + all.filter { it !in order })
+                .filter { pm.getLaunchIntentForPackage(it) != null }
             val out = ArrayList<Bitmap>()
             val size = 256
-            for ((pkg, _) in Recents.list(a)) {
+            for (pkg in pkgs) {
                 if (out.size >= 6) break
-                if (pm.getLaunchIntentForPackage(pkg) == null) continue
+                val icon = try { pm.getApplicationIcon(pkg) } catch (_: Exception) { null } ?: continue
                 val b = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
                 val c = Canvas(b)
-                val p = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-                // Dark glass background
+                val p = Paint(Paint.ANTI_ALIAS_FLAG)
+                // Dark glass face with the app's icon in the middle
                 p.shader = LinearGradient(0f, 0f, 0f, size.toFloat(), Color.rgb(16, 30, 70), Color.rgb(6, 10, 26), Shader.TileMode.CLAMP)
-                c.drawRect(0f, 0f, size.toFloat(), size.toFloat(), p); p.shader = null
-                var drewShot = false
-                if (showShots) {
-                    val f = NexusAccessibility.snapFile(a, pkg)
-                    if (f.exists()) {
-                        val shot = try { android.graphics.BitmapFactory.decodeFile(f.absolutePath) } catch (_: Exception) { null }
-                        if (shot != null) {
-                            // Top square of the screen
-                            val sq = min(shot.width, shot.height)
-                            c.drawBitmap(shot, android.graphics.Rect(0, 0, sq, sq), android.graphics.Rect(0, 0, size, size), p)
-                            shot.recycle(); drewShot = true
-                        }
-                    }
-                }
-                if (!drewShot) {
-                    val icon = try { pm.getApplicationIcon(pkg) } catch (_: Exception) { null }
-                    icon?.setBounds(size / 4, size / 4, size * 3 / 4, size * 3 / 4); icon?.draw(c)
-                }
+                c.drawRect(0f, 0f, size.toFloat(), size.toFloat(), p)
+                icon.setBounds(size / 5, size / 5, size * 4 / 5, size * 4 / 5)
+                icon.draw(c)
                 out.add(b)
             }
             post { faces = out }
         }.start()
     }
-    fun reset() { dragY = 0f; dragging = false; asked = false; invalidate() }
 
     private fun backdrop(): Bitmap {
         val cur = bg

@@ -339,14 +339,6 @@ class MainActivity : Activity() {
             prefs.edit().putBoolean("lockScreen", !on).apply()
             Toast.makeText(this, if (!on) "NEXUS lock screen on. Turn your screen off and on to see it." else "NEXUS lock screen off", Toast.LENGTH_SHORT).show()
         })
-        val shots = prefs.getBoolean("lockShots", false)
-        opts.add(NexusUi.Option("Show app pictures on the cube:  " + (if (shots) "ON" else "OFF")) {
-            if (shots) { prefs.edit().putBoolean("lockShots", false).apply(); lockSettings() }
-            else NexusUi.panel(this, "Show app pictures?",
-                "The cube will show the last screen of your recent apps. These show BEFORE you unlock, so anyone holding your phone could see them (for example, your messages).\n\nWhen this is off, the cube shows your recent apps' icons instead.",
-                listOf(NexusUi.Option("Show pictures anyway", danger = true) { prefs.edit().putBoolean("lockShots", true).apply(); lockSettings() }),
-                cancel = "Keep icons")
-        })
         NexusUi.panel(this, "NEXUS lock screen", msg, opts, cancel = "Done")
     }
 
