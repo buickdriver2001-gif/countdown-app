@@ -12,22 +12,19 @@ import java.util.concurrent.ConcurrentHashMap
 object AppCache {
     class Info(val label: String, val icon: Drawable?)
     private val infos = ConcurrentHashMap<String, Info>()
-    /** Apps that can't be opened (uninstalled, or no screen to open). */
-    private val missing = ConcurrentHashMap.newKeySet<String>()
 
     /** Name and icon for [pkg] (null if it can't be opened). Looks it up now if it isn't cached yet. */
     fun get(c: Context, pkg: String): Info? {
         infos[pkg]?.let { return it }
-        if (pkg in missing) return null
-        return load(c, pkg)
+        return load(c, pkg) // (checked again each time, so an app that was mid-update comes back)
     }
 
     private fun load(c: Context, pkg: String): Info? {
         val pm = c.packageManager
-        if (pm.getLaunchIntentForPackage(pkg) == null) { missing.add(pkg); return null }
-        val label = try { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { missing.add(pkg); return null }
+        if (pm.getLaunchIntentForPackage(pkg) == null) return null
+        val label = try { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { return null }
         val icon = try { pm.getApplicationIcon(pkg) } catch (_: Exception) { null }
-        return Info(label, icon).also { infos[pkg] = it; missing.remove(pkg) }
+        return Info(label, icon).also { infos[pkg] = it }
     }
 
     /** Looks up these apps in the background (so they're ready next time). */
@@ -35,9 +32,9 @@ object AppCache {
         val todo = pkgs.filter { !infos.containsKey(it) }
         if (todo.isEmpty()) return
         val app = c.applicationContext
-        Thread { for (p in todo) { missing.remove(p); load(app, p) } }.start()
+        Thread { for (p in todo) load(app, p) }.start()
     }
 
     /** Forget an app (it was uninstalled or updated). */
-    fun forget(pkg: String) { infos.remove(pkg); missing.remove(pkg) }
+    fun forget(pkg: String) { infos.remove(pkg) }
 }

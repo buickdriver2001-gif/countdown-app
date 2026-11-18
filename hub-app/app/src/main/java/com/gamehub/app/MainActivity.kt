@@ -191,6 +191,8 @@ class MainActivity : Activity() {
         root.addView(tutorial)
         setContentView(root)
         drawer.load()
+        // Keep up with apps being installed, updated or removed (an app being updated briefly disappears)
+        try { getSystemService(android.content.pm.LauncherApps::class.java)?.registerCallback(appsChanged, android.os.Handler(mainLooper)) } catch (_: Exception) {}
         // Full screen: no status bar, no navigation buttons (swipe from an edge to peek at them)
         if (android.os.Build.VERSION.SDK_INT >= 28) window.attributes.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         window.decorView.post { hideBars() }
@@ -440,8 +442,23 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        try { getSystemService(android.content.pm.LauncherApps::class.java)?.unregisterCallback(appsChanged) } catch (_: Exception) {}
         super.onDestroy()
         sfx.release()
+    }
+
+    /** An app was installed, updated or removed: refresh the tiles, All Apps and Recent Apps' names and icons. */
+    private val appsChanged = object : android.content.pm.LauncherApps.Callback() {
+        private fun changed(pkgs: Array<out String>?) {
+            pkgs?.forEach { AppCache.forget(it) }
+            drawer.load()
+            if (::hub.isInitialized) refresh()
+        }
+        override fun onPackageAdded(packageName: String, user: android.os.UserHandle) = changed(arrayOf(packageName))
+        override fun onPackageRemoved(packageName: String, user: android.os.UserHandle) = changed(arrayOf(packageName))
+        override fun onPackageChanged(packageName: String, user: android.os.UserHandle) = changed(arrayOf(packageName))
+        override fun onPackagesAvailable(packageNames: Array<out String>, user: android.os.UserHandle, replacing: Boolean) = changed(packageNames)
+        override fun onPackagesUnavailable(packageNames: Array<out String>, user: android.os.UserHandle, replacing: Boolean) = changed(packageNames)
     }
 
     override fun onNewIntent(intent: Intent?) {

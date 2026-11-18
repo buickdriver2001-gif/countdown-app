@@ -115,6 +115,8 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         addView(addBar, LayoutParams((240 * d).toInt(), (52 * d).toInt(), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = (28 * d).toInt() })
     }
 
+    private var loadedAt = 0L
+
     /** Reads the phone's apps (in the background; icons too). */
     fun load() {
         Thread {
@@ -127,7 +129,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
                 .map { info -> AppItem(pm.getApplicationLabel(info).toString(), info.packageName, Build.VERSION.SDK_INT >= 26 && info.category == ApplicationInfo.CATEGORY_GAME) }
                 .sortedBy { it.label.lowercase() }
             for (it in list) it.icon = try { pm.getApplicationIcon(it.pkg) } catch (_: Exception) { null }
-            post { apps = list; if (isOpen) fill() }
+            post { apps = list; loadedAt = android.os.SystemClock.uptimeMillis(); if (isOpen) fill() }
         }.start()
     }
 
@@ -146,7 +148,8 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         visibility = VISIBLE
         alpha = 0f; translationY = 48 * d
         animate().alpha(1f).translationY(0f).setDuration(240).setInterpolator(android.view.animation.DecelerateInterpolator(1.6f)).withLayer().start()
-        if (apps.isEmpty()) load()
+        // Refresh the list if it's empty or a while old (in case an app was installed or updated meanwhile)
+        if (apps.isEmpty() || android.os.SystemClock.uptimeMillis() - loadedAt > 60_000) load()
     }
 
     private fun key() = "$addMode|${search.text}|${apps.size}|${apps.count { inNexus(it.pkg) }}"
