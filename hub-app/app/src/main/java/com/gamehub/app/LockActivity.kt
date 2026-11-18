@@ -60,15 +60,30 @@ class LockActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        val km = getSystemService(KeyguardManager::class.java)
-        // Phone didn't actually lock (woken again within a few seconds): get out of the way instantly
-        if (km?.isKeyguardLocked != true) {
-            finish()
-            @Suppress("DEPRECATION") overridePendingTransition(0, 0)
-            return
-        }
+        // While the screen is off the phone may take a moment to lock: stay ready rather than closing early
+        if (!stillNeeded()) return
         showing = true
         view.restart()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) stillNeeded()
+    }
+
+    /**
+     * Steps aside only if the screen is ON and the phone is NOT locked (e.g. woken again within
+     * a few seconds of turning it off). Returns true if the lock screen should stay.
+     */
+    private fun stillNeeded(): Boolean {
+        val km = getSystemService(KeyguardManager::class.java)
+        val pm = getSystemService(android.os.PowerManager::class.java)
+        if (km?.isKeyguardLocked != true && pm?.isInteractive == true) {
+            finish()
+            @Suppress("DEPRECATION") overridePendingTransition(0, 0)
+            return false
+        }
+        return true
     }
 
     override fun onStop() {
