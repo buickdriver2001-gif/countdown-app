@@ -169,36 +169,48 @@ class LockView(private val a: LockActivity) : View(a) {
         val lift = -dragY // content follows the finger up
         c.drawBitmap(backdrop(), 0f, 0f, null)
 
-        // A glowing glass cube turning slowly behind the clock
-        val cx = w / 2; val cy = h * 0.3f + lift * 0.3f
-        val s = min(w, h) * 0.2f * (0.85f + 0.15f * intro)
-        fill.shader = RadialGradient(cx, cy, s * 3f, intArrayOf(Color.argb((90 * intro).toInt(), 60, 120, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-        c.drawCircle(cx, cy, s * 3f, fill); fill.shader = null
-        cube(c, cx, cy, s, t * 0.35f, 0.35f * intro)
-
-        // Clock, date, battery
         val fade = (1f - dragY / (h * 0.35f)).coerceIn(0f, 1f) * intro
-        text.textSize = 84 * d; text.letterSpacing = 0.02f
+
+        // NEXUS wordmark at the very top
+        text.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+        text.textSize = 12 * d; text.letterSpacing = 0.6f
+        text.color = Color.argb((110 * fade).toInt(), 170, 200, 255)
+        c.drawText("NEXUS", w / 2 + 4 * d, 56 * d + lift * 0.2f, text)
+
+        // Clock, date and battery: top third, clear of everything else
+        val clockY = h * 0.24f + lift * 0.5f
+        text.typeface = Typeface.create("sans-serif-thin", Typeface.NORMAL)
+        text.textSize = 88 * d; text.letterSpacing = 0.02f
         text.color = Color.argb((255 * fade).toInt(), 240, 246, 255)
-        text.setShadowLayer(16 * d, 0f, 0f, Color.argb((160 * fade).toInt(), 60, 130, 255))
-        c.drawText(timeFmt.format(Date()), w / 2, h * 0.33f + lift * 0.5f, text)
+        text.setShadowLayer(16 * d, 0f, 0f, Color.argb((150 * fade).toInt(), 60, 130, 255))
+        c.drawText(timeFmt.format(Date()), w / 2, clockY, text)
         text.setShadowLayer(0f, 0f, 0f, 0)
         text.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
-        text.textSize = 16 * d; text.letterSpacing = 0.12f
-        text.color = Color.argb((200 * fade).toInt(), 190, 210, 245)
-        c.drawText(dateFmt.format(Date()).uppercase(), w / 2, h * 0.33f + 40 * d + lift * 0.5f, text)
+        text.textSize = 15 * d; text.letterSpacing = 0.14f
+        text.color = Color.argb((210 * fade).toInt(), 190, 210, 245)
+        c.drawText(dateFmt.format(Date()).uppercase(), w / 2, clockY + 40 * d, text)
         val bat = battery()
         if (bat >= 0) {
-            text.textSize = 12 * d; text.letterSpacing = 0.2f
-            text.color = Color.argb((150 * fade).toInt(), 160, 190, 240)
-            c.drawText("$bat%", w / 2, h * 0.33f + 66 * d + lift * 0.5f, text)
+            // Small battery outline with the level
+            val bw = 22 * d; val bh = 11 * d
+            val bx = w / 2 - bw / 2 - 18 * d; val byy = clockY + 62 * d
+            line.strokeWidth = 1.2f * d; line.color = Color.argb((160 * fade).toInt(), 170, 200, 245)
+            c.drawRoundRect(bx, byy, bx + bw, byy + bh, 2 * d, 2 * d, line)
+            c.drawRect(bx + bw + 1 * d, byy + bh * 0.3f, bx + bw + 3 * d, byy + bh * 0.7f, line)
+            fill.color = Color.argb((190 * fade).toInt(), if (bat <= 15) 255 else 170, if (bat <= 15) 120 else 210, if (bat <= 15) 110 else 255)
+            c.drawRect(bx + 2 * d, byy + 2 * d, bx + 2 * d + (bw - 4 * d) * bat / 100f, byy + bh - 2 * d, fill)
+            text.textSize = 12 * d; text.letterSpacing = 0.15f; text.textAlign = Paint.Align.LEFT
+            text.color = Color.argb((170 * fade).toInt(), 170, 200, 245)
+            c.drawText("$bat%", bx + bw + 9 * d, byy + bh - 1 * d, text)
+            text.textAlign = Paint.Align.CENTER
         }
-        text.typeface = Typeface.create("sans-serif-thin", Typeface.NORMAL)
-        // NEXUS wordmark
-        text.typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
-        text.textSize = 13 * d; text.letterSpacing = 0.6f
-        text.color = Color.argb((120 * fade).toInt(), 170, 200, 255)
-        c.drawText("NEXUS", w / 2 + 4 * d, 56 * d + lift * 0.2f, text)
+
+        // A smaller glass cube turning slowly in its own space below the text
+        val cx = w / 2; val cy = h * 0.6f + lift * 0.3f
+        val s = min(w, h) * 0.13f * (0.85f + 0.15f * intro)
+        fill.shader = RadialGradient(cx, cy, s * 3.2f, intArrayOf(Color.argb((80 * intro).toInt(), 60, 120, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        c.drawCircle(cx, cy, s * 3.2f, fill); fill.shader = null
+        cube(c, cx, cy, s, t * 0.35f, 0.3f * fade)
 
         // Swipe-up handle: chevrons that breathe, and a glow line
         val by = h - 70 * d + lift
