@@ -185,6 +185,7 @@ class MainActivity : Activity() {
         root.addView(tutorial)
         setContentView(root)
         dropOldDescriptions()
+        addCountdownTileOnce()
         drawer.load()
         // Keep up with apps being installed, updated or removed (an app being updated briefly disappears)
         try { getSystemService(android.content.pm.LauncherApps::class.java)?.registerCallback(appsChanged, android.os.Handler(mainLooper)) } catch (_: Exception) {}
@@ -510,7 +511,27 @@ class MainActivity : Activity() {
     private val reloadApps = Runnable {
         if (isFinishing || isDestroyed) return@Runnable
         drawer.load()
+        addCountdownTileOnce()
         if (::hub.isInitialized) refresh()
+        loadCountdown()
+    }
+
+    /** Reads your countdown from the Countdown app (in the background), for its live tile. */
+    private fun loadCountdown() {
+        Thread {
+            val info = CountdownLink.read(applicationContext)
+            runOnUiThread { if (::hub.isInitialized) hub.countdown = info }
+        }.start()
+    }
+
+    /** The first time NEXUS finds the Countdown app, it gets a tile (just once: remove it like any other tile). */
+    private fun addCountdownTileOnce() {
+        if (prefs.getBoolean("countdownTileAdded", false)) return
+        if (packageManager.getLaunchIntentForPackage(CountdownLink.PKG) == null) return
+        val custom = customPkgs()
+        val edit = prefs.edit().putBoolean("countdownTileAdded", true)
+        if (CountdownLink.PKG !in custom) edit.putString("custom", (custom + CountdownLink.PKG).joinToString(","))
+        edit.apply()
     }
     private val appsChanged = object : android.content.pm.LauncherApps.Callback() {
         private fun changed(pkgs: Array<out String>?) {
@@ -547,6 +568,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (::hub.isInitialized) { refresh(); hub.resumed(leftForApp) }
+        loadCountdown()
         leftForApp = false
         hideBars()
         // If Android has stopped the helper, the NEXUS lock screen and Recent Apps can't work: say so, once

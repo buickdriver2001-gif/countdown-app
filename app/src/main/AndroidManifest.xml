@@ -21,6 +21,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Lets NEXUS (your own launcher, same signing key) show the countdown ticking on its tile. Read-only. -->
+        <provider
+            android:name=".CountdownProvider"
+            android:authorities="com.countdown.app.countdown"
+            android:exported="true" />
+
         <receiver
             android:name=".CountdownWidget"
             android:exported="true"

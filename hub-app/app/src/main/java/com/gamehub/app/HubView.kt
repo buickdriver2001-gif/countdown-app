@@ -1010,6 +1010,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val nameCol = Color.argb((255 * a).toInt(), 240, 245, 255)
         text.textAlign = Paint.Align.LEFT
         c.save(); c.clipRect(r)
+        // The Countdown tile shows your countdown ticking instead of its name
+        if (g.pkg == CountdownLink.PKG && g.installed && countdown != null) {
+            drawCountdown(c, g, r, plan, a, accent)
+            c.restore()
+            return
+        }
         when {
             wide -> {
                 // Wide: icon on the left, the full name beside it
@@ -1048,6 +1054,110 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             }
         }
         c.restore()
+    }
+
+    /** Your Countdown app's countdown (set by NEXUS), shown ticking on the Countdown tile. */
+    var countdown: CountdownLink.Info? = null
+
+    // The time left, worked out once a second (the same HH:MM:SS as the Countdown app: hours past 24, no days)
+    private var cdSec = Long.MIN_VALUE
+    private var cdText = ""
+    private fun countdownText(left: Long): String {
+        val sec = if (left <= 0) -1L else left / 1000
+        if (sec != cdSec) {
+            cdSec = sec
+            cdText = if (sec < 0) "TIME'S UP" else String.format(Locale.US, "%02d:%02d:%02d", sec / 3600, (sec % 3600) / 60, sec % 60)
+        }
+        return cdText
+    }
+    /** Digits all the same width, so the time doesn't wobble as it ticks. */
+    private val cdPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        typeface = Typeface.create("sans-serif-light", Typeface.NORMAL); fontFeatureSettings = "tnum"
+    }
+    // The countdown's name, shortened to fit (worked out only when it changes)
+    private var cdTitleSrc = ""; private var cdTitleW = -1f; private var cdTitleSize = -1f; private var cdTitle = ""
+    private fun fitTitle(name: String, maxW: Float, size: Float): String {
+        if (name == cdTitleSrc && maxW == cdTitleW && size == cdTitleSize) return cdTitle
+        cdTitleSrc = name; cdTitleW = maxW; cdTitleSize = size
+        cdPaint.textSize = size; cdPaint.letterSpacing = 0.06f
+        var s = name
+        if (cdPaint.measureText(s) > maxW) {
+            while (s.isNotEmpty() && cdPaint.measureText("$s…") > maxW) s = s.dropLast(1)
+            s = s.trimEnd() + "…"
+        }
+        cdTitle = s
+        return s
+    }
+    /** The biggest text size (up to [max]) at which [s] fits in [w]. */
+    private fun fitSize(s: String, w: Float, max: Float, spacing: Float): Float {
+        cdPaint.textSize = 20 * d; cdPaint.letterSpacing = spacing
+        val at20 = cdPaint.measureText(s)
+        return if (at20 <= 0f) max else min(max, 20 * d * w / at20)
+    }
+
+    /** The Countdown tile: the countdown's name and the time left, ticking (the shape follows the tile size). */
+    private fun drawCountdown(c: Canvas, g: GameEntry, r: RectF, plan: TileText.Plan, a: Float, accent: Int) {
+        val cd = countdown ?: return
+        val left = cd.target - System.currentTimeMillis()
+        val time = countdownText(left)
+        val done = left <= 0
+        val titleCol = Color.argb((190 * a).toInt(), 170, 200, 240)
+        val timeCol = if (done) Color.argb((255 * a).toInt(), 255, 200, 120) else Color.argb((255 * a).toInt(), 240, 245, 255)
+        val glow = Color.argb((110 * a).toInt(), 90, 150, 255)
+        cdPaint.textAlign = Paint.Align.LEFT
+        when (plan.kind) {
+            TileText.Kind.WIDE -> {
+                fill.color = accent; c.drawRect(r.left, r.top + r.height() * 0.2f, r.left + 2.5f * d, r.bottom - r.height() * 0.2f, fill)
+                val isz = plan.icon
+                tmpRect.set(r.left + 14 * d, r.centerY() - isz / 2, r.left + 14 * d + isz, r.centerY() + isz / 2)
+                drawIcon(c, g, tmpRect, a)
+                val tx = tmpRect.right + 14 * d
+                val avail = r.right - 12 * d - tx
+                val ts = min(12.5f * d, r.height() * 0.16f)
+                val tz = fitSize(time, avail, min(r.height() * 0.4f, 34 * d), 0.04f)
+                val block = ts * 1.25f + 4 * d + tz * 0.8f
+                val top = r.centerY() - block / 2
+                cdPaint.setShadowLayer(0f, 0f, 0f, 0)
+                val title = fitTitle(cd.name, avail, ts)
+                cdPaint.textSize = ts; cdPaint.letterSpacing = 0.06f; cdPaint.color = titleCol
+                c.drawText(title, tx, top + ts, cdPaint)
+                cdPaint.textSize = tz; cdPaint.letterSpacing = 0.04f; cdPaint.color = timeCol
+                cdPaint.setShadowLayer(6 * d, 0f, 0f, glow)
+                c.drawText(time, tx, top + ts * 1.25f + 4 * d + tz * 0.8f, cdPaint)
+            }
+            TileText.Kind.LARGE, TileText.Kind.TALL -> {
+                fill.color = accent; c.drawRect(r.left + 12 * d, r.top, r.left + 12 * d + r.width() * 0.25f, r.top + 2.5f * d, fill)
+                val isz = plan.icon
+                tmpRect.set(r.left + 12 * d, r.top + 14 * d, r.left + 12 * d + isz, r.top + 14 * d + isz)
+                drawIcon(c, g, tmpRect, a)
+                val avail = r.width() - 24 * d
+                val ts = min(13 * d, r.width() * 0.09f)
+                val tz = fitSize(time, avail, min(r.height() * 0.26f, 46 * d), 0.04f)
+                val timeBase = r.bottom - 16 * d
+                cdPaint.setShadowLayer(0f, 0f, 0f, 0)
+                val title = fitTitle(cd.name, avail, ts)
+                cdPaint.textSize = ts; cdPaint.letterSpacing = 0.06f; cdPaint.color = titleCol
+                c.drawText(title, r.left + 12 * d, timeBase - tz * 0.8f - 8 * d, cdPaint)
+                cdPaint.textSize = tz; cdPaint.letterSpacing = 0.04f; cdPaint.color = timeCol
+                cdPaint.setShadowLayer(8 * d, 0f, 0f, glow)
+                c.drawText(time, r.left + 12 * d, timeBase, cdPaint)
+            }
+            else -> {
+                // Small: the icon, and the time underneath
+                val isz = plan.icon * 0.85f
+                val tz = fitSize(time, r.width() - 12 * d, 15 * d, 0.02f)
+                val block = isz + 6 * d + tz * 0.8f
+                val top = r.centerY() - block / 2
+                tmpRect.set(r.centerX() - isz / 2, top, r.centerX() + isz / 2, top + isz)
+                drawIcon(c, g, tmpRect, a)
+                cdPaint.textAlign = Paint.Align.CENTER
+                cdPaint.textSize = tz; cdPaint.letterSpacing = 0.02f; cdPaint.color = timeCol
+                cdPaint.setShadowLayer(5 * d, 0f, 0f, glow)
+                c.drawText(time, r.centerX(), top + isz + 6 * d + tz * 0.8f, cdPaint)
+                cdPaint.textAlign = Paint.Align.LEFT
+            }
+        }
+        cdPaint.setShadowLayer(0f, 0f, 0f, 0)
     }
 
     private fun drawAddTile(c: Canvas, r: RectF, sel: Boolean, a: Float) {

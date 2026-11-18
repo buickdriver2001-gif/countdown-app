@@ -6,6 +6,9 @@
         <package android:name="com.zombiedots.app" />
         <package android:name="com.ashenvow.app" />
         <package android:name="com.synthpad.app" />
+        <!-- The live Countdown tile reads your Countdown app's countdown -->
+        <package android:name="com.countdown.app" />
+        <provider android:authorities="com.countdown.app.countdown" />
         <!-- Lets "Add an app" list the apps on the phone -->
         <intent>
             <action android:name="android.intent.action.MAIN" />
