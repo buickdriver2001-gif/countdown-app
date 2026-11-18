@@ -74,7 +74,7 @@ class NexusAccessibility : AccessibilityService() {
     }
 
     private fun handleScreen(c: Context, i: Intent) {
-        if (i.action == Intent.ACTION_SCREEN_OFF) leftByScreenOff = true
+        if (i.action == Intent.ACTION_SCREEN_OFF) { leftByScreenOff = true; persistShot() }
         val kmT = getSystemService(KeyguardManager::class.java)
         LockTrace.log(this, "screen " + (if (i.action == Intent.ACTION_SCREEN_OFF) "OFF" else "ON") +
             ": lockScreen=" + LockActivity.enabled(c) + " phoneLocked=" + kmT?.isKeyguardLocked +
@@ -299,6 +299,8 @@ class NexusAccessibility : AccessibilityService() {
         instance = null
         running = false
         h.removeCallbacksAndMessages(null)
+        persistShot()
+        shotThread.quitSafely()
         super.onDestroy()
     }
 
@@ -414,6 +416,7 @@ class NexusAccessibility : AccessibilityService() {
             val screen = if (isActivity(pkg, cls)) cls else null
             if (pkg != current) currentCls = screen else if (screen != null) currentCls = screen
             if (pkg != current) {
+                persistShot()
                 current = pkg
                 val token = ++openToken
                 h.postDelayed({
@@ -427,6 +430,7 @@ class NexusAccessibility : AccessibilityService() {
                 }, 1500)
             }
         } else if (pkg in homePkgs || pkg == packageName) {
+            if (current != null) persistShot()
             current = null; currentCls = null; openToken++
             // Back on the NEXUS home screen straight from one of our own apps: that app closes completely
             // (not when the screen just went off and came back, and not via the square button's Recent Apps)
@@ -492,12 +496,41 @@ class NexusAccessibility : AccessibilityService() {
 
     private fun takeOverRecents() = getSharedPreferences("hub", MODE_PRIVATE).getBoolean("replaceRecents", true)
 
-    /** Every couple of seconds, refresh the current app's screenshot. */
+    /**
+     * Every few seconds, refresh the current app's picture (for Recent Apps and the square button's zoom).
+     * Kept in memory; it's only saved to storage when you leave the app (or at most every 30 seconds), so the
+     * phone isn't writing a file every few seconds. Slower in Battery Saver.
+     */
     private val tick = object : Runnable {
         override fun run() {
             safe { snap() }
-            h.postDelayed(this, 3000)
+            val saver = getSystemService(PowerManager::class.java)?.isPowerSaveMode == true
+            h.postDelayed(this, if (saver) 8000L else 3000L)
         }
+    }
+
+    /** Pictures are made and saved here, one at a time (not a new thread each time). */
+    private val shotThread = android.os.HandlerThread("nexus-pictures").apply { start() }
+    private val shotH = Handler(shotThread.looper)
+    /** The newest picture that hasn't been saved to storage yet. */
+    @Volatile private var unsaved: Pair<String, Bitmap>? = null
+    /** When each app's picture was last saved. */
+    private val savedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** Saves the newest picture now (you've left that app, or the screen turned off). */
+    private fun persistShot() {
+        val u = unsaved ?: return
+        unsaved = null
+        shotH.post { saveShot(u) }
+    }
+
+    private fun saveShot(s: Pair<String, Bitmap>) {
+        try {
+            val tmp = File(snapDir(this), "${s.first}.tmp")
+            FileOutputStream(tmp).use { s.second.compress(Bitmap.CompressFormat.JPEG, 78, it) }
+            tmp.renameTo(snapFile(this, s.first))
+            savedAt[s.first] = SystemClock.uptimeMillis()
+        } catch (_: Throwable) {}
     }
 
     private fun snap() {
@@ -510,22 +543,23 @@ class NexusAccessibility : AccessibilityService() {
             takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
                 override fun onSuccess(r: ScreenshotResult) {
                     val buf = r.hardwareBuffer
-                    Thread {
+                    shotH.post {
                         try {
                             val hw = Bitmap.wrapHardwareBuffer(buf, r.colorSpace)
                             if (hw != null && current == pkg) {
                                 val soft = hw.copy(Bitmap.Config.ARGB_8888, false)
                                 val w = 400; val hh = (soft.height * (w.toFloat() / soft.width)).toInt()
                                 val small = Bitmap.createScaledBitmap(soft, w, hh, true)
-                                val tmp = File(snapDir(this@NexusAccessibility), "$pkg.tmp")
-                                FileOutputStream(tmp).use { small.compress(Bitmap.CompressFormat.JPEG, 78, it) }
-                                tmp.renameTo(snapFile(this@NexusAccessibility, pkg))
                                 soft.recycle()
-                                lastShot = pkg to small // kept for the square-button opening (not recycled)
+                                val shot = pkg to small
+                                lastShot = shot // kept for the square-button opening (not recycled)
+                                // In memory for now; saved when you leave the app, or if it's been 30 seconds
+                                if (SystemClock.uptimeMillis() - (savedAt[pkg] ?: 0L) > 30_000L) { unsaved = null; saveShot(shot) }
+                                else unsaved = shot
                             }
                         } catch (_: Throwable) {
                         } finally { buf.close() }
-                    }.start()
+                    }
                 }
                 override fun onFailure(code: Int) {}
             })

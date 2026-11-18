@@ -890,6 +890,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     /** When each tile's picture file was last read (so unchanged pictures aren't read again). */
     private val liveStamp = HashMap<String, Long>()
 
+    /** Lets go of the tile pictures to free memory (they're read again next time NEXUS comes back). */
+    fun releasePictures() { liveShots.clear(); liveStamp.clear() }
+
     fun loadLiveShots() {
         val pkgs = games.filter { it.tileH >= 2 }.map { it.pkg }
         if (pkgs.isEmpty()) return

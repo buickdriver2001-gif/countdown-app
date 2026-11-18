@@ -542,7 +542,11 @@ class MainActivity : Activity() {
         override fun onPackageAdded(packageName: String, user: android.os.UserHandle) = changed(arrayOf(packageName))
         override fun onPackageRemoved(packageName: String, user: android.os.UserHandle) {
             // Really uninstalled (Android reports updates separately): forget it in Recent Apps too
-            if (user == android.os.Process.myUserHandle()) Recents.remove(this@MainActivity, packageName)
+            if (user == android.os.Process.myUserHandle()) {
+                Recents.remove(this@MainActivity, packageName)
+                // and its saved picture goes too
+                try { NexusAccessibility.snapFile(this@MainActivity, packageName).delete() } catch (_: Exception) {}
+            }
             changed(arrayOf(packageName))
         }
         override fun onPackageChanged(packageName: String, user: android.os.UserHandle) = changed(arrayOf(packageName))
@@ -563,6 +567,12 @@ class MainActivity : Activity() {
         // Opened from its icon or back from one of the apps
         HomeMode.setOn(this, true)
         leftForApp = true // brought back from one of the apps
+    }
+
+    /** Android is short of memory while NEXUS is in the background: let go of the tile pictures (read again on return). */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND && ::hub.isInitialized) hub.releasePictures()
     }
 
     override fun onResume() {
