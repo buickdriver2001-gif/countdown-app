@@ -31,7 +31,7 @@ class GameEntry(val name: String, val pkg: String, val tagline: String, val acce
     var tileH = 1
 
     // Text layout, worked out once per tile size rather than every frame
-    internal var rowsW = -1f; internal var rowsStep = -1f; internal var rowsSub: String? = null; internal var rows = 1
+    internal var rowsW = -1f; internal var rowsStep = -1f; internal var rowsSub: String? = null; internal var rowsBase = -1; internal var rows = 1
     internal var planW = -1f; internal var planH = -1f; internal var planBase = -1f; internal var planSub: String? = null
     internal var plan: TileText.Plan? = null
 }
@@ -817,11 +817,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val stepX = cellW + gap; val stepY = cellH + gap
         val w = min(g.tileW, cols) * stepX - gap
         val sub = subOf(g)
-        if (g.rowsW == w && g.rowsStep == stepY && g.rowsSub == sub) return g.rows
+        if (g.rowsW == w && g.rowsStep == stepY && g.rowsSub == sub && g.rowsBase == g.tileH) return g.rows
         val baseH = g.tileH * stepY - gap
         var rows = g.tileH
         while (rows < g.tileH + 5 && !TileText.plan(g.name, sub, w, rows * stepY - gap, baseH, cellW, d, measure).fits) rows++
-        g.rowsW = w; g.rowsStep = stepY; g.rowsSub = sub; g.rows = rows
+        g.rowsW = w; g.rowsStep = stepY; g.rowsSub = sub; g.rowsBase = g.tileH; g.rows = rows
         return rows
     }
 

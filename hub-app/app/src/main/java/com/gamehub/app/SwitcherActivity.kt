@@ -83,10 +83,13 @@ class SwitcherActivity : Activity() {
     override fun onPause() { super.onPause(); if (!isFinishing) finish() }
 
     /** Opens an app. [revealed]: its card has already grown to fill the screen, so it just comes alive. */
-    fun openApp(pkg: String, revealed: Boolean = false) {
-        val i = packageManager.getLaunchIntentForPackage(pkg) ?: return
-        startActivity(i, if (revealed) Transitions.reveal(this) else Transitions.rise(this))
-        finish()
+    fun openApp(pkg: String, revealed: Boolean = false): Boolean {
+        val i = packageManager.getLaunchIntentForPackage(pkg) ?: return false
+        return try {
+            startActivity(i, if (revealed) Transitions.reveal(this) else Transitions.rise(this))
+            finish()
+            true
+        } catch (_: Exception) { false }
     }
 
     fun goNexus() {
@@ -200,6 +203,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         if (a.coverPending && a.hasWindowFocus()) {
             a.coverPending = false
             if (!a.zoomHandover) enter = 0f
+            a.zoomHandover = false
             NexusAccessibility.instance?.switcherReady()
         }
 
@@ -346,8 +350,9 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         c.restore()
         if (k >= 1f && !opened) {
             opened = true
-            // With its last picture filling the screen the app just comes alive; without one it rises in
-            a.openApp(card.pkg, revealed = shot != null)
+            // With its last picture filling the screen the app just comes alive; without one it rises in.
+            // If it can't be opened (e.g. it was just uninstalled), put the cards back.
+            if (!a.openApp(card.pkg, revealed = shot != null)) { opening = null; opened = false }
         }
     }
 

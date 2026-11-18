@@ -62,9 +62,16 @@ class CoverView(c: Context) : View(c) {
     private val rr = RectF(); private val card = RectF(); private val dst = RectF()
     private val src = Rect()
 
-    /** Shows the Recent Apps opening. [s] is the last picture of the app you were in (null: just the backdrop). */
+    /** Gets the Recent Apps opening ready. [s] is the last picture of the app you were in (null: just the backdrop). */
     fun showRecents(s: Bitmap?) {
-        recents = true; shot = s; start = SystemClock.uptimeMillis()
+        recents = true; shot = s; start = 0L
+        invalidate()
+    }
+
+    /** The cover is now on screen: start shrinking the picture into its card. */
+    fun beginZoom() {
+        if (!recents) return
+        start = SystemClock.uptimeMillis()
         invalidate()
     }
 
@@ -76,7 +83,11 @@ class CoverView(c: Context) : View(c) {
     }
 
     /** When the shrinking finishes (uptime ms); 0 if there's nothing to wait for. */
-    fun zoomEnd(): Long = if (recents && shot != null) start + ZOOM_MS else 0L
+    fun zoomEnd(): Long = when {
+        !recents || shot == null -> 0L
+        start == 0L -> SystemClock.uptimeMillis() + ZOOM_MS // not on screen yet
+        else -> start + ZOOM_MS
+    }
 
     override fun onDraw(c: Canvas) {
         if (!recents) { c.drawColor(Color.BLACK); return }
@@ -85,7 +96,7 @@ class CoverView(c: Context) : View(c) {
         c.drawBitmap(back, 0f, 0f, null)
         val s = shot ?: return
         val w = width.toFloat(); val h = height.toFloat()
-        val k = ((SystemClock.uptimeMillis() - start) / ZOOM_MS.toFloat()).coerceIn(0f, 1f)
+        val k = if (start == 0L) 0f else ((SystemClock.uptimeMillis() - start) / ZOOM_MS.toFloat()).coerceIn(0f, 1f)
         val e = 1f - (1f - k) * (1f - k) * (1f - k) // ease out
         cardRect(w, h, card)
         rr.set(card.left * e, card.top * e, w + (card.right - w) * e, h + (card.bottom - h) * e)
@@ -105,6 +116,6 @@ class CoverView(c: Context) : View(c) {
         c.restore()
         line.strokeWidth = 1.8f * d; line.color = Color.argb((210 * e).toInt(), 150, 195, 255)
         c.drawRoundRect(rr, rad, rad, line)
-        if (k < 1f) postInvalidateOnAnimation()
+        if (start != 0L && k < 1f) postInvalidateOnAnimation()
     }
 }

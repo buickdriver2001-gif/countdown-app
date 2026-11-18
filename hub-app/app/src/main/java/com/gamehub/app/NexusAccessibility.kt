@@ -126,7 +126,7 @@ class NexusAccessibility : AccessibilityService() {
         h.removeCallbacks(safety)
         val v = cover ?: return
         val lp = coverLp ?: return
-        if (lp.alpha < 0.5f) return
+        if (lp.alpha < 0.5f) { v.showBlack(); return }
         v.animate().cancel()
         v.animate().alpha(0f).setDuration(170).setInterpolator(android.view.animation.DecelerateInterpolator())
             .withEndAction {
@@ -249,13 +249,15 @@ class NexusAccessibility : AccessibilityService() {
                 // Never longer than a moment, and it never takes touches.
                 val from = current
                 val shot = if (from != null && from == Recents.list(this).firstOrNull()?.first) shotFor(from) else null
+                // That app is no longer on screen: don't let a scheduled picture catch this transition instead
+                current = null
                 ensureCover(force = true)
                 val v = cover
                 if (v != null) {
                     v.showRecents(shot)
                     // Switch the cover on once that first picture is drawn (so it never shows a stale frame)
                     val token = ++coverToken
-                    v.postOnAnimation { v.postOnAnimation { if (token == coverToken) addCover() } }
+                    v.postOnAnimation { v.postOnAnimation { if (token == coverToken) { addCover(); v.beginZoom() } } }
                 }
                 armSafety(1100)
                 try {
