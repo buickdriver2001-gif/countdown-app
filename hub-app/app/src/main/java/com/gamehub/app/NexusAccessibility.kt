@@ -49,12 +49,17 @@ class NexusAccessibility : AccessibilityService() {
             if (mode == android.media.AudioManager.MODE_RINGTONE || mode == android.media.AudioManager.MODE_IN_CALL ||
                 mode == android.media.AudioManager.MODE_IN_COMMUNICATION) { removeCover(); return }
             when (i.action) {
-                Intent.ACTION_SCREEN_OFF -> { addCover(); showLock(c) }
+                Intent.ACTION_SCREEN_OFF -> { otherAppSinceOff = false; addCover(); showLock(c) }
                 Intent.ACTION_SCREEN_ON -> {
                     ensureCover()
                     val km = getSystemService(KeyguardManager::class.java)
-                    if (km?.isKeyguardLocked == true) {
-                        if (!LockActivity.showing) showLock(c)
+                    if (otherAppSinceOff) {
+                        // Something else came up while the screen was off (an alarm, a timer, the camera...):
+                        // never hide it or push NEXUS over it
+                        removeCover()
+                    } else if (km?.isKeyguardLocked == true) {
+                        // Fallback only: normally the lock screen is already in place from screen-off
+                        if (!LockActivity.alive) showLock(c)
                         // Safety: the cover never stays more than a moment, whatever happens
                         h.postDelayed({ removeCover() }, 1300)
                     } else h.postDelayed({ removeCover() }, 120) // not locked: nothing to hide
@@ -112,13 +117,19 @@ class NexusAccessibility : AccessibilityService() {
         try { getSystemService(android.view.WindowManager::class.java)?.removeView(v) } catch (_: Throwable) {}
     }
 
-    /** Called by the NEXUS lock screen once it has drawn on a lit screen. */
-    fun lockReady() { h.postDelayed({ removeCover() }, 32) }
+    /** Called by the NEXUS lock screen once it is lit and in front (the phone's own lock screen is no longer drawn). */
+    fun lockReady() { h.postDelayed({ removeCover() }, 50) }
+
+    /** Another app's screen appeared after the screen went off (alarm, timer, camera, call...). */
+    @Volatile private var otherAppSinceOff = false
 
     private fun showLock(c: Context) {
         try {
+            // NO_USER_ACTION: the app that was open isn't told "the user left" (so it doesn't react, e.g. by
+            // jumping into picture-in-picture) - the screen just turned off
             startActivity(Intent(c, LockActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION), SwitcherActivity.noIconSplash(c))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_NO_USER_ACTION),
+                SwitcherActivity.noIconSplash(c))
         } catch (_: Exception) {}
     }
 
@@ -163,6 +174,12 @@ class NexusAccessibility : AccessibilityService() {
         if (e == null || e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = e.packageName?.toString() ?: return
         val cls = e.className?.toString() ?: ""
+        // Another app put up a screen (alarm, timer, camera, call...): the wake-up cover must never hide it
+        if (pkg != packageName && pkg != "com.android.systemui" && pkg != "android" &&
+            "inputmethod" !in pkg && "keyboard" !in pkg) {
+            val pm = getSystemService(android.os.PowerManager::class.java)
+            if (pm?.isInteractive == true) removeCover() else otherAppSinceOff = true
+        }
         // The phone's own recent-apps screen opened (square button): swap in NEXUS Recent Apps
         // Only the system's dedicated recent-apps screen counts (e.g. ...quickstep.RecentsActivity or
         // ...systemui.recents.RecentsActivity). Never a launcher's home screen, never another app.

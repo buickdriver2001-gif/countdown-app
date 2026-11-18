@@ -44,6 +44,7 @@ class LockActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        alive = true
         if (android.os.Build.VERSION.SDK_INT >= 27) setShowWhenLocked(true)
         else @Suppress("DEPRECATION") window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         view = LockView(this)
@@ -92,6 +93,7 @@ class LockActivity : Activity() {
     }
 
     override fun onDestroy() {
+        alive = false
         try { unregisterReceiver(unlocked) } catch (_: Exception) {}
         super.onDestroy()
     }
@@ -129,6 +131,12 @@ class LockActivity : Activity() {
         /** True while the NEXUS lock screen is on screen. */
         @Volatile var showing = false
 
+        /**
+         * True while the NEXUS lock screen exists at all (even if something else, such as an alarm,
+         * the camera or a call, is in front of it). Used so NEXUS never pushes itself over those.
+         */
+        @Volatile var alive = false
+
         /** Whether the NEXUS lock screen is switched on (off unless the user turns it on). */
         fun enabled(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("lockScreen", false)
     }
@@ -154,6 +162,12 @@ class LockView(private val a: LockActivity) : View(a) {
     fun restart() { t = 0f; lastNs = 0L; reset(); loadFaces(); notified = false; invalidate() }
     private var notified = false
     private val power = a.getSystemService(android.os.PowerManager::class.java)
+
+    private fun litAndInFront(): Boolean {
+        if (power?.isInteractive != true) return false
+        if (display?.state != android.view.Display.STATE_ON) return false
+        return a.hasWindowFocus()
+    }
     fun reset() { dragY = 0f; dragging = false; asked = false; invalidate() }
 
     /**
@@ -244,8 +258,14 @@ class LockView(private val a: LockActivity) : View(a) {
         val intro = min(1f, t / 1.1f)
         val lift = -dragY // content follows the finger up
         c.drawBitmap(backdrop(), 0f, 0f, null)
-        // First frame on a lit screen: tell the helper it can lift its black wake-up cover
-        if (!notified && power?.isInteractive == true) { notified = true; NexusAccessibility.instance?.lockReady() }
+        // Lift the black wake-up cover only once the NEXUS lock screen is really what's on screen:
+        // the screen is lit, and NEXUS has the focus (it doesn't while the phone's own lock screen is
+        // still drawn on top). The fade-in then starts from black, so the switch is seamless.
+        if (!notified && litAndInFront()) {
+            notified = true
+            t = 0f
+            NexusAccessibility.instance?.lockReady()
+        }
 
         val fade = (1f - dragY / (h * 0.35f)).coerceIn(0f, 1f) * intro
 

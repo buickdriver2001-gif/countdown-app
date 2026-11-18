@@ -29,6 +29,11 @@ class GameEntry(val name: String, val pkg: String, val tagline: String, val acce
     /** Tile size in grid cells (width × height). */
     var tileW = 2
     var tileH = 1
+
+    // Text layout, worked out once per tile size rather than every frame
+    internal var rowsW = -1f; internal var rowsStep = -1f; internal var rowsSub: String? = null; internal var rows = 1
+    internal var planW = -1f; internal var planH = -1f; internal var planBase = -1f; internal var planSub: String? = null
+    internal var plan: TileText.Plan? = null
 }
 
 /**
@@ -592,6 +597,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val gap = 10 * d
         val left = 18 * d; val right = w - 18 * d
         val cols = gridCols.coerceIn(2, 6)
+        layoutCols = cols
         cellW = (right - left - gap * (cols - 1)) / cols
         cellH = ((listBottom - listTop - gap * (gridRows - 1)) / gridRows).coerceIn(cellW * 0.7f, cellW * 1.3f)
         val stepX = cellW + gap; val stepY = cellH + gap
@@ -658,7 +664,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             if (moveY < listTop + 50 * d) scroll = max(0f, scroll - dt * 230f * d)
             if (moveY > listBottom - 50 * d) scroll = min(maxScroll, scroll + dt * 230f * d)
             val g = games[moveIndex]
-            val tw = min(g.tileW, cols) * stepX - gap; val th = g.tileH * stepY - gap
+            val tw = min(g.tileW, cols) * stepX - gap; val th = rowsFor(g, cols) * stepY - gap
             val r = RectF(lastX - grabFx * tw, moveY - grabFy * th, lastX - grabFx * tw + tw, moveY - grabFy * th + th)
             c.save(); c.scale(1.05f, 1.05f, r.centerX(), r.centerY())
             glow(c, r.centerX(), r.centerY(), max(r.width(), r.height()) * 0.9f, 150)
@@ -745,7 +751,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private fun floatingRect(): RectF {
         val g = games.getOrNull(moveIndexForDrop) ?: return RectF()
         val stepX = cellW + 10 * d; val stepY = cellH + 10 * d
-        val tw = min(g.tileW, gridCols) * stepX - 10 * d; val th = g.tileH * stepY - 10 * d
+        val tw = min(g.tileW, layoutCols) * stepX - 10 * d; val th = rowsFor(g, layoutCols) * stepY - 10 * d
         return RectF(lastX - grabFx * tw, moveY - grabFy * th, lastX - grabFx * tw + tw, moveY - grabFy * th + th)
     }
     private var moveIndexForDrop = -1
@@ -790,14 +796,50 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
     /** Tile positions for an order of apps (-1 = the ADD tile, always 1×1). */
     private fun pack(order: List<Int>, cols: Int): Array<IntArray> =
-        TileLayout.pack(order.map { idx -> if (idx < 0) intArrayOf(1, 1) else intArrayOf(games[idx].tileW, games[idx].tileH) }, cols)
+        TileLayout.pack(order.map { idx -> if (idx < 0) intArrayOf(1, 1) else intArrayOf(games[idx].tileW, rowsFor(games[idx], cols)) }, cols)
 
-    /** Shortens text with "…" so it fits the width. */
-    private fun fit(s: String, maxW: Float): String {
-        if (text.measureText(s) <= maxW) return s
-        var e = s.length
-        while (e > 1 && text.measureText(s.substring(0, e) + "…") > maxW) e--
-        return s.substring(0, e) + "…"
+    // ------------------------------------------------------------------ tile text: always shown in full
+
+    private var layoutCols = 4
+    private val measurePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.create("sans-serif-light", Typeface.NORMAL) }
+    private val measure = TileText.Measure { str, size, spacing ->
+        measurePaint.textSize = size; measurePaint.letterSpacing = spacing; measurePaint.measureText(str)
+    }
+
+    private fun subOf(g: GameEntry) = if (!g.installed) "Not installed" else g.tagline
+
+    /**
+     * How many grid rows a tile takes: the size the user picked, plus extra rows if its full name
+     * (and description) need more room than that, so nothing is ever cut off.
+     */
+    private fun rowsFor(g: GameEntry, cols: Int): Int {
+        val gap = 10 * d
+        val stepX = cellW + gap; val stepY = cellH + gap
+        val w = min(g.tileW, cols) * stepX - gap
+        val sub = subOf(g)
+        if (g.rowsW == w && g.rowsStep == stepY && g.rowsSub == sub) return g.rows
+        val baseH = g.tileH * stepY - gap
+        var rows = g.tileH
+        while (rows < g.tileH + 5 && !TileText.plan(g.name, sub, w, rows * stepY - gap, baseH, cellW, d, measure).fits) rows++
+        g.rowsW = w; g.rowsStep = stepY; g.rowsSub = sub; g.rows = rows
+        return rows
+    }
+
+    private fun planFor(g: GameEntry, w: Float, h: Float, baseH: Float): TileText.Plan {
+        val sub = subOf(g)
+        val p = g.plan
+        if (p != null && g.planW == w && g.planH == h && g.planBase == baseH && g.planSub == sub) return p
+        val np = TileText.plan(g.name, sub, w, h, baseH, cellW, d, measure)
+        g.plan = np; g.planW = w; g.planH = h; g.planBase = baseH; g.planSub = sub
+        return np
+    }
+
+    /** Draws lines of text from [top] down; returns where the block ends. */
+    private fun drawLines(c: Canvas, lines: List<String>, x: Float, top: Float, size: Float, spacing: Float, color: Int, lineH: Float): Float {
+        text.textSize = size; text.letterSpacing = spacing; text.color = color
+        var y = top
+        for (ln in lines) { c.drawText(ln, x, y + lineH * 0.8f, text); y += lineH }
+        return y
     }
 
     private var selIndex = -2
@@ -809,9 +851,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val a = if (sel) a0 * (0.55f + 0.45f * min(1f, (t - selSince) / 0.18f)) else a0
         val pulse = 0.5f + 0.5f * sin(t * 3f)
         val rad = 8 * d
-        val wide = r.width() > r.height() * 1.45f
-        val tall = r.height() > r.width() * 1.45f
-        val large = !wide && !tall && r.width() > cellW * 1.5f
+        // Shape comes from the size the user picked; the tile may be taller to fit its full name
+        val baseH = min(g.tileH * (cellH + 10 * d) - 10 * d, r.height())
+        val plan = planFor(g, r.width(), r.height(), baseH)
+        val wide = plan.kind == TileText.Kind.WIDE
+        val tall = plan.kind == TileText.Kind.TALL
+        val large = plan.kind == TileText.Kind.LARGE
         // Glass panel (large tiles show the app's last screen behind it)
         fill.color = Color.argb(((if (sel) 80 else 34) * a).toInt(), 40, 80, 200)
         c.drawRoundRect(r, rad, rad, fill)
@@ -844,47 +889,48 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             c.drawLine(r.right + 4 * d, r.bottom + 4 * d, r.right + 4 * d - l, r.bottom + 4 * d, line); c.drawLine(r.right + 4 * d, r.bottom + 4 * d, r.right + 4 * d, r.bottom + 4 * d - l, line)
         }
         val accent = Color.argb(((if (sel) 255 else 140) * a).toInt(), Color.red(g.accent), Color.green(g.accent), Color.blue(g.accent))
-        val sub = if (!g.installed) "Not installed" else g.tagline
         val subCol = if (g.installed) Color.argb((175 * a).toInt(), 170, 200, 240) else Color.argb((200 * a).toInt(), 255, 190, 110)
         val nameCol = Color.argb((255 * a).toInt(), 240, 245, 255)
         text.textAlign = Paint.Align.LEFT
+        c.save(); c.clipRect(r)
         when {
             wide -> {
-                // Wide: icon on the left, name and description beside it
+                // Wide: icon on the left, the full name and description beside it
                 fill.color = accent; c.drawRect(r.left, r.top + r.height() * 0.2f, r.left + 2.5f * d, r.bottom - r.height() * 0.2f, fill)
-                val isz = min(r.height() - 22 * d, 56 * d)
+                val isz = plan.icon
                 tmpRect.set(r.left + 14 * d, r.centerY() - isz / 2, r.left + 14 * d + isz, r.centerY() + isz / 2)
                 drawIcon(c, g, tmpRect, a)
-                val tx = tmpRect.right + 14 * d; val tw = r.right - tx - 12 * d
-                text.textSize = min(18 * d, r.height() * 0.24f); text.letterSpacing = 0.08f; text.color = nameCol
-                c.drawText(fit(g.name, tw), tx, r.centerY() - 1 * d, text)
-                text.textSize = min(11.5f * d, r.height() * 0.16f); text.letterSpacing = 0.04f; text.color = subCol
-                c.drawText(fit(sub, tw), tx, r.centerY() + text.textSize + 5 * d, text)
+                val tx = tmpRect.right + 14 * d
+                var y = r.centerY() - TileText.blockHeight(plan, d) / 2
+                y = drawLines(c, plan.name, tx, y, plan.nameSize, TileText.NAME_SPACING, nameCol, TileText.nameLineH(plan.nameSize))
+                if (plan.sub.isNotEmpty()) drawLines(c, plan.sub, tx, y + 5 * d, plan.subSize, TileText.SUB_SPACING, subCol, TileText.subLineH(plan.subSize))
             }
             large || tall -> {
-                // Large / tall: icon top-left, name and description along the bottom
+                // Large / tall: icon top-left, the full name and description along the bottom
                 fill.color = accent; c.drawRect(r.left + 12 * d, r.top, r.left + 12 * d + r.width() * 0.25f, r.top + 2.5f * d, fill)
-                val isz = min(r.width() * (if (large) 0.32f else 0.5f), 64 * d)
+                val isz = plan.icon
                 tmpRect.set(r.left + 12 * d, r.top + 14 * d, r.left + 12 * d + isz, r.top + 14 * d + isz)
                 drawIcon(c, g, tmpRect, a)
-                val tw = r.width() - 24 * d
-                text.textSize = min(18 * d, r.width() * 0.13f); text.letterSpacing = 0.08f; text.color = nameCol
-                val subSize = min(11.5f * d, r.width() * 0.085f)
-                c.drawText(fit(g.name, tw), r.left + 12 * d, r.bottom - 16 * d - subSize - 4 * d, text)
-                text.textSize = subSize; text.letterSpacing = 0.04f; text.color = subCol
-                c.drawText(fit(sub, tw), r.left + 12 * d, r.bottom - 14 * d, text)
+                var y = r.bottom - 14 * d - TileText.blockHeight(plan, d)
+                y = drawLines(c, plan.name, r.left + 12 * d, y, plan.nameSize, TileText.NAME_SPACING, nameCol, TileText.nameLineH(plan.nameSize))
+                if (plan.sub.isNotEmpty()) drawLines(c, plan.sub, r.left + 12 * d, y + 5 * d, plan.subSize, TileText.SUB_SPACING, subCol, TileText.subLineH(plan.subSize))
             }
             else -> {
-                // Small: icon in the middle, name underneath
-                val isz = min(r.width(), r.height()) * 0.46f
-                tmpRect.set(r.centerX() - isz / 2, r.top + r.height() * 0.16f, r.centerX() + isz / 2, r.top + r.height() * 0.16f + isz)
+                // Small: icon in the middle, the full name underneath (over more lines if it's long)
+                val isz = plan.icon
+                val block = TileText.blockHeight(plan, d)
+                val iconTop = if (r.height() > baseH + 1f) r.top + (r.height() - (isz + 4 * d + block)) / 2 else r.top + plan.iconTop
+                tmpRect.set(r.centerX() - isz / 2, iconTop, r.centerX() + isz / 2, iconTop + isz)
                 drawIcon(c, g, tmpRect, a)
                 text.textAlign = Paint.Align.CENTER
-                text.textSize = min(11.5f * d, r.width() * 0.12f); text.letterSpacing = 0.04f; text.color = nameCol
-                c.drawText(fit(g.name, r.width() - 10 * d), r.centerX(), r.bottom - r.height() * 0.12f, text)
+                val regionTop = tmpRect.bottom + 4 * d
+                val regionH = r.bottom - 6 * d - regionTop
+                val y = if (r.height() > baseH + 1f) regionTop else regionTop + max(0f, (regionH - block) / 2)
+                drawLines(c, plan.name, r.centerX(), y, plan.nameSize, TileText.SMALL_SPACING, nameCol, TileText.nameLineH(plan.nameSize))
                 text.textAlign = Paint.Align.LEFT
             }
         }
+        c.restore()
     }
 
     private fun drawAddTile(c: Canvas, r: RectF, sel: Boolean, a: Float) {
