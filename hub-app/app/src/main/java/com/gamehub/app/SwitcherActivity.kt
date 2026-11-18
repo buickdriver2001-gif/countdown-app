@@ -240,7 +240,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
             text.textSize = 18 * d; text.letterSpacing = 0.1f; text.color = Color.argb(240, 240, 245, 255)
             c.drawText(cc.label, w / 2, cy + ch / 2 + 40 * d, text)
             text.textSize = 12 * d; text.letterSpacing = 0.08f; text.color = Color.argb(170, 170, 200, 240)
-            c.drawText("${ago(cc.used)}  ·  tap to open  ·  swipe up to close", w / 2, cy + ch / 2 + 62 * d, text)
+            c.drawText(ago(cc.used), w / 2, cy + ch / 2 + 62 * d, text)
         }
 
         // Bottom: Clear all / NEXUS

@@ -319,12 +319,30 @@ class MainActivity : Activity() {
     private fun askWallpaper() {
         NexusUi.panel(this, "Match wallpaper to NEXUS?",
             "Your phone briefly shows its wallpaper when Android opens its own screens (like the square button). " +
-                "This sets your home screen wallpaper to NEXUS's deep blue so those moments look like NEXUS too.\n\n" +
-                "Your lock screen isn't changed. You can pick a different wallpaper any time in your phone's wallpaper settings.",
-            listOf(NexusUi.Option("Set NEXUS wallpaper", primary = true) { setNexusWallpaper() }), cancel = "Not now")
+                "This sets your wallpaper to NEXUS's deep blue so those moments look like NEXUS too.\n\n" +
+                "You can pick a different wallpaper any time in your phone's wallpaper settings.",
+            listOf(NexusUi.Option("Home screen only", primary = true) { setNexusWallpaper(lock = false) },
+                NexusUi.Option("Home and lock screen") { setNexusWallpaper(lock = true) }), cancel = "Not now")
     }
 
-    private fun setNexusWallpaper() {
+    /** NEXUS lock screen: explanation and on/off. */
+    private fun lockSettings() {
+        val on = LockActivity.enabled(this)
+        val helper = Recents.serviceOn(this)
+        val msg = "When your screen turns on, NEXUS shows its own lock screen (clock, date, battery) on top of your phone's. " +
+            "Swipe up and your phone's normal PIN, pattern or fingerprint unlock appears, so your phone stays just as secure. " +
+            "It never covers calls or alarms, and your notifications and camera are still on the phone's lock screen underneath." +
+            (if (!helper) "\n\nNeeds the Recent Apps helper switched on (Gear icon → Recent apps)." else "")
+        val opts = ArrayList<NexusUi.Option>()
+        if (!helper) opts.add(NexusUi.Option("Turn on helper first", primary = true) { openAppsSettings() })
+        opts.add(NexusUi.Option(if (on) "Turn NEXUS lock screen OFF" else "Turn NEXUS lock screen ON", primary = helper && !on) {
+            prefs.edit().putBoolean("lockScreen", !on).apply()
+            Toast.makeText(this, if (!on) "NEXUS lock screen on. Turn your screen off and on to see it." else "NEXUS lock screen off", Toast.LENGTH_SHORT).show()
+        })
+        NexusUi.panel(this, "NEXUS lock screen", msg, opts, cancel = "Done")
+    }
+
+    private fun setNexusWallpaper(lock: Boolean) {
         val dm = resources.displayMetrics
         val w = dm.widthPixels.coerceAtLeast(720); val h = dm.heightPixels.coerceAtLeast(1280)
         Thread {
@@ -341,7 +359,8 @@ class MainActivity : Activity() {
                 p.shader = android.graphics.RadialGradient(w / 2f, h * 0.45f, w * 0.9f, intArrayOf(Color.argb(70, 40, 90, 220), Color.TRANSPARENT), null, android.graphics.Shader.TileMode.CLAMP)
                 c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), p)
                 val wm = android.app.WallpaperManager.getInstance(this)
-                if (android.os.Build.VERSION.SDK_INT >= 24) wm.setBitmap(b, null, true, android.app.WallpaperManager.FLAG_SYSTEM) else wm.setBitmap(b)
+                val which = android.app.WallpaperManager.FLAG_SYSTEM or (if (lock) android.app.WallpaperManager.FLAG_LOCK else 0)
+                if (android.os.Build.VERSION.SDK_INT >= 24) wm.setBitmap(b, null, true, which) else wm.setBitmap(b)
                 b.recycle()
                 true
             } catch (_: Exception) { false }
@@ -358,6 +377,7 @@ class MainActivity : Activity() {
             NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
             NexusUi.Option("Choose my normal home screen") { chooseNormalHome() },
             NexusUi.Option("Recent apps (square button)") { openAppsSettings() },
+            NexusUi.Option("NEXUS lock screen:  " + (if (LockActivity.enabled(this)) "ON" else "OFF")) { lockSettings() },
             NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
             NexusUi.Option("Tutorial") { showTutorial() },
             NexusUi.Option("How it works") {

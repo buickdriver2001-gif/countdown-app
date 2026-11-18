@@ -33,13 +33,36 @@ class NexusAccessibility : AccessibilityService() {
         fun snapFile(c: Context, pkg: String) = File(snapDir(c), "$pkg.jpg")
     }
 
+    /** Screen turned on: show the NEXUS lock screen on top of the phone's (if switched on). */
+    private val screenOn = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            if (i.action != Intent.ACTION_SCREEN_ON || !LockActivity.enabled(c)) return
+            val km = getSystemService(KeyguardManager::class.java)
+            if (km?.isKeyguardLocked != true) return
+            // Never cover a phone call or a ringing alarm/call
+            val am = getSystemService(android.media.AudioManager::class.java)
+            val mode = am?.mode ?: android.media.AudioManager.MODE_NORMAL
+            if (mode == android.media.AudioManager.MODE_RINGTONE || mode == android.media.AudioManager.MODE_IN_CALL ||
+                mode == android.media.AudioManager.MODE_IN_COMMUNICATION) return
+            try {
+                startActivity(Intent(c, LockActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION), SwitcherActivity.noIconSplash(c))
+            } catch (_: Exception) {}
+        }
+    }
+
     override fun onServiceConnected() {
         running = true
         refreshHomes()
         h.postDelayed(tick, 2000)
+        val f = android.content.IntentFilter(Intent.ACTION_SCREEN_ON)
+        try {
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOn, f, Context.RECEIVER_NOT_EXPORTED) else registerReceiver(screenOn, f)
+        } catch (_: Exception) {}
     }
 
     override fun onDestroy() {
+        try { unregisterReceiver(screenOn) } catch (_: Exception) {}
         running = false
         h.removeCallbacksAndMessages(null)
         super.onDestroy()
