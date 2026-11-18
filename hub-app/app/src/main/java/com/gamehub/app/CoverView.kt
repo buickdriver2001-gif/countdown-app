@@ -6,14 +6,16 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
+import android.graphics.Outline
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.os.SystemClock
 import android.view.View
+import android.view.ViewOutlineProvider
+import android.widget.FrameLayout
 import kotlin.math.min
 
 /**
@@ -21,21 +23,26 @@ import kotlin.math.min
  *  - plain black: while the screen is off, so you wake to black and the NEXUS lock screen rises out of it
  *  - the opening of NEXUS Recent Apps (square button): the app you were in shrinks into its card over the
  *    NEXUS backdrop, exactly where Recent Apps puts that card, then the cover fades and Recent Apps carries on.
- * It never takes touches. Icons and the app's own last picture only, never anything else.
+ *
+ * The shrinking and the fading run on the phone's render thread, so they stay smooth even while
+ * Recent Apps is starting up underneath. It never takes touches.
  */
 @SuppressLint("ViewConstructor")
-class CoverView(c: Context) : View(c) {
+class CoverView(c: Context) : FrameLayout(c) {
     companion object {
-        const val ZOOM_MS = 300L
+        const val ZOOM_MS = 240L
+        /** Cards in Recent Apps are the whole screen, scaled down to this. */
+        const val CARD_SCALE = 0.6f
+        private const val CARD_CENTRE_Y = 0.47f
 
-        /** The centre card in NEXUS Recent Apps for a screen [w] × [h] (the same sums as SwitcherView). */
+        /** The centre card in NEXUS Recent Apps for a screen [w] × [h] (shared with SwitcherView). */
         fun cardRect(w: Float, h: Float, out: RectF): RectF {
-            val cw = w * 0.62f; val ch = min(cw * 1.9f, h * 0.6f); val cy = h * 0.47f
+            val cw = w * CARD_SCALE; val ch = h * CARD_SCALE; val cy = h * CARD_CENTRE_Y
             out.set(w / 2 - cw / 2, cy - ch / 2, w / 2 + cw / 2, cy + ch / 2)
             return out
         }
 
-        /** The Recent Apps backdrop: deep blue with a faint grid (shared so both screens match exactly). */
+        /** The Recent Apps backdrop: deep blue with a faint grid and a glow (shared so both screens match exactly). */
         fun backdrop(w: Int, h: Int, d: Float): Bitmap {
             val b = Bitmap.createBitmap(w.coerceAtLeast(1), h.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
             val c = Canvas(b)
@@ -53,69 +60,83 @@ class CoverView(c: Context) : View(c) {
 
     private val d = resources.displayMetrics.density
     private var recents = false
-    private var shot: Bitmap? = null
     private var start = 0L
     private var bg: Bitmap? = null
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    private val clip = Path()
-    private val rr = RectF(); private val card = RectF(); private val dst = RectF()
-    private val src = Rect()
+
+    /** The backdrop (or plain black). */
+    private val back = object : View(c) {
+        override fun onDraw(canvas: Canvas) {
+            if (!recents) { canvas.drawColor(Color.BLACK); return }
+            val cur = bg
+            val b = if (cur != null && cur.width == width && cur.height == height) cur else backdrop(width, height, d).also { bg = it }
+            canvas.drawBitmap(b, 0f, 0f, null)
+        }
+    }
+
+    /** The app's last picture, full screen at first; shrinks into its card with rounded corners. */
+    private inner class Card(c: Context) : View(c) {
+        var shot: Bitmap? = null
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        private val src = Rect(); private val dst = RectF()
+        override fun onDraw(canvas: Canvas) {
+            canvas.drawColor(Color.rgb(10, 16, 34))
+            val s = shot ?: return
+            // Filling the width from the top, as Recent Apps draws it
+            val scale = width.toFloat() / s.width
+            src.set(0, 0, s.width, min(s.height, (height / scale).toInt()))
+            dst.set(0f, 0f, width.toFloat(), src.height() * scale)
+            canvas.drawBitmap(s, src, dst, paint)
+        }
+    }
+    private val card = Card(c)
+
+    init {
+        addView(back, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(card, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        card.visibility = GONE
+        // Rounded corners that end up matching the cards in Recent Apps once shrunk
+        card.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(v: View, o: Outline) { o.setRoundRect(0, 0, v.width, v.height, 16 * d / CARD_SCALE) }
+        }
+        card.clipToOutline = true
+    }
 
     /** Gets the Recent Apps opening ready. [s] is the last picture of the app you were in (null: just the backdrop). */
     fun showRecents(s: Bitmap?) {
-        recents = true; shot = s; start = 0L
-        invalidate()
+        recents = true; start = 0L
+        resetCard()
+        card.shot = s
+        card.visibility = if (s != null) VISIBLE else GONE
+        back.invalidate(); card.invalidate()
     }
 
-    /** The cover is now on screen: start shrinking the picture into its card. */
+    /** The cover is now on screen: start shrinking the picture into its card (on the render thread). */
     fun beginZoom() {
-        if (!recents) return
+        if (!recents || card.visibility != VISIBLE || height == 0) return
         start = SystemClock.uptimeMillis()
-        invalidate()
+        val h = height.toFloat()
+        card.animate().scaleX(CARD_SCALE).scaleY(CARD_SCALE).translationY(h * CARD_CENTRE_Y - h / 2f)
+            .setDuration(ZOOM_MS).setInterpolator(android.view.animation.DecelerateInterpolator(1.8f)).start()
     }
 
     /** Back to plain black (ready for the screen turning off). */
     fun showBlack() {
-        if (!recents && shot == null) return
-        recents = false; shot = null
-        invalidate()
+        if (!recents && card.visibility == GONE) return
+        recents = false; start = 0L
+        resetCard()
+        card.shot = null; card.visibility = GONE
+        back.invalidate()
+    }
+
+    private fun resetCard() {
+        card.animate().cancel()
+        card.scaleX = 1f; card.scaleY = 1f; card.translationX = 0f; card.translationY = 0f
     }
 
     /** When the shrinking finishes (uptime ms); 0 if there's nothing to wait for. */
     fun zoomEnd(): Long = when {
-        !recents || shot == null -> 0L
+        !recents || card.visibility != VISIBLE -> 0L
         start == 0L -> SystemClock.uptimeMillis() + ZOOM_MS // not on screen yet
         else -> start + ZOOM_MS
-    }
-
-    override fun onDraw(c: Canvas) {
-        if (!recents) { c.drawColor(Color.BLACK); return }
-        val cur = bg
-        val back = if (cur != null && cur.width == width && cur.height == height) cur else backdrop(width, height, d).also { bg = it }
-        c.drawBitmap(back, 0f, 0f, null)
-        val s = shot ?: return
-        val w = width.toFloat(); val h = height.toFloat()
-        val k = if (start == 0L) 0f else ((SystemClock.uptimeMillis() - start) / ZOOM_MS.toFloat()).coerceIn(0f, 1f)
-        val e = 1f - (1f - k) * (1f - k) * (1f - k) // ease out
-        cardRect(w, h, card)
-        rr.set(card.left * e, card.top * e, w + (card.right - w) * e, h + (card.bottom - h) * e)
-        val rad = 16 * d * e
-        // The soft glow Recent Apps has behind its centre card, growing in as the card settles
-        paint.shader = RadialGradient(rr.centerX(), rr.centerY(), rr.width(), intArrayOf(Color.argb((90 * e).toInt(), 90, 150, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-        c.drawRect(rr.left - rr.width() * 0.5f, rr.top - 60 * d, rr.right + rr.width() * 0.5f, rr.bottom + 60 * d, paint); paint.shader = null
-        // The app's picture, filling the card from the top (as Recent Apps draws it)
-        clip.reset(); clip.addRoundRect(rr, rad, rad, Path.Direction.CW)
-        c.save(); c.clipPath(clip)
-        paint.color = Color.rgb(10, 16, 34); c.drawRect(rr, paint)
-        val scale = rr.width() / s.width
-        src.set(0, 0, s.width, min(s.height, (rr.height() / scale).toInt()))
-        dst.set(rr.left, rr.top, rr.right, rr.top + src.height() * scale)
-        paint.color = Color.WHITE
-        c.drawBitmap(s, src, dst, paint)
-        c.restore()
-        line.strokeWidth = 1.8f * d; line.color = Color.argb((210 * e).toInt(), 150, 195, 255)
-        c.drawRoundRect(rr, rad, rad, line)
-        if (start != 0L && k < 1f) postInvalidateOnAnimation()
     }
 }

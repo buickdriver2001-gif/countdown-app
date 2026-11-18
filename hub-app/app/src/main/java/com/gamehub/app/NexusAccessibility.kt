@@ -93,7 +93,8 @@ class NexusAccessibility : AccessibilityService() {
                 android.view.WindowManager.LayoutParams.MATCH_PARENT, android.view.WindowManager.LayoutParams.MATCH_PARENT,
                 android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                    android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                 android.graphics.PixelFormat.TRANSLUCENT)
             if (Build.VERSION.SDK_INT >= 28) lp.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             lp.alpha = 0f
@@ -106,6 +107,7 @@ class NexusAccessibility : AccessibilityService() {
         val v = cover ?: return
         val lp = coverLp ?: return
         // Stop any fade in progress
+        fadeToken++
         v.animate().cancel()
         if (v.alpha != 1f) v.alpha = 1f
         if ((lp.alpha > 0.5f) == solid) return
@@ -127,15 +129,22 @@ class NexusAccessibility : AccessibilityService() {
         val v = cover ?: return
         val lp = coverLp ?: return
         if (lp.alpha < 0.5f) { v.showBlack(); return }
+        val token = ++fadeToken
+        // The fade itself runs on the render thread (no listeners), so it stays smooth even if NEXUS is busy
         v.animate().cancel()
-        v.animate().alpha(0f).setDuration(170).setInterpolator(android.view.animation.DecelerateInterpolator())
-            .withEndAction {
-                lp.alpha = 0f
-                try { getSystemService(android.view.WindowManager::class.java)?.updateViewLayout(v, lp) } catch (_: Throwable) {}
-                v.alpha = 1f
-                v.showBlack()
-            }.start()
+        v.animate().alpha(0f).setDuration(FADE_MS).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+        h.postDelayed({
+            if (token != fadeToken) return@postDelayed
+            lp.alpha = 0f
+            try { getSystemService(android.view.WindowManager::class.java)?.updateViewLayout(v, lp) } catch (_: Throwable) {}
+            // Back to plain black a moment later, once the window is surely hidden
+            h.postDelayed({
+                if (token == fadeToken && lp.alpha < 0.5f) { v.animate().cancel(); v.alpha = 1f; v.showBlack() }
+            }, 120)
+        }, FADE_MS + 20)
     }
+    private var fadeToken = 0
+    private val FADE_MS = 150L
 
     /** Whatever happens, the cover is lifted after [ms]. */
     private val safety = Runnable { fadeCover() }
@@ -163,6 +172,9 @@ class NexusAccessibility : AccessibilityService() {
 
     /** The last picture of each app as it was taken, kept in memory for the square-button opening. */
     @Volatile private var lastShot: Pair<String, Bitmap>? = null
+
+    /** The in-memory picture of [pkg], if it's the latest one taken. */
+    fun memShot(pkg: String): Bitmap? = lastShot?.let { if (it.first == pkg) it.second else null }
 
     private fun shotFor(pkg: String): Bitmap? {
         lastShot?.let { if (it.first == pkg) return it.second }
@@ -192,6 +204,8 @@ class NexusAccessibility : AccessibilityService() {
         getSharedPreferences("hub", MODE_PRIVATE).edit().remove("usecount").apply()
         h.postDelayed(tick, 2000)
         ensureCover()
+        // Have names and icons ready for Recent Apps
+        AppCache.warm(this, Recents.list(this).map { it.first })
         val f = android.content.IntentFilter(Intent.ACTION_SCREEN_ON).apply { addAction(Intent.ACTION_SCREEN_OFF) }
         try {
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOn, f, Context.RECEIVER_NOT_EXPORTED) else registerReceiver(screenOn, f)
@@ -272,6 +286,7 @@ class NexusAccessibility : AccessibilityService() {
             if (pkg != current) {
                 current = pkg
                 Recents.touch(this, pkg)
+                AppCache.warm(this, listOf(pkg))
                 // Grab its screen shortly after it appears
                 h.postDelayed({ snap() }, 700)
             }

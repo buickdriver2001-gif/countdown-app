@@ -156,29 +156,34 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         return CoverView.backdrop(width, height, d).also { bg = it }
     }
 
-    /** Reads the recent apps and their pictures off the main thread, then fades the cards in. */
+    /** Builds the cards (names and icons are cached, so this is quick), then decodes pictures in the background. */
     fun load() {
-        val pm = a.packageManager
-        // Names and icons first (quick), so the screen appears straight away
         val list = ArrayList<Card>()
         for ((pkg, used) in Recents.list(a)) {
-            if (pm.getLaunchIntentForPackage(pkg) == null) continue
-            val label = try { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { continue }
-            val icon = try { pm.getApplicationIcon(pkg) } catch (_: Exception) { null }
-            list.add(Card(pkg, label, icon, null, used))
+            val info = AppCache.get(a, pkg) ?: continue
+            list.add(Card(pkg, info.label, info.icon, null, used))
         }
         cards = list
         pos = 0f; vel = 0f; enter = if (a.zoomHandover) 1f else 0f
         opening = null; opened = false
         // The first card's picture straight away (it's the one in the middle, and the one the cover hands over to)
         list.firstOrNull()?.let { cd ->
-            val f = NexusAccessibility.snapFile(a, cd.pkg)
-            if (f.exists()) { cd.shot = try { BitmapFactory.decodeFile(f.absolutePath) } catch (_: Exception) { null }; cd.shotFade = 1f }
+            cd.shot = NexusAccessibility.instance?.memShot(cd.pkg) ?: run {
+                val f = NexusAccessibility.snapFile(a, cd.pkg)
+                if (f.exists()) try { BitmapFactory.decodeFile(f.absolutePath) } catch (_: Exception) { null } else null
+            }
+            cd.shotFade = 1f
         }
         invalidate()
-        // Then the screenshots, decoded in the background
+        // Then, in the background: drop any app that was uninstalled since, and decode the other pictures
+        val pm = a.packageManager
         Thread {
             for (cd in list) {
+                if (pm.getLaunchIntentForPackage(cd.pkg) == null) {
+                    AppCache.forget(cd.pkg)
+                    post { if (!cd.flying) { cd.gone = true; Recents.remove(a, cd.pkg) } }
+                    continue
+                }
                 if (cd.shot != null) continue
                 val f = NexusAccessibility.snapFile(a, cd.pkg)
                 if (!f.exists()) continue
@@ -215,11 +220,16 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         text.textSize = 20 * d; text.letterSpacing = 0.4f
         text.color = Color.argb((255 * enter).toInt(), 235, 242, 255)
         c.drawText("RECENT APPS", w / 2, 64 * d, text)
-        fill.shader = LinearGradient(w * 0.3f, 0f, w * 0.7f, 0f, intArrayOf(Color.TRANSPARENT, Color.argb(180, 130, 180, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        if (ruleW != width) {
+            ruleW = width
+            ruleShader = LinearGradient(w * 0.3f, 0f, w * 0.7f, 0f, intArrayOf(Color.TRANSPARENT, Color.argb(180, 130, 180, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        }
+        fill.shader = ruleShader
         c.drawRect(w * 0.3f, 76 * d, w * 0.7f, 77.2f * d, fill); fill.shader = null
 
-        val live = cards.filter { !it.gone && !it.flying }
-        val cwF = w * 0.62f; val chF = min(cwF * 1.9f, h * 0.6f); val cyF = h * 0.47f
+        val live = live()
+        CoverView.cardRect(w, h, cardBox)
+        val cwF = cardBox.width(); val chF = cardBox.height(); val cyF = cardBox.centerY()
         // Cards that were swiped away keep flying up, speeding up, shrinking and fading
         for (card in cards) {
             if (!card.flying || card.gone) continue
@@ -262,8 +272,8 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
                 if (abs(vel) < 2.5f) { pos += (target - pos) * min(1f, dt * 10f); vel = 0f }
                 pos = pos.coerceIn(-0.4f, live.size - 0.6f)
             }
-            val cw = w * 0.62f; val ch = min(cw * 1.9f, h * 0.6f)
-            val cy = h * 0.47f
+            val cw = cwF; val ch = chF
+            val cy = cyF
             // Draw back-to-front so the centre card is on top
             val order = live.indices.sortedByDescending { abs(it - pos) }
             val glide = min(1f, dt * 12f)
@@ -368,8 +378,11 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         val rad = 16 * d
         // Glow behind the centre card
         if (centre) {
-            fill.shader = RadialGradient(rr.centerX(), rr.centerY(), rr.width(), intArrayOf(Color.argb((90 * fade).toInt(), 90, 150, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-            c.drawRect(rr.left - rr.width() * 0.5f, rr.top - 60 * d, rr.right + rr.width() * 0.5f, rr.bottom + 60 * d, fill); fill.shader = null
+            // One glow shader, moved and sized with a matrix (nothing new made every frame)
+            glowMatrix.setScale(rr.width(), rr.width()); glowMatrix.postTranslate(rr.centerX(), rr.centerY())
+            glowShader.setLocalMatrix(glowMatrix)
+            fill.shader = glowShader; fill.alpha = (255 * fade).toInt()
+            c.drawRect(rr.left - rr.width() * 0.5f, rr.top - 60 * d, rr.right + rr.width() * 0.5f, rr.bottom + 60 * d, fill); fill.shader = null; fill.alpha = 255
         }
         clip.reset(); clip.addRoundRect(rr, rad, rad, Path.Direction.CW)
         c.save(); c.clipPath(clip)
@@ -378,8 +391,9 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         if (shot != null) {
             // The app's last screen, filling the card from the top
             val scale = rr.width() / shot.width
-            val src = android.graphics.Rect(0, 0, shot.width, min(shot.height, (rr.height() / scale).toInt()))
-            val dst = RectF(rr.left, rr.top, rr.right, rr.top + src.height() * scale)
+            srcR.set(0, 0, shot.width, min(shot.height, (rr.height() / scale).toInt()))
+            val src = srcR
+            val dst = dstR.apply { set(rr.left, rr.top, rr.right, rr.top + src.height() * scale) }
             card.shotFade = min(1f, card.shotFade + 0.12f)
             bmpPaint.alpha = (255 * fade * card.shotFade).toInt()
             c.drawBitmap(shot, src, dst, bmpPaint)
@@ -396,7 +410,14 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         if (centre) {
             val k = (t * 0.55f) % 1.8f
             val sx = rr.left + (rr.width() + 200 * d) * k - 100 * d
-            fill.shader = LinearGradient(sx - 60 * d, rr.top, sx + 60 * d, rr.bottom, intArrayOf(Color.TRANSPARENT, Color.argb(55, 255, 255, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+            // Same diagonal band as before: from (sx - 60dp, top) to (sx + 60dp, bottom)
+            val vx = 120 * d; val vy = rr.height()
+            val len = kotlin.math.hypot(vx, vy)
+            sweepMatrix.setScale(len / 2f, len / 2f)
+            sweepMatrix.postRotate(Math.toDegrees(kotlin.math.atan2(vy, vx).toDouble()).toFloat())
+            sweepMatrix.postTranslate(sx, rr.centerY())
+            sweepShader.setLocalMatrix(sweepMatrix)
+            fill.shader = sweepShader
             c.drawRect(rr, fill); fill.shader = null
         }
         c.restore()
@@ -405,7 +426,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         c.drawRoundRect(rr, rad, rad, line)
         // App icon badge on the top edge
         card.icon?.let {
-            val s = 34 * d * (rr.width() / (width * 0.62f))
+            val s = 34 * d * (rr.width() / (width * CoverView.CARD_SCALE))
             it.setBounds((rr.centerX() - s / 2).toInt(), (rr.top - s / 2).toInt(), (rr.centerX() + s / 2).toInt(), (rr.top + s / 2).toInt())
             it.alpha = (255 * fade).toInt(); it.draw(c)
         }
@@ -418,15 +439,27 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
     private var tracker: VelocityTracker? = null
     private val slop = android.view.ViewConfiguration.get(a).scaledTouchSlop.toFloat()
 
-    private fun live() = cards.filter { !it.gone && !it.flying }
+    private val liveList = ArrayList<Card>()
+    /** Cards still in the carousel (reuses one list rather than making a new one every frame). */
+    private fun live(): List<Card> { liveList.clear(); for (cd in cards) if (!cd.gone && !cd.flying) liveList.add(cd); return liveList }
+
+    private val cardBox = RectF()
+    private var ruleW = -1
+    private var ruleShader: Shader? = null
+    private val srcR = android.graphics.Rect()
+    private val dstR = RectF()
+    private val glowShader = RadialGradient(0f, 0f, 1f, intArrayOf(Color.argb(90, 90, 150, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+    private val glowMatrix = android.graphics.Matrix()
+    private val sweepShader = LinearGradient(-1f, 0f, 1f, 0f, intArrayOf(Color.TRANSPARENT, Color.argb(55, 255, 255, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+    private val sweepMatrix = android.graphics.Matrix()
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (opening != null) return true // an app is opening
         if (tracker == null) tracker = VelocityTracker.obtain()
         tracker?.addMovement(e)
-        val l = live()
-        val cw = width * 0.62f
+        val l = live().toList()
+        val cw = width * CoverView.CARD_SCALE
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> { downX = e.x; downY = e.y; lastX = e.x; mode = 0; dragging = true; vel = 0f }
             MotionEvent.ACTION_MOVE -> {
@@ -478,7 +511,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
             else if (restrictRect.contains(x, y)) { sfx.confirm(); a.openAppInfo() }
             return
         }
-        val cw = width * 0.62f
+        val cw = width * CoverView.CARD_SCALE
         val off = (x - width / 2f) / (cw * 0.78f)
         val idx = (pos + off).roundToInt()
         val centre = pos.roundToInt()
