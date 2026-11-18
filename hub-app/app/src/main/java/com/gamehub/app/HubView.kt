@@ -568,6 +568,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     // Scrolling list state
     private var scroll = 0f
     private var scrollVel = 0f
+    /** Gliding back to the top (Home pressed while already on NEXUS). */
+    private var homing = false
+    /** Swiping down from the top of the list: opens the notifications (set by NEXUS). */
+    var onPullDown: () -> Unit = {}
+    private var pullArmed = false
     private var maxScroll = 0f
     private var listTop = 0f
     private var listBottom = 0f
@@ -638,6 +643,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val total = usedRows * stepY - gap
         maxScroll = max(0f, total - (listBottom - listTop))
         // Fling with friction, springing back at the ends
+        if (homing && !dragging) {
+            scrollVel = 0f
+            scroll += (0f - scroll) * min(1f, dt * 9f)
+            if (kotlin.math.abs(scroll) < 0.5f) { scroll = 0f; homing = false }
+        }
         if (!dragging) {
             scroll += scrollVel * dt
             scrollVel *= kotlin.math.exp(-dt * 3.5f)
@@ -1066,6 +1076,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 dragging = false; longFired = false
                 maxTravel = 0f
                 caught = kotlin.math.abs(scrollVel) > 40 * d || scroll < -2 * d || scroll > maxScroll + 2 * d
+                homing = false
+                // Already at the top: a swipe down from here pulls down the notifications
+                pullArmed = !caught && scroll <= 1f * d
                 scrollVel = 0f
                 downRow = rowAt(e.x, e.y)
                 swipedUp = false
@@ -1121,7 +1134,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     tracker?.recycle(); tracker = null
                     return true
                 }
-                if (!tap) {
+                val pullDy = e.y - downY
+                if (!tap && pullArmed && !longFired && t > 1.2f && pullDy > 64 * d && kotlin.math.abs(e.x - downX) < pullDy * 0.6f && vy > -200 * d) {
+                    // Swipe down at the top of the list: notifications, like other launchers
+                    onPullDown()
+                } else if (!tap) {
                     // Swipe: let the list glide on (a short flick that never got going still moves it)
                     val inList = downY >= listTop - 6 * d && downY <= listBottom + 6 * d
                     if (!swipedUp && (dragging || (flick && inList))) scrollVel = -vy
@@ -1158,6 +1175,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     override fun performClick(): Boolean { super.performClick(); return true }
 
     fun clearSelection() { selected = -1 }
+
+    /** Home pressed while already on NEXUS: glide back to the top of the list. */
+    fun toTop() { selected = -1; if (scroll > 0.5f) homing = true }
 
     /** Called when the screen comes back (e.g. after closing a game). */
     fun resumed(fromApp: Boolean) {

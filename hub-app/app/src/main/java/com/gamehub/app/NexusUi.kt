@@ -71,8 +71,20 @@ object NexusUi {
         dialog.window?.setDimAmount(0.6f)
         dialog.window?.attributes?.windowAnimations = android.R.style.Animation_Dialog
         if (field != null) dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        showing.add(dialog)
+        dialog.setOnDismissListener { showing.remove(dialog) }
         dialog.show()
         return field
+    }
+
+    /** Panels on screen right now (so pressing Home can tidy them away, like other launchers do). */
+    private val showing = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Dialog, Boolean>())
+
+    /** Closes every panel [a] has open. Returns true if there were any. */
+    fun dismissAll(a: Activity): Boolean {
+        val mine = showing.filter { it.ownerActivity === a && it.isShowing }
+        for (dlg in mine) try { dlg.dismiss() } catch (_: Exception) {}
+        return mine.isNotEmpty()
     }
 
     private fun row(a: Activity, label: String, primary: Boolean, danger: Boolean, quiet: Boolean = false, click: () -> Unit): View {

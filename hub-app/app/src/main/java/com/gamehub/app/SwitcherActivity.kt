@@ -182,8 +182,11 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         Thread {
             for (cd in list) {
                 if (pm.getLaunchIntentForPackage(cd.pkg) == null) {
+                    // Can't be opened right now: hide it. Only forget it for good if it's really uninstalled
+                    // (an app being updated can't be opened for a moment, and should come back)
+                    val uninstalled = try { pm.getApplicationInfo(cd.pkg, 0); false } catch (_: android.content.pm.PackageManager.NameNotFoundException) { true } catch (_: Exception) { false }
                     AppCache.forget(cd.pkg)
-                    post { if (!cd.flying) { cd.gone = true; Recents.remove(a, cd.pkg) } }
+                    post { if (!cd.flying) { cd.gone = true; if (uninstalled) Recents.remove(a, cd.pkg) } }
                     continue
                 }
                 if (cd.shot != null) continue

@@ -68,19 +68,15 @@ class MainActivity : Activity() {
     /** Hold an app (without moving it): tile size, and for added apps edit / remove. */
     private fun appOptions(g: GameEntry) {
         val opts = ArrayList<NexusUi.Option>()
+        // The app's own shortcuts first (Android shares them with the Home app), then NEXUS's options
+        opts.addAll(AppActions.shortcutOptions(this, g.pkg))
         opts.add(NexusUi.Option("Tile size:  ${sizeName(g.tileW, g.tileH)}", primary = true) { chooseTileSize(g) })
         opts.add(NexusUi.Option("Open") { open(g) })
-        if (!g.custom) {
-            NexusUi.panel(this, g.name, null, opts)
-            return
-        }
-        NexusUi.panel(this, g.name, null, opts + listOf(
-            NexusUi.Option("Edit description") { editDescription(g) },
-            NexusUi.Option("App info") {
-                try { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${g.pkg}"))) } catch (_: Exception) {}
-            },
-            NexusUi.Option("Remove from NEXUS", danger = true) { removeGame(g) }
-        ))
+        if (g.custom) opts.add(NexusUi.Option("Edit description") { editDescription(g) })
+        if (g.installed) opts.add(AppActions.infoOption(this, g.pkg))
+        if (g.custom) opts.add(NexusUi.Option("Remove from NEXUS", danger = true) { removeGame(g) })
+        if (g.installed) AppActions.uninstallOption(this, g.pkg)?.let { opts.add(it) }
+        NexusUi.panel(this, g.name, null, opts)
     }
 
     private fun sizeName(w: Int, h: Int): String = when {
@@ -152,11 +148,9 @@ class MainActivity : Activity() {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
 
-    /** Opens any app from the drawer, with the same smooth fade. */
-    private fun openPkg(pkg: String) {
-        val launch = packageManager.getLaunchIntentForPackage(pkg) ?: return
-        leftForApp = true
-        startActivity(launch, Transitions.rise(this))
+    /** Opens any app from All Apps (that exact icon, if the app has more than one), with the same smooth fade. */
+    private fun openItem(item: AppItem) {
+        if (AppActions.open(this, item.pkg, item.component, Transitions.rise(this))) leftForApp = true
     }
 
     private fun removeGame(g: GameEntry) {
@@ -177,7 +171,8 @@ class MainActivity : Activity() {
         }
         hub = HubView(this, builtIn, { open(it) }, { drawer.open(add = true) }, { appOptions(it) }, sfx, { homeSettings() },
             { from, to -> moveApp(from, to) }, { drawer.open(add = false) }, { openSwitcher() }, { openSystem() })
-        drawer = AppDrawer(this, sfx, { openPkg(it.pkg) }, { addApps(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
+        drawer = AppDrawer(this, sfx, { openItem(it) }, { addApps(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
+        hub.onPullDown = { openNotifications() }
         drawer.onVisible = { open -> hub.covered = open; if (open) hub.clearSelection() }
         val root = android.widget.FrameLayout(this)
         root.addView(hub)
@@ -224,8 +219,32 @@ class MainActivity : Activity() {
         when {
             ::tutorial.isInitialized && tutorial.visibility == android.view.View.VISIBLE -> closeTutorial()
             ::drawer.isInitialized && drawer.isOpen -> drawer.close()
+            // As the phone's Home app, NEXUS stays put on Back (like any launcher); Close NEXUS is under the gear
+            HomeMode.isDefault(this) -> if (::hub.isInitialized) hub.clearSelection()
             else -> askClose()
         }
+    }
+
+    /**
+     * Home pressed: tidy up like other launchers. Panels and All Apps close; if NEXUS was already
+     * on screen with nothing open, the list glides back to the top.
+     */
+    private fun goHome(onScreen: Boolean) {
+        var tidied = NexusUi.dismissAll(this)
+        if (::drawer.isInitialized && drawer.isOpen) { drawer.close(animate = onScreen); tidied = true }
+        if (::hub.isInitialized) { if (onScreen && !tidied) hub.toTop() else hub.clearSelection() }
+    }
+
+    /** Swipe down on NEXUS: the notifications, the supported way first. */
+    private fun openNotifications() {
+        try { if (NexusAccessibility.instance?.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS) == true) return } catch (_: Exception) {}
+        try {
+            @android.annotation.SuppressLint("WrongConstant") val bar = getSystemService("statusbar")
+            Class.forName("android.app.StatusBarManager").getMethod("expandNotificationsPanel").invoke(bar)
+            return
+        } catch (_: Throwable) {}
+        // Last resort: bring the status bar in so it can be pulled down
+        try { if (android.os.Build.VERSION.SDK_INT >= 30) window.insetsController?.show(android.view.WindowInsets.Type.statusBars()) } catch (_: Exception) {}
     }
 
     private fun waitThenTutorial() {
@@ -301,15 +320,40 @@ class MainActivity : Activity() {
 
     private fun offerHome() {
         NexusUi.panel(this, "Make NEXUS your home screen?",
-            "Home will take you to NEXUS, even after the screen turns off and on. To use your normal home screen, close NEXUS with Back. Open NEXUS again any time from its icon.\n\nOn the next screen, choose NEXUS as your Home app.",
+            "Home will take you to NEXUS, even after the screen turns off and on. To use your normal home screen for a while, tap the gear and choose Close NEXUS. Open NEXUS again any time from its icon.\n\nOn the next screen, choose NEXUS as your Home app.",
             listOf(NexusUi.Option("Set it up", primary = true) { openHomeSettings() }), cancel = "Not now")
     }
 
+    private var homeAskedAt = 0L
+
+    /** Make NEXUS the Home app: Android's own prompt (Android 10 and up), or the Home app setting. */
     private fun openHomeSettings() {
+        if (android.os.Build.VERSION.SDK_INT >= 29 && !HomeMode.isDefault(this)) {
+            try {
+                val rm = getSystemService(android.app.role.RoleManager::class.java)
+                if (rm != null && rm.isRoleAvailable(android.app.role.RoleManager.ROLE_HOME) && !rm.isRoleHeld(android.app.role.RoleManager.ROLE_HOME)) {
+                    homeAskedAt = android.os.SystemClock.uptimeMillis()
+                    startActivityForResult(rm.createRequestRoleIntent(android.app.role.RoleManager.ROLE_HOME), REQ_HOME)
+                    return
+                }
+            } catch (_: Exception) {}
+        }
+        homeAppSetting()
+    }
+
+    private fun homeAppSetting() {
         try { startActivity(Intent(android.provider.Settings.ACTION_HOME_SETTINGS)) }
         catch (_: Exception) {
             try { startActivity(Intent(android.provider.Settings.ACTION_SETTINGS)) } catch (_: Exception) {}
         }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_HOME) return
+        if (HomeMode.isDefault(this)) { Toast.makeText(this, "NEXUS is now your home screen", Toast.LENGTH_SHORT).show(); return }
+        // Answered instantly = Android has stopped asking (it was declined before): open the setting instead
+        if (android.os.SystemClock.uptimeMillis() - homeAskedAt < 700) homeAppSetting()
     }
 
     private fun chooseNormalHome() {
@@ -418,7 +462,7 @@ class MainActivity : Activity() {
             NexusUi.Option("Report a problem") { reportProblem() },
             NexusUi.Option("How it works") {
                 NexusUi.panel(this, "How it works",
-                    "• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on.\n• Close NEXUS (Back, or Close NEXUS here) and Home goes to your normal home screen.\n• Open NEXUS from its icon to make it your home again.\n• Swipe up or tap ALL APPS to see every app. Hold an app in the list to move it.\n• Tap RECENT (or press the square button, once the helper is on) for your recent apps.\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.",
+                    "• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on. Pressing Home on NEXUS closes anything open and goes back to the top.\n• Close NEXUS (here) and Home goes to your normal home screen.\n• Open NEXUS from its icon to make it your home again.\n• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n• Hold an app to see its shortcuts (like New incognito tab), App info and Uninstall. Hold and drag to move it.\n• Swipe down on the list to see your notifications.\n• Tap RECENT (or press the square button, once the helper is on) for your recent apps.\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.",
                     emptyList(), cancel = "OK")
             },
             NexusUi.Option("Close NEXUS", danger = true) { askClose() }
@@ -443,19 +487,29 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         try { getSystemService(android.content.pm.LauncherApps::class.java)?.unregisterCallback(appsChanged) } catch (_: Exception) {}
+        window.decorView.removeCallbacks(reloadApps)
         super.onDestroy()
         sfx.release()
     }
 
     /** An app was installed, updated or removed: refresh the tiles, All Apps and Recent Apps' names and icons. */
+    private val reloadApps = Runnable {
+        if (isFinishing || isDestroyed) return@Runnable
+        drawer.load()
+        if (::hub.isInitialized) refresh()
+    }
     private val appsChanged = object : android.content.pm.LauncherApps.Callback() {
         private fun changed(pkgs: Array<out String>?) {
             pkgs?.forEach { AppCache.forget(it) }
-            drawer.load()
-            if (::hub.isInitialized) refresh()
+            window.decorView.removeCallbacks(reloadApps)
+            window.decorView.postDelayed(reloadApps, 400)
         }
         override fun onPackageAdded(packageName: String, user: android.os.UserHandle) = changed(arrayOf(packageName))
-        override fun onPackageRemoved(packageName: String, user: android.os.UserHandle) = changed(arrayOf(packageName))
+        override fun onPackageRemoved(packageName: String, user: android.os.UserHandle) {
+            // Really uninstalled (Android reports updates separately): forget it in Recent Apps too
+            if (user == android.os.Process.myUserHandle()) Recents.remove(this@MainActivity, packageName)
+            changed(arrayOf(packageName))
+        }
         override fun onPackageChanged(packageName: String, user: android.os.UserHandle) = changed(arrayOf(packageName))
         override fun onPackagesAvailable(packageNames: Array<out String>, user: android.os.UserHandle, replacing: Boolean) = changed(packageNames)
         override fun onPackagesUnavailable(packageNames: Array<out String>, user: android.os.UserHandle, replacing: Boolean) = changed(packageNames)
@@ -468,6 +522,7 @@ class MainActivity : Activity() {
             // Home pressed: NEXUS mode on = stay in / come back to NEXUS; off = normal home screen
             if (!HomeMode.isOn(this) && HomeMode.goNormalHome(this)) return
             leftForApp = android.os.SystemClock.uptimeMillis() - pausedAt > 700
+            goHome(onScreen = !leftForApp)
             return
         }
         // Opened from its icon or back from one of the apps
@@ -510,14 +565,13 @@ class MainActivity : Activity() {
     companion object {
         /** The "helper stopped" note is shown at most once each time NEXUS starts. */
         @Volatile private var helperWarned = false
+        private const val REQ_HOME = 41
     }
 
     private fun open(g: GameEntry) {
-        val launch = packageManager.getLaunchIntentForPackage(g.pkg)
-        if (launch != null) {
+        if (packageManager.getLaunchIntentForPackage(g.pkg) != null) {
             // Cross-fade into the app
-            leftForApp = true
-            startActivity(launch, Transitions.rise(this))
+            if (AppActions.open(this, g.pkg, null, Transitions.rise(this))) leftForApp = true
             return
         }
         // Not installed yet: open its download page

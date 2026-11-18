@@ -45,7 +45,7 @@ class TutorialView(private val a: Activity, private val sfx: Sfx, private val ac
         Page("06", "NEXUS lock screen (optional)",
             "Gear icon → NEXUS lock screen shows NEXUS's own clock screen whenever your screen turns on.\n\nSwipe up and your phone's normal PIN, pattern or fingerprint unlock appears, so your phone stays just as secure. It never covers calls or alarms. Needs the Recent Apps helper from step 05."),
         Page("07", "Closing NEXUS & going back",
-            "• To use your normal home screen for a while: press Back in NEXUS and choose Close NEXUS. Open NEXUS from its icon to make it your home again.\n\n• To stop using NEXUS completely: Settings → Apps → Default apps → Home app, then choose your original launcher (the one your phone came with). Names can vary slightly by phone; searching Settings for \"Home app\" also works.",
+            "• To use your normal home screen for a while: tap the gear in NEXUS and choose Close NEXUS. Open NEXUS from its icon to make it your home again.\n\n• To stop using NEXUS completely: Settings → Apps → Default apps → Home app, then choose your original launcher (the one your phone came with). Names can vary slightly by phone; searching Settings for \"Home app\" also works.",
             listOf("Open Home app settings" to { actions.setHome() })),
         Page("08", "You're all set",
             "You can see this guide again any time from ⚙ → Tutorial.\n\nEnjoy NEXUS.")

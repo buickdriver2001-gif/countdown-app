@@ -8,7 +8,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.drawable.Drawable
-import android.os.Build
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
@@ -22,8 +21,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 
-/** One app on the phone. */
-class AppItem(val label: String, val pkg: String, val isGame: Boolean) { var icon: Drawable? = null }
+/** One app icon on the phone (an app can have more than one, each its own [component]). */
+class AppItem(val label: String, val pkg: String, val isGame: Boolean, val component: android.content.ComponentName? = null) { var icon: Drawable? = null }
 
 /**
  * Full-screen app drawer in NEXUS style: search, Games first, then every app A–Z in a grid.
@@ -83,6 +82,14 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
             hint = "Search apps"; setSingleLine(); setTextColor(NexusUi.TEXT); setHintTextColor(Color.argb(140, 160, 185, 230))
             textSize = 15f; typeface = NexusUi.light; background = NexusUi.glass(d, 6f)
             setPadding((14 * d).toInt(), (10 * d).toInt(), (14 * d).toInt(), (10 * d).toInt())
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_GO
+            setOnEditorActionListener { _, _, _ ->
+                // Enter / Go on the keyboard opens the first match
+                val q = text.toString().trim().lowercase()
+                val first = if (q.isEmpty() || addMode) null else apps.firstOrNull { it.label.lowercase().startsWith(q) } ?: apps.firstOrNull { it.label.lowercase().contains(q) }
+                if (first != null) { sfx.confirm(); onOpen(first) }
+                true
+            }
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, af: Int) {}
                 override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
@@ -116,21 +123,55 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
     }
 
     private var loadedAt = 0L
+    /** Each load gets a number, so a slow older load can never overwrite a newer one. */
+    private var loadGen = 0
+    /** Goes up whenever a fresh list arrives (names or icons may have changed even if the count didn't). */
+    private var appsVersion = 0
 
-    /** Reads the phone's apps (in the background; icons too). */
+    /** Reads every app icon on the phone, the way launchers do (in the background; icons too). */
     fun load() {
+        val gen = ++loadGen
         Thread {
-            val pm = a.packageManager
-            val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-            val list = pm.queryIntentActivities(launcher, 0)
-                .map { it.activityInfo.applicationInfo }
-                .distinctBy { it.packageName }
-                .filter { it.packageName != a.packageName }
-                .map { info -> AppItem(pm.getApplicationLabel(info).toString(), info.packageName, Build.VERSION.SDK_INT >= 26 && info.category == ApplicationInfo.CATEGORY_GAME) }
-                .sortedBy { it.label.lowercase() }
-            for (it in list) it.icon = try { pm.getApplicationIcon(it.pkg) } catch (_: Exception) { null }
-            post { apps = list; loadedAt = android.os.SystemClock.uptimeMillis(); if (isOpen) fill() }
+            val list = try { readLauncherApps() } catch (_: Exception) { null } ?: try { readByIntent() } catch (_: Exception) { null }
+            post {
+                if (gen != loadGen || list == null) return@post
+                apps = list; loadedAt = android.os.SystemClock.uptimeMillis(); appsVersion++
+                if (isOpen) fill()
+            }
         }.start()
+    }
+
+    /** A–Z the way the phone's language sorts names (a new one per load: it isn't safe to share between threads). */
+    private fun byName(): Comparator<AppItem> { val col = java.text.Collator.getInstance(); return Comparator { x, y -> col.compare(x.label, y.label) } }
+
+    /** Android's launcher list: every icon (some apps have two), each with its own name and icon. */
+    private fun readLauncherApps(): List<AppItem>? {
+        val la = a.getSystemService(android.content.pm.LauncherApps::class.java) ?: return null
+        return la.getActivityList(null, android.os.Process.myUserHandle())
+            .filter { it.componentName.packageName != a.packageName }
+            .distinctBy { it.componentName }
+            .map { info ->
+                AppItem(info.label.toString().trim().ifEmpty { info.componentName.packageName }, info.componentName.packageName,
+                    info.applicationInfo.category == ApplicationInfo.CATEGORY_GAME, info.componentName).also {
+                    it.icon = try { info.getIcon(0) } catch (_: Exception) { null }
+                }
+            }
+            .sortedWith(byName())
+    }
+
+    /** Fallback: ask the package manager. */
+    private fun readByIntent(): List<AppItem> {
+        val pm = a.packageManager
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        return pm.queryIntentActivities(launcher, 0)
+            .filter { it.activityInfo.packageName != a.packageName }
+            .distinctBy { it.activityInfo.packageName to it.activityInfo.name }
+            .map { r ->
+                val ai = r.activityInfo
+                AppItem(r.loadLabel(pm).toString().trim(), ai.packageName, ai.applicationInfo.category == ApplicationInfo.CATEGORY_GAME,
+                    android.content.ComponentName(ai.packageName, ai.name)).also { it.icon = try { r.loadIcon(pm) } catch (_: Exception) { null } }
+            }
+            .sortedWith(byName())
     }
 
     fun open(add: Boolean, preselect: String? = null) {
@@ -152,7 +193,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         if (apps.isEmpty() || android.os.SystemClock.uptimeMillis() - loadedAt > 60_000) load()
     }
 
-    private fun key() = "$addMode|${search.text}|${apps.size}|${apps.count { inNexus(it.pkg) }}"
+    private fun key() = "$addMode|${search.text}|$appsVersion|${apps.count { inNexus(it.pkg) }}"
 
     /** Updates one app's tick and highlight without rebuilding the grid. */
     private fun refreshCell(pkg: String) {
@@ -167,11 +208,14 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         }
     }
 
-    fun close() {
+    /** [animate] = false when it isn't on screen anyway (e.g. Home pressed while in an app). */
+    fun close(animate: Boolean = true) {
         if (!isOpen) return
         isOpen = false
         (a.getSystemService(Activity.INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(search.windowToken, 0)
         onVisible(false)
+        animate().cancel()
+        if (!animate) { visibility = GONE; return }
         animate().alpha(0f).translationY(48 * d).setDuration(180).setInterpolator(android.view.animation.AccelerateInterpolator(1.4f)).withLayer().withEndAction { visibility = GONE }.start()
     }
 
@@ -261,12 +305,12 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         box.setOnLongClickListener {
             sfx.tick()
             val opts = ArrayList<NexusUi.Option>()
+            if (!addMode) opts.addAll(AppActions.shortcutOptions(a, item.pkg))
             if (!added) opts.add(NexusUi.Option("Add to NEXUS", primary = true) { onAdd(listOf(item)); fill() })
             if (!added && !addMode) opts.add(NexusUi.Option("Select multiple to add") { open(add = true, preselect = item.pkg) })
             opts.add(NexusUi.Option("Open") { onOpen(item) })
-            opts.add(NexusUi.Option("App info") {
-                try { a.startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${item.pkg}"))) } catch (_: Exception) {}
-            })
+            opts.add(AppActions.infoOption(a, item.pkg))
+            AppActions.uninstallOption(a, item.pkg)?.let { opts.add(it) }
             NexusUi.panel(a, item.label, null, opts)
             true
         }
