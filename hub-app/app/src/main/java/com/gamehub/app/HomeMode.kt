@@ -52,7 +52,7 @@ object HomeMode {
         return try {
             val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).setComponent(cn)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-            a.startActivity(i, android.app.ActivityOptions.makeCustomAnimation(a, android.R.anim.fade_in, android.R.anim.fade_out).toBundle())
+            a.startActivity(i, Transitions.rise(a))
             true
         } catch (_: Exception) { false }
     }

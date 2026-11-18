@@ -156,7 +156,7 @@ class MainActivity : Activity() {
     private fun openPkg(pkg: String) {
         val launch = packageManager.getLaunchIntentForPackage(pkg) ?: return
         leftForApp = true
-        startActivity(launch, android.app.ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out).toBundle())
+        startActivity(launch, Transitions.rise(this))
     }
 
     private fun removeGame(g: GameEntry) {
@@ -246,15 +246,11 @@ class MainActivity : Activity() {
     }
 
     private fun openSystem() {
-        val o = android.app.ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out)
-        if (android.os.Build.VERSION.SDK_INT >= 33) o.setSplashScreenStyle(android.window.SplashScreen.SPLASH_SCREEN_STYLE_SOLID_COLOR)
-        startActivity(Intent(this, SystemActivity::class.java), o.toBundle())
+        startActivity(Intent(this, SystemActivity::class.java), Transitions.rise(this, solidSplash = true))
     }
 
     private fun openSwitcher() {
-        val o = android.app.ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out)
-        if (android.os.Build.VERSION.SDK_INT >= 33) o.setSplashScreenStyle(android.window.SplashScreen.SPLASH_SCREEN_STYLE_SOLID_COLOR)
-        startActivity(Intent(this, SwitcherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), o.toBundle())
+        startActivity(Intent(this, SwitcherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), Transitions.rise(this, solidSplash = true))
     }
 
     /** NEXUS's own App info page (where "Allow restricted settings" lives, under ⋮). */
@@ -444,7 +440,7 @@ class MainActivity : Activity() {
         if (launch != null) {
             // Cross-fade into the app
             leftForApp = true
-            startActivity(launch, android.app.ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out).toBundle())
+            startActivity(launch, Transitions.rise(this))
             return
         }
         // Not installed yet: open its download page

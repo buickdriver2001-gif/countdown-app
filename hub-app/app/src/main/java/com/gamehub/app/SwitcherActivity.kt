@@ -41,12 +41,20 @@ class SwitcherActivity : Activity() {
     private lateinit var view: SwitcherView
     private val sfx by lazy { Sfx() }
 
-    /** Opened from the square button: the helper's black cover is up until this screen is ready. */
+    /** Opened from the square button: the helper's cover is up until this screen is ready. */
     var coverPending = false
+    /** The cover is shrinking the app you were in into its card: start with that card already in place. */
+    var zoomHandover = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         coverPending = intent.getBooleanExtra("fromSquare", false)
+        zoomHandover = coverPending && intent.getBooleanExtra("zoom", false)
+        // Edge to edge over the whole screen (like the helper's cover), so cards line up exactly
+        if (android.os.Build.VERSION.SDK_INT >= 28) window.attributes = window.attributes.apply {
+            layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 30) window.setDecorFitsSystemWindows(false)
         view = SwitcherView(this, sfx)
         setContentView(view)
         if (android.os.Build.VERSION.SDK_INT >= 30) window.decorView.post {
@@ -60,7 +68,7 @@ class SwitcherActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.getBooleanExtra("fromSquare", false)) coverPending = true
+        if (intent.getBooleanExtra("fromSquare", false)) { coverPending = true; zoomHandover = intent.getBooleanExtra("zoom", false) }
     }
 
     override fun onResume() { super.onResume(); view.load() }
@@ -69,14 +77,15 @@ class SwitcherActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         val last = Recents.list(this).firstOrNull()?.first
-        if (last != null && packageManager.getLaunchIntentForPackage(last) != null) openApp(last) else goNexus()
+        if (last != null && packageManager.getLaunchIntentForPackage(last) != null) view.openWithZoom(last) else goNexus()
     }
     override fun onDestroy() { super.onDestroy(); sfx.release() }
     override fun onPause() { super.onPause(); if (!isFinishing) finish() }
 
-    fun openApp(pkg: String) {
+    /** Opens an app. [revealed]: its card has already grown to fill the screen, so it just comes alive. */
+    fun openApp(pkg: String, revealed: Boolean = false) {
         val i = packageManager.getLaunchIntentForPackage(pkg) ?: return
-        startActivity(i, android.app.ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out).toBundle())
+        startActivity(i, if (revealed) Transitions.reveal(this) else Transitions.rise(this))
         finish()
     }
 
@@ -84,7 +93,7 @@ class SwitcherActivity : Activity() {
         val i = packageManager.getLaunchIntentForPackage(packageName) ?: return
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         i.putExtra("fromApp", true)
-        startActivity(i, android.app.ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out).toBundle())
+        startActivity(i, Transitions.rise(this))
         finish()
     }
 
@@ -112,6 +121,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         var flying = false // swiped away: flying off the top
         var flyV = 0f
         var ax = Float.NaN // animated position (in card steps from the centre)
+        val rect = RectF() // where it was last drawn
     }
     private var cards = ArrayList<Card>()
 
@@ -139,19 +149,8 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         val cur = bg
         if (cur != null && cur.width == width && cur.height == height) return cur
         cur?.recycle()
-        val w = width.toFloat(); val h = height.toFloat()
-        val b = Bitmap.createBitmap(width.coerceAtLeast(1), height.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
-        val c = Canvas(b)
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        p.shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(Color.rgb(3, 6, 18), Color.rgb(8, 16, 42), Color.rgb(2, 4, 12)), null, Shader.TileMode.CLAMP)
-        c.drawRect(0f, 0f, w, h, p); p.shader = null
-        p.strokeWidth = 1f; p.color = Color.argb(14, 140, 190, 255)
-        var gx = 0f; while (gx < w) { c.drawLine(gx, 0f, gx, h, p); gx += 40 * d }
-        var gy = 0f; while (gy < h) { c.drawLine(0f, gy, w, gy, p); gy += 40 * d }
-        p.shader = RadialGradient(w / 2, h * 0.46f, w * 0.8f, intArrayOf(Color.argb(70, 50, 100, 230), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
-        c.drawRect(0f, 0f, w, h, p)
-        bg = b
-        return b
+        // Shared with the helper's cover, so the hand-over from the square button is seamless
+        return CoverView.backdrop(width, height, d).also { bg = it }
     }
 
     /** Reads the recent apps and their pictures off the main thread, then fades the cards in. */
@@ -166,11 +165,18 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
             list.add(Card(pkg, label, icon, null, used))
         }
         cards = list
-        pos = 0f; vel = 0f; enter = 0f
+        pos = 0f; vel = 0f; enter = if (a.zoomHandover) 1f else 0f
+        opening = null; opened = false
+        // The first card's picture straight away (it's the one in the middle, and the one the cover hands over to)
+        list.firstOrNull()?.let { cd ->
+            val f = NexusAccessibility.snapFile(a, cd.pkg)
+            if (f.exists()) { cd.shot = try { BitmapFactory.decodeFile(f.absolutePath) } catch (_: Exception) { null }; cd.shotFade = 1f }
+        }
         invalidate()
         // Then the screenshots, decoded in the background
         Thread {
             for (cd in list) {
+                if (cd.shot != null) continue
                 val f = NexusAccessibility.snapFile(a, cd.pkg)
                 if (!f.exists()) continue
                 val b = try { BitmapFactory.decodeFile(f.absolutePath) } catch (_: Exception) { null } ?: continue
@@ -189,10 +195,11 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         val dt = if (lastNs == 0L) 0f else min(0.05f, (now - lastNs) / 1e9f)
         lastNs = now; t += dt; enter = min(1f, enter + dt * 3.5f)
         val w = width.toFloat(); val h = height.toFloat()
-        // Drawn and in front: let the helper fade its cover away, and fade the cards in with it
+        // Drawn and in front: let the helper fade its cover away. When the cover was shrinking the app
+        // into its card, that card is already here in the same spot; otherwise the cards fade in now.
         if (a.coverPending && a.hasWindowFocus()) {
             a.coverPending = false
-            enter = 0f
+            if (!a.zoomHandover) enter = 0f
             NexusAccessibility.instance?.switcherReady()
         }
 
@@ -270,6 +277,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
                 val cwS = cw * sc; val chS = ch * sc
                 val top = cy - chS / 2 - card.lift
                 r.set(x - cwS / 2, top, x + cwS / 2, top + chS)
+                card.rect.set(r)
                 val fade = ((1f - min(1f, abs(off)) * 0.45f) * (1f - min(1f, card.lift / (h * 0.5f)))).coerceIn(0f, 1f)
                 drawCard(c, card, r, fade, abs(off) < 0.5f)
             }
@@ -288,7 +296,59 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         homeRect.set(w / 2 + 10 * d, h - 70 * d, w / 2 + 150 * d, h - 30 * d)
         pill(c, clearRect, "CLEAR ALL", live.isNotEmpty())
         pill(c, homeRect, "NEXUS", true)
+        drawOpening(c, dt)
         postInvalidateOnAnimation()
+    }
+
+    // ------------------------------------------------------------------ opening an app: its card grows to fill the screen
+    private var opening: Card? = null
+    private var openT = 0f
+    private var opened = false
+    private val openFrom = RectF()
+    private val openRect = RectF()
+    private val OPEN_LEN = 0.26f
+
+    /** Opens [pkg]: if its card is the one in the middle, the card grows into the app first. */
+    fun openWithZoom(pkg: String) {
+        if (opening != null) return
+        val l = live()
+        val card = l.getOrNull(pos.roundToInt().coerceIn(0, (l.size - 1).coerceAtLeast(0)))
+        if (card == null || card.pkg != pkg || card.rect.isEmpty) { a.openApp(pkg); return }
+        opening = card; openT = 0f; opened = false
+        openFrom.set(card.rect)
+        invalidate()
+    }
+
+    private fun drawOpening(c: Canvas, dt: Float) {
+        val card = opening ?: return
+        openT += dt
+        val k = (openT / OPEN_LEN).coerceIn(0f, 1f)
+        val e = k * k * (3f - 2f * k) // smooth in and out
+        val w = width.toFloat(); val h = height.toFloat()
+        // Everything else sinks into the dark as the card comes forward
+        fill.color = Color.argb((235 * e).toInt(), 2, 4, 12); c.drawRect(0f, 0f, w, h, fill)
+        openRect.set(openFrom.left * (1f - e), openFrom.top * (1f - e), openFrom.right + (w - openFrom.right) * e, openFrom.bottom + (h - openFrom.bottom) * e)
+        val rad = 16 * d * (1f - e)
+        clip.reset(); clip.addRoundRect(openRect, rad, rad, Path.Direction.CW)
+        c.save(); c.clipPath(clip)
+        fill.color = Color.rgb(10, 16, 34); c.drawRect(openRect, fill)
+        val shot = card.shot
+        if (shot != null) {
+            val scale = openRect.width() / shot.width
+            val src = android.graphics.Rect(0, 0, shot.width, min(shot.height, (openRect.height() / scale).toInt()))
+            bmpPaint.alpha = 255
+            c.drawBitmap(shot, src, RectF(openRect.left, openRect.top, openRect.right, openRect.top + src.height() * scale), bmpPaint)
+        } else card.icon?.let {
+            val s = min(openRect.width(), openRect.height()) * 0.3f
+            it.setBounds((openRect.centerX() - s / 2).toInt(), (openRect.centerY() - s / 2).toInt(), (openRect.centerX() + s / 2).toInt(), (openRect.centerY() + s / 2).toInt())
+            it.alpha = 255; it.draw(c)
+        }
+        c.restore()
+        if (k >= 1f && !opened) {
+            opened = true
+            // With its last picture filling the screen the app just comes alive; without one it rises in
+            a.openApp(card.pkg, revealed = shot != null)
+        }
     }
 
     private fun pill(c: Canvas, rr: RectF, label: String, on: Boolean) {
@@ -357,6 +417,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (opening != null) return true // an app is opening
         if (tracker == null) tracker = VelocityTracker.obtain()
         tracker?.addMovement(e)
         val l = live()
@@ -417,7 +478,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         val idx = (pos + off).roundToInt()
         val centre = pos.roundToInt()
         if (abs(off) < 0.45f && y > height * 0.15f && y < height * 0.8f) {
-            l.getOrNull(centre)?.let { sfx.confirm(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY); a.openApp(it.pkg) }
+            l.getOrNull(centre)?.let { sfx.confirm(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY); openWithZoom(it.pkg) }
         } else if (idx in l.indices && idx != centre && y > height * 0.15f && y < height * 0.8f) {
             sfx.tick(); vel = 0f; pos = pos + (idx - pos) * 0.001f; animateTo(idx)
         }

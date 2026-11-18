@@ -49,7 +49,7 @@ class NexusAccessibility : AccessibilityService() {
             if (mode == android.media.AudioManager.MODE_RINGTONE || mode == android.media.AudioManager.MODE_IN_CALL ||
                 mode == android.media.AudioManager.MODE_IN_COMMUNICATION) { removeCover(); return }
             when (i.action) {
-                Intent.ACTION_SCREEN_OFF -> { otherAppSinceOff = false; h.removeCallbacks(safety); addCover(); showLock(c) }
+                Intent.ACTION_SCREEN_OFF -> { otherAppSinceOff = false; coverToken++; h.removeCallbacks(safety); cover?.showBlack(); addCover(); showLock(c) }
                 Intent.ACTION_SCREEN_ON -> {
                     ensureCover()
                     val km = getSystemService(KeyguardManager::class.java)
@@ -76,7 +76,7 @@ class NexusAccessibility : AccessibilityService() {
     // The same cover hides the phone's own recent-apps screen while NEXUS Recent Apps opens (square button).
     // Once the NEXUS screen underneath is ready, the cover fades away, so it hands over smoothly.
 
-    private var cover: android.view.View? = null
+    private var cover: CoverView? = null
     private var coverLp: android.view.WindowManager.LayoutParams? = null
 
     /** The cover is only kept when something uses it: the NEXUS lock screen, or NEXUS Recent Apps on the square button. */
@@ -88,7 +88,7 @@ class NexusAccessibility : AccessibilityService() {
         if (cover != null || (!force && !coverWanted())) return
         try {
             val wm = getSystemService(android.view.WindowManager::class.java) ?: return
-            val v = android.view.View(this).apply { setBackgroundColor(android.graphics.Color.BLACK) }
+            val v = CoverView(this)
             val lp = android.view.WindowManager.LayoutParams(
                 android.view.WindowManager.LayoutParams.MATCH_PARENT, android.view.WindowManager.LayoutParams.MATCH_PARENT,
                 android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -115,10 +115,14 @@ class NexusAccessibility : AccessibilityService() {
 
     private fun addCover() = setCover(true)
     /** Takes the cover away at once (calls, alarms and other apps never wait). */
-    fun removeCover() { h.removeCallbacks(safety); setCover(false) }
+    fun removeCover() { coverToken++; h.removeCallbacks(safety); setCover(false); cover?.showBlack() }
+
+    /** Cancels a cover that was about to be switched on. */
+    private var coverToken = 0
 
     /** Lifts the cover with a short fade, so the NEXUS screen underneath appears smoothly. */
     private fun fadeCover() {
+        coverToken++
         h.removeCallbacks(safety)
         val v = cover ?: return
         val lp = coverLp ?: return
@@ -129,6 +133,7 @@ class NexusAccessibility : AccessibilityService() {
                 lp.alpha = 0f
                 try { getSystemService(android.view.WindowManager::class.java)?.updateViewLayout(v, lp) } catch (_: Throwable) {}
                 v.alpha = 1f
+                v.showBlack()
             }.start()
     }
 
@@ -149,8 +154,22 @@ class NexusAccessibility : AccessibilityService() {
     /** Called by the NEXUS lock screen once it is lit and in front (the phone's own lock screen is no longer drawn). */
     fun lockReady() { armSafety(50) }
 
-    /** Called by NEXUS Recent Apps once it is drawn and in front: the cover fades away to reveal it. */
-    fun switcherReady() { armSafety(30) }
+    /** Called by NEXUS Recent Apps once it is drawn and in front: the cover fades away to reveal it
+     *  (after the app has finished shrinking into its card). */
+    fun switcherReady() {
+        val end = cover?.zoomEnd() ?: 0L
+        armSafety(maxOf(30L, end - SystemClock.uptimeMillis() + 30L))
+    }
+
+    /** The last picture of each app as it was taken, kept in memory for the square-button opening. */
+    @Volatile private var lastShot: Pair<String, Bitmap>? = null
+
+    private fun shotFor(pkg: String): Bitmap? {
+        lastShot?.let { if (it.first == pkg) return it.second }
+        val f = snapFile(this, pkg)
+        if (!f.exists()) return null
+        return try { android.graphics.BitmapFactory.decodeFile(f.absolutePath) } catch (_: Throwable) { null }
+    }
 
     /** Another app's screen appeared after the screen went off (alarm, timer, camera, call...). */
     @Volatile private var otherAppSinceOff = false
@@ -224,15 +243,25 @@ class NexusAccessibility : AccessibilityService() {
             val now = SystemClock.uptimeMillis()
             if (now - lastSwitcher > 800) {
                 lastSwitcher = now
-                // Black out the phone's own screen straight away (like the lock screen does), open NEXUS Recent
-                // Apps underneath, and fade the cover away once it's ready. Never longer than a moment.
+                // Cover the phone's own screen straight away. If you were in an app, the cover starts with that
+                // app's last picture filling the screen and shrinks it into its card over the NEXUS backdrop;
+                // NEXUS Recent Apps opens underneath with that card in the same spot, and the cover fades away.
+                // Never longer than a moment, and it never takes touches.
+                val from = current
+                val shot = if (from != null && from == Recents.list(this).firstOrNull()?.first) shotFor(from) else null
                 ensureCover(force = true)
-                addCover()
-                armSafety(900)
+                val v = cover
+                if (v != null) {
+                    v.showRecents(shot)
+                    // Switch the cover on once that first picture is drawn (so it never shows a stale frame)
+                    val token = ++coverToken
+                    v.postOnAnimation { v.postOnAnimation { if (token == coverToken) addCover() } }
+                }
+                armSafety(1100)
                 try {
                     startActivity(Intent(this, SwitcherActivity::class.java)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                        .putExtra("fromSquare", true), SwitcherActivity.noIconSplash(this))
+                        .putExtra("fromSquare", true).putExtra("zoom", shot != null), SwitcherActivity.noIconSplash(this))
                 } catch (_: Exception) { removeCover() }
             }
             return
@@ -277,7 +306,8 @@ class NexusAccessibility : AccessibilityService() {
                                 val tmp = File(snapDir(this@NexusAccessibility), "$pkg.tmp")
                                 FileOutputStream(tmp).use { small.compress(Bitmap.CompressFormat.JPEG, 78, it) }
                                 tmp.renameTo(snapFile(this@NexusAccessibility, pkg))
-                                soft.recycle(); small.recycle()
+                                soft.recycle()
+                                lastShot = pkg to small // kept for the square-button opening (not recycled)
                             }
                         } catch (_: Throwable) {
                         } finally { buf.close() }

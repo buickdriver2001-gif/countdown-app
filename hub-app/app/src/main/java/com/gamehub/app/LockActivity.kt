@@ -120,11 +120,11 @@ class LockActivity : Activity() {
             val i = packageManager.getLaunchIntentForPackage(packageName)
             if (i != null) {
                 i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("fromApp", true)
-                startActivity(i, android.app.ActivityOptions.makeCustomAnimation(this, android.R.anim.fade_in, android.R.anim.fade_out).toBundle())
+                startActivity(i, Transitions.rise(this))
             }
         }
         finish()
-        @Suppress("DEPRECATION") overridePendingTransition(0, android.R.anim.fade_out)
+        @Suppress("DEPRECATION") overridePendingTransition(0, R.anim.nexus_exit)
     }
 
     companion object {

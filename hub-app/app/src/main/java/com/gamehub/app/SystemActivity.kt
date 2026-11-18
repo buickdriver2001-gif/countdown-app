@@ -106,7 +106,7 @@ class SystemActivity : Activity() {
         // Close a full-screen test first
         if (root.childCount > 1) { root.removeViewAt(root.childCount - 1); return }
         @Suppress("DEPRECATION") super.onBackPressed()
-        @Suppress("DEPRECATION") overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+        @Suppress("DEPRECATION") overridePendingTransition(0, R.anim.nexus_exit)
     }
 
     // ------------------------------------------------------------------ layout helpers
