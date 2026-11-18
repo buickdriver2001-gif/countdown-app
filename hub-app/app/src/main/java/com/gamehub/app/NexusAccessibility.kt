@@ -79,11 +79,21 @@ class NexusAccessibility : AccessibilityService() {
             " lockAlive=" + LockActivity.alive + " lockShowing=" + LockActivity.showing + " otherApp=" + otherAppSinceOff +
             " front=" + (current ?: "-") + " audioMode=" + (getSystemService(android.media.AudioManager::class.java)?.mode ?: -1))
         if (!LockActivity.enabled(c)) { if (!coverWanted()) dropCover(); return }
-        // Never cover a phone call or a ringing call/alarm (the screen also turns off during calls)
+        // Never cover a phone call or a ringing call/alarm (the screen also turns off during calls).
+        // An internet call (Discord, WhatsApp...) only counts while an app is on screen, since that may be its
+        // call screen: with the call in the background (e.g. in a Discord voice channel while on the NEXUS home
+        // screen) the NEXUS lock screen works as usual, just as the phone's own lock screen does.
         val am = getSystemService(android.media.AudioManager::class.java)
         val mode = am?.mode ?: android.media.AudioManager.MODE_NORMAL
-        if (mode == android.media.AudioManager.MODE_RINGTONE || mode == android.media.AudioManager.MODE_IN_CALL ||
-            mode == android.media.AudioManager.MODE_IN_COMMUNICATION) { removeCover(); return }
+        val internetCallOnScreen = mode == android.media.AudioManager.MODE_IN_COMMUNICATION && current != null
+        if (mode == android.media.AudioManager.MODE_RINGTONE || mode == android.media.AudioManager.MODE_IN_CALL || internetCallOnScreen) {
+            LockTrace.log(this, "  " + when {
+                mode == android.media.AudioManager.MODE_RINGTONE -> "phone ringing"
+                mode == android.media.AudioManager.MODE_IN_CALL -> "phone call in progress"
+                else -> "internet call with an app on screen"
+            } + ": NEXUS lock screen left out (the phone's own lock screen shows)")
+            removeCover(); return
+        }
         when (i.action) {
             Intent.ACTION_SCREEN_OFF -> {
                 otherAppSinceOff = false; leftByScreenOff = true; coverToken++; h.removeCallbacks(safety); cover?.showBlack(); addCover(); showLock(c)
