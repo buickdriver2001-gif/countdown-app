@@ -45,6 +45,7 @@ class LockActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         alive = true
+        LockTrace.log(this, "  lock screen created")
         if (android.os.Build.VERSION.SDK_INT >= 27) setShowWhenLocked(true)
         else @Suppress("DEPRECATION") window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         view = LockView(this)
@@ -61,6 +62,8 @@ class LockActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        LockTrace.log(this, "  lock screen in front: phoneLocked=" + getSystemService(KeyguardManager::class.java)?.isKeyguardLocked +
+            " screenOn=" + getSystemService(android.os.PowerManager::class.java)?.isInteractive)
         // While the screen is off the phone may take a moment to lock: stay ready rather than closing early
         if (!stillNeeded()) return
         showing = true
@@ -69,6 +72,7 @@ class LockActivity : Activity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        LockTrace.log(this, "  lock screen focus=" + hasFocus)
         if (hasFocus) stillNeeded()
     }
 
@@ -80,6 +84,7 @@ class LockActivity : Activity() {
         val km = getSystemService(KeyguardManager::class.java)
         val pm = getSystemService(android.os.PowerManager::class.java)
         if (km?.isKeyguardLocked != true && pm?.isInteractive == true) {
+            LockTrace.log(this, "  lock screen closed itself: the phone isn't locked")
             finish()
             @Suppress("DEPRECATION") overridePendingTransition(0, 0)
             return false
@@ -90,10 +95,12 @@ class LockActivity : Activity() {
     override fun onStop() {
         super.onStop()
         showing = false
+        LockTrace.log(this, "  lock screen hidden")
     }
 
     override fun onDestroy() {
         alive = false
+        LockTrace.log(this, "  lock screen closed")
         try { unregisterReceiver(unlocked) } catch (_: Exception) {}
         super.onDestroy()
     }
@@ -115,6 +122,7 @@ class LockActivity : Activity() {
 
     private fun afterUnlock() {
         if (isFinishing) return
+        LockTrace.log(this, "  unlocked")
         // Land in NEXUS when it's the home screen; otherwise just get out of the way
         if (HomeMode.isOn(this) && HomeMode.isDefault(this)) {
             val i = packageManager.getLaunchIntentForPackage(packageName)
