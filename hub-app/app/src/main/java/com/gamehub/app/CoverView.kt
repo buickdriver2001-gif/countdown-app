@@ -130,7 +130,9 @@ class CoverView(c: Context) : FrameLayout(c) {
 
     private fun resetCard() {
         card.animate().cancel()
-        card.scaleX = 1f; card.scaleY = 1f; card.translationX = 0f; card.translationY = 0f
+        // Set each value twice so it always reaches the render thread (where the shrinking ran)
+        card.scaleX = 0.5f; card.scaleX = 1f; card.scaleY = 0.5f; card.scaleY = 1f
+        card.translationY = 1f; card.translationY = 0f; card.translationX = 0f
     }
 
     /** When the shrinking finishes (uptime ms); 0 if there's nothing to wait for. */

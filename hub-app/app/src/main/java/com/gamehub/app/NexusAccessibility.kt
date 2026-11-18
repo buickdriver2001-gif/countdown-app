@@ -90,7 +90,8 @@ class NexusAccessibility : AccessibilityService() {
                     removeCover()
                 } else if (km?.isKeyguardLocked == true) {
                     // Fallback only: normally the lock screen is already in place from screen-off
-                    if (!LockActivity.alive) { LockTrace.log(this, "  lock screen wasn't there: opening it now"); showLock(c) }
+                    // (Alarms, timers, the camera and calls are handled above, so this never covers them)
+                    if (!LockActivity.showing) { LockTrace.log(this, "  lock screen not in front: opening it now"); showLock(c) }
                     // Safety: the cover never stays more than a moment, whatever happens
                     armSafety(1300)
                     h.postDelayed({ LockTrace.log(this, "  0.6s after screen on: lockAlive=" + LockActivity.alive + " lockShowing=" + LockActivity.showing) }, 600)
@@ -137,10 +138,11 @@ class NexusAccessibility : AccessibilityService() {
     private fun setCover(solid: Boolean) {
         val v = cover ?: return
         val lp = coverLp ?: return
-        // Stop any fade in progress
+        // Stop any fade in progress, and make sure the cover is fully opaque again (set twice so the new value
+        // always reaches the render thread, even if the fade ran there)
         fadeToken++
         v.animate().cancel()
-        if (v.alpha != 1f) v.alpha = 1f
+        v.alpha = 0f; v.alpha = 1f
         if ((lp.alpha > 0.5f) == solid) return
         lp.alpha = if (solid) 1f else 0f
         try { getSystemService(android.view.WindowManager::class.java)?.updateViewLayout(v, lp) } catch (_: Throwable) {}
@@ -170,7 +172,7 @@ class NexusAccessibility : AccessibilityService() {
             try { getSystemService(android.view.WindowManager::class.java)?.updateViewLayout(v, lp) } catch (_: Throwable) {}
             // Back to plain black a moment later, once the window is surely hidden
             h.postDelayed({
-                if (token == fadeToken && lp.alpha < 0.5f) { v.animate().cancel(); v.alpha = 1f; v.showBlack() }
+                if (token == fadeToken && lp.alpha < 0.5f) { v.animate().cancel(); v.alpha = 0f; v.alpha = 1f; v.showBlack() }
             }, 120)
         }, FADE_MS + 20)
     }
