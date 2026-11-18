@@ -258,7 +258,7 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         if (phaseMsg > 0f) {
             val a = (min(1f, phaseMsg) * 255).toInt()
             serif.textSize = 26 * d; serif.color = Color.argb(a, 240, 140, 60)
-            c.drawText("The Warden's fury ignites!", w / 2, h * 0.28f, serif)
+            c.drawText("Hollow Warden's fury ignites!", w / 2, h * 0.28f, serif)
         }
 
         if (!controls) return
@@ -543,7 +543,7 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         serif.textSize = 60 * d; serif.color = Color.rgb(232, 222, 196)
         c.drawText("ASHEN VOW", w / 2, h * 0.36f, serif)
         serif.textSize = 17 * d; serif.color = Color.rgb(196, 150, 80)
-        c.drawText("Defeat The Hollow Warden", w / 2, h * 0.36f + 32 * d, serif)
+        c.drawText("Defeat Hollow Warden", w / 2, h * 0.36f + 32 * d, serif)
         val pulse = 0.6f + 0.4f * kotlin.math.sin(System.currentTimeMillis() / 400.0).toFloat()
         text.textSize = 17 * d; text.color = Color.argb((255 * pulse).toInt(), 255, 255, 255)
         c.drawText("Tap to begin", w / 2, h * 0.58f, text)

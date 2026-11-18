@@ -969,7 +969,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         push(); tr(0f, -1.21f, 0f); rot(45f, 1f, 0f, 0f); part(0f, 0f, 0f, 0.024f, 0.056f, 0.056f, blade, M_METAL, 1.6f); pop() // tip
     }
 
-    /** The Warden's greatsword: horned guard, burning gem, serrated back, runes in the fuller. */
+    /** Hollow Warden's greatsword: horned guard, burning gem, serrated back, runes in the fuller. */
     private fun drawGreatsword() {
         val p2 = game.boss.phase2
         val time = game.time

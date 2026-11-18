@@ -115,7 +115,7 @@ class Boss {
         const val MAX_HP = 800f
         const val MAX_POISE = 100f
         const val RADIUS = 1.35f
-        const val NAME = "The Hollow Warden"
+        const val NAME = "Hollow Warden"
     }
 }
 

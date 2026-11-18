@@ -18,7 +18,7 @@ class MainActivity : Activity() {
 
     private val builtIn = listOf(
         GameEntry("Zombie Dots", "com.zombiedots.app", "Survive the endless horde", Color.rgb(255, 80, 80), 0),
-        GameEntry("Ashen Vow", "com.ashenvow.app", "Defeat The Hollow Warden", Color.rgb(230, 150, 60), 1),
+        GameEntry("Ashen Vow", "com.ashenvow.app", "Defeat Hollow Warden", Color.rgb(230, 150, 60), 1),
         GameEntry("SynthPad", "com.synthpad.app", "Make music with synths", Color.rgb(120, 220, 255), 2)
     )
     private lateinit var hub: HubView
