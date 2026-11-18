@@ -164,7 +164,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
             list.add(Card(pkg, info.label, info.icon, null, used))
         }
         cards = list
-        pos = 0f; vel = 0f; enter = if (a.zoomHandover) 1f else 0f
+        pos = 0f; vel = 0f; targetIdx = 0; enter = if (a.zoomHandover) 1f else 0f
         opening = null; opened = false
         // The first card's picture straight away (it's the one in the middle, and the one the cover hands over to)
         list.firstOrNull()?.let { cd ->
@@ -266,11 +266,17 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         } else if (live.isNotEmpty()) {
             // Carousel physics: glide, then settle on the nearest card
             if (!dragging) {
-                pos += vel * dt
-                vel *= exp(-dt * 5f)
-                val target = pos.roundToInt().coerceIn(0, live.size - 1).toFloat()
-                if (abs(vel) < 2.5f) { pos += (target - pos) * min(1f, dt * 10f); vel = 0f }
-                pos = pos.coerceIn(-0.4f, live.size - 0.6f)
+                // A spring that glides into the chosen card and settles there (no sudden snap at the end)
+                if (targetIdx < 0) targetIdx = pos.roundToInt()
+                targetIdx = targetIdx.coerceIn(0, live.size - 1)
+                var left = dt
+                while (left > 0f) {
+                    val st = min(left, 1f / 120f)
+                    val acc = SPRING * (targetIdx - pos) - 2f * kotlin.math.sqrt(SPRING) * vel
+                    vel += acc * st; pos += vel * st
+                    left -= st
+                }
+                if (abs(targetIdx - pos) < 0.0005f && abs(vel) < 0.01f) { pos = targetIdx.toFloat(); vel = 0f }
             }
             val cw = cwF; val ch = chF
             val cy = cyF
@@ -320,7 +326,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
     private var opened = false
     private val openFrom = RectF()
     private val openRect = RectF()
-    private val OPEN_LEN = 0.26f
+    private val OPEN_LEN = 0.38f
 
     /** Opens [pkg]: if its card is the one in the middle, the card grows into the app first. */
     fun openWithZoom(pkg: String) {
@@ -337,10 +343,11 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         val card = opening ?: return
         openT += dt
         val k = (openT / OPEN_LEN).coerceIn(0f, 1f)
-        val e = k * k * (3f - 2f * k) // smooth in and out
+        // Gentle start, gentle landing
+        val e = if (k < 0.5f) 4f * k * k * k else 1f - (-2f * k + 2f).let { it * it * it } / 2f
         val w = width.toFloat(); val h = height.toFloat()
-        // Everything else sinks into the dark as the card comes forward
-        fill.color = Color.argb((235 * e).toInt(), 2, 4, 12); c.drawRect(0f, 0f, w, h, fill)
+        // Everything else softly sinks into the dark as the card comes forward
+        fill.color = Color.argb((205 * e).toInt(), 2, 4, 12); c.drawRect(0f, 0f, w, h, fill)
         openRect.set(openFrom.left * (1f - e), openFrom.top * (1f - e), openFrom.right + (w - openFrom.right) * e, openFrom.bottom + (h - openFrom.bottom) * e)
         val rad = 16 * d * (1f - e)
         clip.reset(); clip.addRoundRect(openRect, rad, rad, Path.Direction.CW)
@@ -476,7 +483,11 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
                 tracker?.computeCurrentVelocity(1000)
                 val vx = tracker?.xVelocity ?: 0f; val vy = tracker?.yVelocity ?: 0f
                 when (mode) {
-                    1 -> vel = -vx / (cw * 0.78f)
+                    1 -> {
+                        // Fling: aim for where the swipe would carry it, one or more cards along
+                        vel = -vx / (cw * 0.78f)
+                        targetIdx = (pos + vel * 0.22f).roundToInt().coerceIn(0, (l.size - 1).coerceAtLeast(0))
+                    }
                     2 -> {
                         val card = l.getOrNull(pos.roundToInt())
                         if (card != null) {
@@ -518,10 +529,12 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         if (abs(off) < 0.45f && y > height * 0.15f && y < height * 0.8f) {
             l.getOrNull(centre)?.let { sfx.confirm(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY); openWithZoom(it.pkg) }
         } else if (idx in l.indices && idx != centre && y > height * 0.15f && y < height * 0.8f) {
-            sfx.tick(); vel = 0f; pos = pos + (idx - pos) * 0.001f; animateTo(idx)
+            sfx.tick(); animateTo(idx)
         }
     }
 
+    /** The card the carousel is gliding to (-1: the nearest one). */
     private var targetIdx = -1
-    private fun animateTo(i: Int) { vel = (i - pos) * 5f; targetIdx = i }
+    private val SPRING = 110f
+    private fun animateTo(i: Int) { targetIdx = i }
 }

@@ -179,24 +179,31 @@ class LockView(private val a: LockActivity) : View(a) {
     private fun loadFaces() {
         Thread {
             val pm = a.packageManager
-            // Same apps, same order as the Recent Apps screen
-            val pkgs = Recents.list(a).map { it.first }
+            // The apps that are open right now, newest first (the same list as Recent Apps). Each app appears once.
+            val pkgs = Recents.list(a).map { it.first }.distinct()
                 .filter { it != a.packageName && pm.getLaunchIntentForPackage(it) != null }
             val out = ArrayList<Bitmap>()
             val size = 256
-            for (pkg in pkgs) {
-                if (out.size >= 6) break
-                val icon = try { pm.getApplicationIcon(pkg) } catch (_: Exception) { null } ?: continue
+            fun glass(): Bitmap {
                 val b = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
                 val c = Canvas(b)
                 val p = Paint(Paint.ANTI_ALIAS_FLAG)
-                // Dark glass face with the app's icon in the middle
                 p.shader = LinearGradient(0f, 0f, 0f, size.toFloat(), Color.rgb(16, 30, 70), Color.rgb(6, 10, 26), Shader.TileMode.CLAMP)
                 c.drawRect(0f, 0f, size.toFloat(), size.toFloat(), p)
+                return b
+            }
+            for (pkg in pkgs) {
+                if (out.size >= 6) break
+                val icon = try { pm.getApplicationIcon(pkg) } catch (_: Exception) { null } ?: continue
+                // Dark glass face with the app's icon in the middle
+                val b = glass()
                 icon.setBounds(size / 5, size / 5, size * 4 / 5, size * 4 / 5)
-                icon.draw(c)
+                icon.draw(Canvas(b))
                 out.add(b)
             }
+            // Faces without an app are plain glass (never a repeat of an app)
+            val empty = glass()
+            while (out.size < 6) out.add(empty)
             post { faces = out }
         }.start()
     }
@@ -370,14 +377,7 @@ class LockView(private val a: LockActivity) : View(a) {
     )
     private val faceOrder = arrayOf(0, 1, 2, 3, 4, 5)
 
-    /**
-     * Which open app goes on each face (front, right, back, left, top, bottom). With fewer than six apps
-     * open, an app also appears on the face opposite it, so the faces you see together show different apps.
-     */
-    private val slotTable = arrayOf(
-        intArrayOf(0, 0, 0, 0, 0, 0), intArrayOf(0, 1, 0, 1, 0, 1), intArrayOf(0, 1, 0, 1, 2, 2),
-        intArrayOf(0, 1, 2, 3, 2, 3), intArrayOf(0, 1, 2, 3, 4, 2), intArrayOf(0, 1, 2, 3, 4, 5))
-    private fun faceSlots(n: Int): IntArray = slotTable[n.coerceIn(1, 6) - 1]
+
     private val faceDepth = FloatArray(6)
 
     private fun cube(c: Canvas, cx: Float, cy: Float, s: Float, ang: Float, alpha: Float) {
@@ -386,7 +386,6 @@ class LockView(private val a: LockActivity) : View(a) {
         if (pics.isNotEmpty()) {
             for (f in 0 until 6) { val fd = faceDefs[f]; turn(fd[0], fd[1], fd[2], ang); faceDepth[f] = rot[2] }
             val sorted = faceOrder.sortedByDescending { faceDepth[it] }
-            val slots = faceSlots(pics.size)
             for (f in sorted) {
                 if (faceDepth[f] > -0.05f) continue // facing away
                 val fd = faceDefs[f]
@@ -399,7 +398,7 @@ class LockView(private val a: LockActivity) : View(a) {
                     val pr = 3.2f / (3.2f + rot[2])
                     dst[k * 2] = cx + rot[0] * s * pr; dst[k * 2 + 1] = cy - rot[1] * s * pr
                 }
-                val bmp = pics[slots[f]]
+                val bmp = pics.getOrNull(f) ?: continue
                 src[0] = 0f; src[1] = 0f; src[2] = bmp.width.toFloat(); src[3] = 0f
                 src[4] = bmp.width.toFloat(); src[5] = bmp.height.toFloat(); src[6] = 0f; src[7] = bmp.height.toFloat()
                 mtx.setPolyToPoly(src, 0, dst, 0, 4)

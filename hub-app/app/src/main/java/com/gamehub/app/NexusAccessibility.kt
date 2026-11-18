@@ -283,14 +283,39 @@ class NexusAccessibility : AccessibilityService() {
             return
         }
         if (isRealApp(pkg)) {
+            // Only an app you actually opened counts as open: one of its full screens (not a pop-up or a dialog),
+            // shown while the phone is unlocked (not an alarm or a call ringing over the lock screen),
+            // and still in front a moment later (not something that flashed up and went).
+            val pm = getSystemService(PowerManager::class.java)
+            val km = getSystemService(KeyguardManager::class.java)
+            if (pm?.isInteractive != true || km?.isKeyguardLocked == true || !isAppScreen(pkg, cls)) return
             if (pkg != current) {
                 current = pkg
-                Recents.touch(this, pkg)
-                AppCache.warm(this, listOf(pkg))
-                // Grab its screen shortly after it appears
-                h.postDelayed({ snap() }, 700)
+                val token = ++openToken
+                h.postDelayed({
+                    if (token == openToken && current == pkg && pm?.isInteractive == true && km?.isKeyguardLocked != true) {
+                        Recents.touch(this, pkg)
+                        AppCache.warm(this, listOf(pkg))
+                        snap()
+                    }
+                }, 1500)
             }
-        } else if (pkg in homePkgs || pkg == packageName) current = null
+        } else if (pkg in homePkgs || pkg == packageName) { current = null; openToken++ }
+    }
+
+    /** Invalidates a pending "this app was opened" when something else comes to the front first. */
+    private var openToken = 0
+    private val screenCache = HashMap<String, Boolean>()
+
+    /** Is [cls] one of [pkg]'s full screens (an activity), rather than a dialog, pop-up or notification? */
+    private fun isAppScreen(pkg: String, cls: String): Boolean {
+        if (cls.isEmpty()) return false
+        val key = "$pkg/$cls"
+        screenCache[key]?.let { return it }
+        val ok = try { packageManager.getActivityInfo(android.content.ComponentName(pkg, cls), 0); true } catch (_: Exception) { false }
+        if (screenCache.size > 400) screenCache.clear()
+        screenCache[key] = ok
+        return ok
     }
 
     private fun takeOverRecents() = getSharedPreferences("hub", MODE_PRIVATE).getBoolean("replaceRecents", true)
