@@ -267,8 +267,8 @@ class MainActivity : Activity() {
         val on = Recents.serviceOn(this)
         val replace = prefs.getBoolean("replaceRecents", true)
         val status = when {
-            on && NexusAccessibility.running -> "Helper is ON. Recent apps are being remembered."
-            on -> "The helper is switched on but Android has stopped it. Open Accessibility, switch NEXUS Recent Apps off and back on."
+            on && helperRunning() -> "Helper is ON. Recent apps are being remembered."
+            on -> "The helper is switched on, but Android has stopped it. Tap Turn helper off/on below, switch NEXUS Recent Apps off and back on."
             else -> "Helper is OFF. Follow the two steps below to turn it on."
         }
         val opts = ArrayList<NexusUi.Option>()
@@ -333,7 +333,7 @@ class MainActivity : Activity() {
 
     /** Something went wrong inside the Recent Apps helper (NEXUS kept running): show the details to copy. */
     private fun reportProblem() {
-        val f = App.helperErrorFile(this)
+        val f = App.reportFile(this)
         val text = try { f.readText() } catch (_: Exception) { "" }
         val opts = ArrayList<NexusUi.Option>()
         opts.add(NexusUi.Option("Copy the details", primary = true) {
@@ -342,8 +342,8 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Copied: paste it to Claude", Toast.LENGTH_SHORT).show()
         })
         opts.add(NexusUi.Option("Clear it") { f.delete(); Toast.makeText(this, "Cleared", Toast.LENGTH_SHORT).show() })
-        NexusUi.panel(this, "Report a problem", "Something went wrong in the Recent Apps helper. NEXUS kept running, " +
-            "but if something isn't working, copy these details and send them to Claude.\n\n" + text.take(600), opts, cancel = "Close")
+        NexusUi.panel(this, "Report a problem", "NEXUS noted a problem. If something isn't working, copy these details " +
+            "and send them to Claude so it can be fixed.\n\n" + text.take(700), opts, cancel = "Close")
     }
 
     /** NEXUS lock screen: explanation and on/off. */
@@ -400,14 +400,14 @@ class MainActivity : Activity() {
             NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
             NexusUi.Option("Choose my normal home screen") { chooseNormalHome() },
             NexusUi.Option("Recent apps (square button):  " + when {
-                Recents.serviceOn(this) && NexusAccessibility.running -> "ON"
-                Recents.serviceOn(this) -> "NOT RUNNING"
+                Recents.serviceOn(this) && helperRunning() -> "ON"
+                Recents.serviceOn(this) -> "STOPPED"
                 else -> "OFF"
             }) { openAppsSettings() },
             NexusUi.Option("NEXUS lock screen:  " + (if (LockActivity.enabled(this)) "ON" else "OFF")) { lockSettings() },
             NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
             NexusUi.Option("Tutorial") { showTutorial() },
-            *(if (App.helperErrorFile(this).exists()) arrayOf(NexusUi.Option("Report a problem") { reportProblem() }) else emptyArray()),
+            *(if (App.reportFile(this).exists()) arrayOf(NexusUi.Option("Report a problem") { reportProblem() }) else emptyArray()),
             NexusUi.Option("How it works") {
                 NexusUi.panel(this, "How it works",
                     "• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on.\n• Close NEXUS (Back, or Close NEXUS here) and Home goes to your normal home screen.\n• Open NEXUS from its icon to make it your home again.\n• Swipe up or tap ALL APPS to see every app. Hold an app in the list to move it.\n• Tap RECENT (or press the square button, once the helper is on) for your recent apps.\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.",
@@ -457,6 +457,36 @@ class MainActivity : Activity() {
         if (::hub.isInitialized) { refresh(); hub.resumed(leftForApp) }
         leftForApp = false
         hideBars()
+        // If Android has stopped the helper, the NEXUS lock screen and Recent Apps can't work: say so, once
+        window.decorView.removeCallbacks(checkHelper)
+        window.decorView.postDelayed(checkHelper, 2500)
+    }
+
+    /** Is the Recent Apps helper actually running (not just switched on)? */
+    private fun helperRunning(): Boolean {
+        if (NexusAccessibility.running) return true
+        return try {
+            val am = getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+            am?.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                ?.any { it.resolveInfo?.serviceInfo?.packageName == packageName } == true
+        } catch (_: Exception) { false }
+    }
+
+    private val checkHelper = Runnable {
+        if (helperWarned || isFinishing || !hasWindowFocus()) return@Runnable
+        val needed = LockActivity.enabled(this) || prefs.getBoolean("replaceRecents", true)
+        if (needed && Recents.serviceOn(this) && !helperRunning()) {
+            helperWarned = true
+            NexusUi.panel(this, "The Recent Apps helper stopped",
+                "Android has stopped NEXUS's helper, so the NEXUS lock screen and Recent Apps can't show until it's back on.\n\n" +
+                    "Tap Fix it, choose NEXUS Recent Apps, switch it off and back on, and tap Allow.",
+                listOf(NexusUi.Option("Fix it", primary = true) { openAccessibility() }), cancel = "Not now")
+        }
+    }
+
+    companion object {
+        /** The "helper stopped" note is shown at most once each time NEXUS starts. */
+        @Volatile private var helperWarned = false
     }
 
     private fun open(g: GameEntry) {

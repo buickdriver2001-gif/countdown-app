@@ -220,17 +220,19 @@ class NexusAccessibility : AccessibilityService() {
     override fun onServiceConnected() {
         running = true
         instance = this
-        refreshHomes()
-        // Usage counts were kept by an earlier version for the lock screen cube; it no longer needs them
-        getSharedPreferences("hub", MODE_PRIVATE).edit().remove("usecount").apply()
-        h.postDelayed(tick, 2000)
-        ensureCover()
-        // Have names and icons ready for Recent Apps
-        AppCache.warm(this, Recents.list(this).map { it.first })
+        // The screen on/off listener first: the NEXUS lock screen depends on it
         val f = android.content.IntentFilter(Intent.ACTION_SCREEN_ON).apply { addAction(Intent.ACTION_SCREEN_OFF) }
         try {
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOn, f, Context.RECEIVER_NOT_EXPORTED) else registerReceiver(screenOn, f)
-        } catch (_: Exception) {}
+        } catch (t: Exception) { App.noteProblem(this, "starting the helper", t) }
+        // Everything else: each part on its own, so one problem can't stop the rest
+        safe { refreshHomes() }
+        // Usage counts were kept by an earlier version for the lock screen cube; it no longer needs them
+        safe { getSharedPreferences("hub", MODE_PRIVATE).edit().remove("usecount").apply() }
+        h.postDelayed(tick, 2000)
+        safe { ensureCover() }
+        // Have names and icons ready for Recent Apps
+        safe { AppCache.warm(this, Recents.list(this).map { it.first }) }
     }
 
     override fun onDestroy() {

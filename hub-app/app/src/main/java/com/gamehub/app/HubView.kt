@@ -119,7 +119,18 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     var covered = false
         set(v) { field = v; if (!v) { lastNs = 0L; invalidate() } }
 
+    /** Draws a frame; if anything ever goes wrong while drawing, that frame is skipped and noted, never a crash. */
     override fun onDraw(c: Canvas) {
+        val saved = c.saveCount
+        try { drawFrame(c) } catch (t: Throwable) {
+            c.restoreToCount(saved)
+            if (!drawProblemNoted) { drawProblemNoted = true; App.noteProblem(context, "the home screen", t) }
+            postInvalidateOnAnimation()
+        }
+    }
+    private var drawProblemNoted = false
+
+    private fun drawFrame(c: Canvas) {
         val now = System.nanoTime()
         val dt = if (lastNs == 0L) 0f else min(0.05f, (now - lastNs) / 1e9f)
         lastNs = now

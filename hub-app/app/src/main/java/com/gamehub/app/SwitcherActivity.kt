@@ -200,7 +200,18 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         return when { s < 60 -> "just now"; s < 3600 -> "${s / 60}m ago"; s < 86400 -> "${s / 3600}h ago"; else -> "${s / 86400}d ago" }
     }
 
+    /** Draws a frame; if anything ever goes wrong while drawing, that frame is skipped and noted, never a crash. */
     override fun onDraw(c: Canvas) {
+        val saved = c.saveCount
+        try { drawFrame(c) } catch (t: Throwable) {
+            c.restoreToCount(saved)
+            if (!drawProblemNoted) { drawProblemNoted = true; App.noteProblem(context, "Recent Apps", t) }
+            postInvalidateOnAnimation()
+        }
+    }
+    private var drawProblemNoted = false
+
+    private fun drawFrame(c: Canvas) {
         val now = System.nanoTime()
         val dt = if (lastNs == 0L) 0f else min(0.05f, (now - lastNs) / 1e9f)
         lastNs = now; t += dt; enter = min(1f, enter + dt * 3.5f)
