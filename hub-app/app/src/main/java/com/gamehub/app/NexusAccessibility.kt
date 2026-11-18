@@ -93,9 +93,10 @@ class NexusAccessibility : AccessibilityService() {
                     // (Alarms, timers, the camera and calls are handled above, so this never covers them)
                     if (!LockActivity.showing) { LockTrace.log(this, "  lock screen not in front: opening it now"); showLock(c) }
                     // Safety: the cover never stays more than a moment, whatever happens
-                    armSafety(1300)
+                    screenOnAt = SystemClock.uptimeMillis()
+                    armSafety(1300, "cover lifted by the 1.3s fallback: the lock screen wasn't ready in time")
                     h.postDelayed({ LockTrace.log(this, "  0.6s after screen on: lockAlive=" + LockActivity.alive + " lockShowing=" + LockActivity.showing) }, 600)
-                } else { LockTrace.log(this, "  phone not locked: nothing to cover"); armSafety(120) } // not locked: nothing to hide
+                } else { LockTrace.log(this, "  phone not locked: nothing to cover"); armSafety(120, "cover lifted (phone not locked)") } // not locked: nothing to hide
             }
         }
     }
@@ -180,8 +181,12 @@ class NexusAccessibility : AccessibilityService() {
     private val FADE_MS = 150L
 
     /** Whatever happens, the cover is lifted after [ms]. */
-    private val safety = Runnable { safe { if ((coverLp?.alpha ?: 0f) > 0.5f) LockTrace.log(this, "  cover lifted by the safety timer"); fadeCover() } }
-    private fun armSafety(ms: Long) { h.removeCallbacks(safety); h.postDelayed(safety, ms) }
+    private val safety = Runnable { safe { if ((coverLp?.alpha ?: 0f) > 0.5f) LockTrace.log(this, "  $safetyWhy"); fadeCover() } }
+    /** What the next cover lift will be noted as in the lock screen log (on time, or the fallback timer). */
+    private var safetyWhy = ""
+    private fun armSafety(ms: Long, why: String) { safetyWhy = why; h.removeCallbacks(safety); h.postDelayed(safety, ms) }
+    /** When the screen last came on (for the log). */
+    private var screenOnAt = 0L
 
     /** Called when the lock screen or Recent Apps settings change (main thread). */
     fun refreshCover() { h.post { if (coverWanted()) ensureCover() else dropCover() } }
@@ -194,13 +199,17 @@ class NexusAccessibility : AccessibilityService() {
     }
 
     /** Called by the NEXUS lock screen once it is lit and in front (the phone's own lock screen is no longer drawn). */
-    fun lockReady() { LockTrace.log(this, "  lock screen lit and in front: lifting cover"); armSafety(0) }
+    fun lockReady() {
+        val ms = SystemClock.uptimeMillis() - screenOnAt
+        LockTrace.log(this, "  lock screen lit and in front" + (if (screenOnAt > 0 && ms in 0..5000) " (${ms}ms after screen on)" else ""))
+        armSafety(0, "cover lifted on time")
+    }
 
     /** Called by NEXUS Recent Apps once it is drawn and in front: the cover fades away to reveal it
      *  (after the app has finished shrinking into its card). */
     fun switcherReady() {
         val end = cover?.zoomEnd() ?: 0L
-        armSafety(maxOf(30L, end - SystemClock.uptimeMillis() + 30L))
+        armSafety(maxOf(30L, end - SystemClock.uptimeMillis() + 30L), "square button: Recent Apps ready, cover lifted on time")
     }
 
     /** The last picture of each app as it was taken, kept in memory for the square-button opening. */
@@ -313,7 +322,8 @@ class NexusAccessibility : AccessibilityService() {
                     val token = ++coverToken
                     v.postOnAnimation { v.postOnAnimation { if (token == coverToken) { addCover(); v.beginZoom() } } }
                 }
-                armSafety(1100)
+                LockTrace.log(this, "square button: opening NEXUS Recent Apps")
+                armSafety(1100, "square button: cover lifted by the 1.1s fallback (Recent Apps was slow to appear)")
                 try {
                     startActivity(Intent(this, SwitcherActivity::class.java)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_CLEAR_TOP)
