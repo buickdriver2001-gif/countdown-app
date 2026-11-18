@@ -21,6 +21,8 @@ class Input {
     val roll = AtomicInteger()
     val heal = AtomicInteger()
     val lock = AtomicInteger()
+    /** BLOCK is held down (shield raised for as long as it's held). */
+    @Volatile var blockHeld = false
     /** Tap on the title / death / victory screen. */
     val start = AtomicInteger()
 
@@ -28,7 +30,7 @@ class Input {
     fun takeDrag(): Float = camDrag.getAndSet(0f)
 }
 
-enum class PState { IDLE, ATTACK, HEAVY, ROLL, HEAL, STAGGER, DEAD }
+enum class PState { IDLE, ATTACK, HEAVY, ROLL, HEAL, BLOCK, STAGGER, DEAD }
 enum class BState { INTRO, IDLE, CHAIN, LUNGE, LEAP, SKYFALL, STAGGER, PHASE, DEAD }
 
 /** The boss's melee moves, strung together into combos. */
@@ -71,6 +73,10 @@ class Player {
     var walkPhase = 0f
     var speedNow = 0f
     var hurtFlash = 0f
+    /** Pushed back by a blow on the shield: can't act for a moment. */
+    var blockStun = 0f
+    /** How long the current stagger lasts (longer when the guard is broken). */
+    var staggerLen = 0.5f
 
     companion object {
         const val MAX_HP = 120f
@@ -140,6 +146,10 @@ class Game(seed: Int = 1) {
     val evDied = AtomicInteger()
     val evWon = AtomicInteger()
     val evBlocked = AtomicInteger()
+    /** A blow landed on the raised shield (it held). */
+    val evGuard = AtomicInteger()
+    /** A blow broke through the shield (out of stamina). */
+    val evGuardBreak = AtomicInteger()
 
     companion object {
         const val ARENA_R = 17f
@@ -163,6 +173,7 @@ class Game(seed: Int = 1) {
         screen = Screen.FIGHT
         screenT = 0f
         input.attack.set(0); input.heavy.set(0); input.roll.set(0); input.heal.set(0); input.lock.set(0); input.takeDrag()
+        input.blockHeld = false
     }
 
     // ------------------------------------------------------------------ main step
@@ -225,7 +236,8 @@ class Game(seed: Int = 1) {
         // Stamina comes back after a short pause
         if (p.staminaDelay > 0f) p.staminaDelay -= dt
         else if (p.state != PState.ROLL && p.state != PState.ATTACK && p.state != PState.HEAVY)
-            p.stamina = min(Player.MAX_STAMINA, p.stamina + (if (p.state == PState.HEAL) 15f else 38f) * dt)
+            p.stamina = min(Player.MAX_STAMINA, p.stamina + (when (p.state) { PState.HEAL -> 15f; PState.BLOCK -> 14f; else -> 38f }) * dt)
+        if (p.blockStun > 0f) p.blockStun -= dt
 
         // Stick to world direction (relative to the camera)
         val (fx, fz) = camForward()
@@ -243,7 +255,8 @@ class Game(seed: Int = 1) {
 
         if (p.state == PState.DEAD) { p.vx *= 0.9f; p.vz *= 0.9f; p.x += p.vx * dt; p.z += p.vz * dt; return }
 
-        val free = p.state == PState.IDLE
+        // Free to act: standing, or guarding (any action lowers the shield) once a blow's push-back is over
+        val free = p.state == PState.IDLE || (p.state == PState.BLOCK && p.blockStun <= 0f)
         // Starting actions
         if (free) {
             when {
@@ -253,6 +266,9 @@ class Game(seed: Int = 1) {
                 bufHeal > 0f && p.flasks > 0 -> { bufHeal = 0f; p.state = PState.HEAL; p.t = 0f; p.healed = false }
             }
         }
+        // Raise / lower the shield with BLOCK (needs some stamina to raise it)
+        if (p.state == PState.IDLE && input.blockHeld && p.stamina > 0f) { p.state = PState.BLOCK; p.t = 0f; p.blockStun = 0f }
+        else if (p.state == PState.BLOCK && !input.blockHeld && p.blockStun <= 0f) { p.state = PState.IDLE; p.t = 0f }
 
         var moveSpeed = 0f
         when (p.state) {
@@ -291,6 +307,16 @@ class Game(seed: Int = 1) {
                 p.vx = p.rollX * sp; p.vz = p.rollZ * sp
                 if (p.t >= ROLL_TIME) { p.state = PState.IDLE; p.t = 0f }
             }
+            PState.BLOCK -> {
+                // Shield up: slow, careful steps; keeps facing the boss when locked on
+                if (p.blockStun > 0f) {
+                    p.vx *= (1f - min(1f, dt * 7f)); p.vz *= (1f - min(1f, dt * 7f))
+                } else {
+                    moveSpeed = 2.1f * stick
+                    if (locked) p.yaw += wrapAngle(bossYaw - p.yaw) * min(1f, dt * 10f)
+                    else if (stick > 0.05f) p.yaw += wrapAngle(atan2(wx, wz) - p.yaw) * min(1f, dt * 6f)
+                }
+            }
             PState.HEAL -> {
                 moveSpeed = 1.3f * stick
                 if (!p.healed && p.t > 0.65f) {
@@ -302,12 +328,12 @@ class Game(seed: Int = 1) {
             }
             PState.STAGGER -> {
                 p.vx *= (1f - min(1f, dt * 6f)); p.vz *= (1f - min(1f, dt * 6f))
-                if (p.t >= 0.5f) { p.state = PState.IDLE; p.t = 0f }
+                if (p.t >= p.staggerLen) { p.state = PState.IDLE; p.t = 0f }
             }
             PState.DEAD -> {}
         }
 
-        if (p.state == PState.IDLE || p.state == PState.HEAL) {
+        if (p.state == PState.IDLE || p.state == PState.HEAL || (p.state == PState.BLOCK && p.blockStun <= 0f)) {
             val tx = if (stick > 0.05f) wx / max(stick, 0.001f) * moveSpeed else 0f
             val tz = if (stick > 0.05f) wz / max(stick, 0.001f) * moveSpeed else 0f
             val k = min(1f, dt * 12f)
@@ -617,10 +643,19 @@ class Game(seed: Int = 1) {
         if (dx * dx + dz * dz < (r + Player.RADIUS) * (r + Player.RADIUS)) hurtPlayer(dmg, x, z)
     }
 
+    /** True if the raised shield faces where a blow comes from (blows from behind get through). */
+    private fun guardCovers(p: Player, fromX: Float, fromZ: Float): Boolean {
+        val dx = fromX - p.x; val dz = fromZ - p.z
+        if (dx * dx + dz * dz < 0.36f) return true // right on top of you (e.g. from above): the shield goes up
+        return abs(wrapAngle(atan2(dx, dz) - p.yaw)) < 1.75f
+    }
+
     private fun hurtPlayer(dmg: Float, fromX: Float, fromZ: Float) {
         val p = player
         if (p.state == PState.DEAD) return
         if (playerInvincible) { evBlocked.incrementAndGet(); return }
+        if (p.state == PState.BLOCK && guardCovers(p, fromX, fromZ)) { blockedHit(p, dmg, fromX, fromZ); return }
+        p.staggerLen = 0.5f
         p.hp -= dmg
         p.hurtFlash = 1f
         evPlayerHit.incrementAndGet()
@@ -634,6 +669,43 @@ class Game(seed: Int = 1) {
             locked = false
             evDied.incrementAndGet()
         } else { p.state = PState.STAGGER; p.t = 0f }
+    }
+
+    /**
+     * A blow caught on the shield. The shield soaks most of it: the hit drains stamina, and only a little
+     * health gets through. If stamina runs out, the guard breaks: more damage gets through and you stagger.
+     */
+    private fun blockedHit(p: Player, dmg: Float, fromX: Float, fromZ: Float) {
+        p.stamina -= dmg * BLOCK_STAMINA
+        p.staminaDelay = 0.9f
+        val broke = p.stamina <= 0f
+        if (broke) p.stamina = max(-20f, p.stamina)
+        p.hp -= dmg * (if (broke) GUARD_BREAK_CHIP else BLOCK_CHIP)
+        p.hurtFlash = if (broke) 0.8f else 0.3f
+        // Pushed back (less than an unguarded hit)
+        val dx = p.x - fromX; val dz = p.z - fromZ
+        val l = sqrt(dx * dx + dz * dz).coerceAtLeast(0.01f)
+        val push = if (broke) 5.5f else 3.6f
+        p.vx = dx / l * push; p.vz = dz / l * push
+        // Bright sparks off the shield
+        val sx = p.x + sin(p.yaw) * 0.45f; val sz = p.z + cos(p.yaw) * 0.45f
+        repeat(if (broke) 20 else 12) {
+            sparks.add(Spark(sx, 1.15f + rnd.nextFloat() * 0.4f, sz, (rnd.nextFloat() - 0.5f) * 5f + sin(p.yaw) * 2f, 1f + rnd.nextFloat() * 3f, (rnd.nextFloat() - 0.5f) * 5f + cos(p.yaw) * 2f, 0.3f + rnd.nextFloat() * 0.25f, false))
+        }
+        shake = max(shake, if (broke) 0.4f else 0.2f)
+        if (p.hp <= 0f) {
+            p.hp = 0f; p.state = PState.DEAD; p.t = 0f
+            locked = false
+            evDied.incrementAndGet()
+            return
+        }
+        if (broke) {
+            evGuardBreak.incrementAndGet()
+            p.state = PState.STAGGER; p.t = 0f; p.staggerLen = 1.0f; p.blockStun = 0f
+        } else {
+            evGuard.incrementAndGet()
+            p.blockStun = BLOCK_STUN
+        }
     }
 
     private fun updateWaves(dt: Float) {
@@ -783,4 +855,9 @@ class Game(seed: Int = 1) {
 }
 
 const val ROLL_TIME = 0.55f
+/** Blocking: stamina lost per point of damage, and the share of damage that still gets through. */
+const val BLOCK_STAMINA = 1.5f
+const val BLOCK_CHIP = 0.2f
+const val GUARD_BREAK_CHIP = 0.45f
+const val BLOCK_STUN = 0.3f
 const val STAR_FALL = 1.15f

@@ -30,6 +30,8 @@ class Pose {
     var kneel = 0f         // 0..1 drops to one knee
     var armRYaw = 0f; var armRPitch = 0f; var elbowR = 0f; var wristR = -90f
     var armLYaw = 0f; var armLPitch = 0f; var elbowL = 0f
+    /** Turns the shield round the forearm so its face points forward when guarding. */
+    var shieldRoll = 0f
     /** Moves this pose part of the way toward [o] (k = 0..1): removes pops between moves. */
     fun blendToward(o: Pose, k: Float) {
         fun l(a: Float, b: Float) = a + (b - a) * k
@@ -42,6 +44,7 @@ class Pose {
         legL = l(legL, o.legL); legR = l(legR, o.legR); kneeL = l(kneeL, o.kneeL); kneeR = l(kneeR, o.kneeR); kneel = l(kneel, o.kneel)
         armRYaw = l(armRYaw, o.armRYaw); armRPitch = l(armRPitch, o.armRPitch); elbowR = l(elbowR, o.elbowR); wristR = l(wristR, o.wristR)
         armLYaw = l(armLYaw, o.armLYaw); armLPitch = l(armLPitch, o.armLPitch); elbowL = l(elbowL, o.elbowL)
+        shieldRoll = l(shieldRoll, o.shieldRoll)
     }
 
     fun copyFrom(o: Pose) { blendToward(o, 1f); rootPitch = o.rootPitch }
@@ -50,7 +53,7 @@ class Pose {
         rootPitch = 0f; rootRoll = 0f; lift = 0f; lean = 0f; twist = 0f; sway = 0f; headPitch = 0f
         legL = 0f; legR = 0f; kneeL = 5f; kneeR = 5f; kneel = 0f
         armRYaw = 0f; armRPitch = -20f; elbowR = 20f; wristR = -70f
-        armLYaw = 0f; armLPitch = -30f; elbowL = 40f
+        armLYaw = 0f; armLPitch = -30f; elbowL = 40f; shieldRoll = 0f
     }
 }
 
@@ -616,8 +619,24 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
                 q.armLPitch = lerp(q.armLPitch, -60f, k); q.armLYaw = lerp(0f, -25f, k); q.elbowL = lerp(q.elbowL, 120f, k)
                 q.headPitch = -18f * k
             }
+            PState.BLOCK -> {
+                // Shield raised square in front of the chest, sword drawn back behind it, knees bent.
+                // A blow on the shield knocks it back and rocks the body for a moment.
+                val up = ease(p.t / 0.12f)
+                val stun = (p.blockStun / BLOCK_STUN).coerceIn(0f, 1f)
+                val jolt = stun * stun
+                q.armLYaw = lerp(q.armLYaw, -40f, up); q.armLPitch = lerp(q.armLPitch, -70f, up) + 14f * jolt
+                q.elbowL = lerp(q.elbowL, 105f, up) - 10f * jolt; q.shieldRoll = 50f * up
+                q.armRPitch = lerp(q.armRPitch, -32f, up); q.elbowR = lerp(q.elbowR, 58f, up); q.armRYaw = lerp(q.armRYaw, 12f, up)
+                q.wristR = -80f + q.elbowR
+                q.kneeL += 18f * up; q.kneeR += 18f * up; q.legL += 12f * up; q.legR -= 10f * up
+                q.lift -= 0.06f * up + 0.03f * jolt
+                q.lean = lerp(q.lean, 10f, up) - 16f * jolt
+                q.headPitch = 8f * up - 6f * jolt
+                q.twist = lerp(q.twist, -8f, up)
+            }
             PState.STAGGER -> {
-                val k = 1f - ease(p.t / 0.5f)
+                val k = 1f - ease(p.t / p.staggerLen)
                 q.lean = -24f * k; q.headPitch = -15f * k; q.armRPitch = -55f * k - 15f; q.armLPitch = -70f * k - 15f
                 q.legL = 18f * k; q.kneeL = 30f * k; q.kneeR = 20f * k; q.lift = -0.06f * k
             }
@@ -793,7 +812,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         part(0f, -0.1f, 0f, 0.12f, 0.22f, 0.13f, armorDk)
         if (!isBoss) {
             // Heater shield: wood face, iron rim and cross, gold boss
-            push(); tr(0.09f, -0.12f, 0.02f)
+            push(); rot(q.shieldRoll, 0f, 1f, 0f); tr(0.09f, -0.12f, 0.02f)
             part(0f, 0f, 0f, 0.05f, 0.56f, 0.44f, cShield, M_CLOTH, 0.1f)
             part(0f, -0.33f, 0f, 0.05f, 0.12f, 0.24f, cShield, M_CLOTH, 0.1f)
             part(0.02f, 0f, 0f, 0.03f, 0.6f, 0.05f, cShieldRim)

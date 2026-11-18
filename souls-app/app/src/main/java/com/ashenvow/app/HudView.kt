@@ -31,10 +31,13 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
     }
 
     private val A_ATTACK = 0; private val A_HEAVY = 1; private val A_ROLL = 2; private val A_HEAL = 3; private val A_LOCK = 4; private val A_PAUSE = 5
+    private val A_BLOCK = 6
     private val buttons = listOf(
         Btn("ATTACK", A_ATTACK), Btn("HEAVY", A_HEAVY), Btn("ROLL", A_ROLL),
-        Btn("HEAL", A_HEAL), Btn("LOCK", A_LOCK), Btn("", A_PAUSE)
+        Btn("HEAL", A_HEAL), Btn("LOCK", A_LOCK), Btn("", A_PAUSE), Btn("BLOCK", A_BLOCK)
     )
+    /** The finger holding BLOCK (the shield stays up until it lifts). */
+    private var blockId = -1
 
     // Pointer roles
     private var joyId = -1
@@ -80,6 +83,7 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         place(buttons[A_HEAL], bx - 80 * d, by - 196 * d, 32 * d)
         place(buttons[A_LOCK], bx - 58 * d, by - 275 * d, 28 * d)
         place(buttons[A_PAUSE], bx - 36 * d, 34 * d, 22 * d)
+        place(buttons[A_BLOCK], bx - 268 * d, by - 150 * d, 34 * d)
         hubRect.set(16 * d, 14 * d, 150 * d, 50 * d)
         pauseHubRect.set(bx / 2 - 110 * d, by * 0.45f + 58 * d, bx / 2 + 110 * d, by * 0.45f + 102 * d)
     }
@@ -102,6 +106,11 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
                     return true
                 }
                 val hit = buttons.firstOrNull { val dx = x - it.x; val dy = y - it.y; dx * dx + dy * dy < (it.r * 1.25f) * (it.r * 1.25f) }
+                if (hit != null && hit.action == A_BLOCK) {
+                    // Hold to block
+                    blockId = id; game.input.blockHeld = true; buzz(12, 60)
+                    return true
+                }
                 if (hit != null) { press(hit); return true }
                 if (x < width * 0.45f && joyId == -1) {
                     joyId = id; joyCX = x; joyCY = y; joyX = x; joyY = y
@@ -134,7 +143,8 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
                     if (id == joyId || e.actionMasked == MotionEvent.ACTION_CANCEL) { joyId = -1; game.input.moveX = 0f; game.input.moveY = 0f }
                 }
                 if (id == camId || e.actionMasked == MotionEvent.ACTION_CANCEL) camId = -1
-                if (e.actionMasked == MotionEvent.ACTION_UP) { joyId = -1; camId = -1; game.input.moveX = 0f; game.input.moveY = 0f }
+                if (id == blockId || e.actionMasked == MotionEvent.ACTION_CANCEL) { blockId = -1; game.input.blockHeld = false }
+                if (e.actionMasked == MotionEvent.ACTION_UP) { joyId = -1; camId = -1; blockId = -1; game.input.blockHeld = false; game.input.moveX = 0f; game.input.moveY = 0f }
             }
         }
         return true
@@ -163,6 +173,8 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         val g = game
         checkEvents()
         hitVignette = (hitVignette - dt * 2.2f).coerceAtLeast(0f)
+        guardFlash = (guardFlash - dt * 3f).coerceAtLeast(0f)
+        if (g.screen != Screen.FIGHT || g.paused) { if (blockId != -1 || g.input.blockHeld) { blockId = -1; g.input.blockHeld = false } }
         phaseMsg = (phaseMsg - dt).coerceAtLeast(0f)
 
         when (g.screen) {
@@ -182,7 +194,12 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         val dd = g.evDied.get(); if (dd != lastDied) { lastDied = dd; buzz(500, 255) }
         val ww = g.evWon.get(); if (ww != lastWon) { lastWon = ww; buzz(300, 200) }
         val bl = g.evBlocked.get(); if (bl != lastBlock) { lastBlock = bl }
+        val gd = g.evGuard.get(); if (gd != lastGuard) { lastGuard = gd; guardFlash = 1f; buzz(35, 150) }
+        val gb = g.evGuardBreak.get(); if (gb != lastGuardBreak) { lastGuardBreak = gb; guardFlash = 1f; hitVignette = 0.7f; buzz(140, 255) }
     }
+    private var lastGuard = 0; private var lastGuardBreak = 0
+    /** Brief glow on the stamina bar when the shield takes a blow. */
+    private var guardFlash = 0f
 
     private fun drawFight(c: Canvas, dt: Float, controls: Boolean = true) {
         val g = game
@@ -204,6 +221,11 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         val st = (p.stamina / Player.MAX_STAMINA).coerceAtLeast(0f)
         fancyBar(c, left, top + 20 * d, 200 * d, 8 * d, st, 0f,
             Color.rgb(30, 96, 40), Color.rgb(96, 200, 90), p.stamina <= 0f)
+        if (guardFlash > 0f) {
+            // The shield took a blow: the stamina bar flashes so you can see what it cost
+            fill.color = Color.argb((150 * guardFlash).toInt(), 255, 240, 200)
+            c.drawRect(left, top + 20 * d, left + 200 * d * st, top + 28 * d, fill)
+        }
         drawFlask(c, left + 14 * d, top + 62 * d, p.flasks)
 
         // Boss bar: bottom, between the move area and the buttons (never under them)
@@ -255,13 +277,13 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         // Buttons with icons
         val nowMs = System.currentTimeMillis()
         for (bt in buttons) {
-            val pressed = bt.pressedUntil > nowMs
+            val pressed = bt.pressedUntil > nowMs || (bt.action == A_BLOCK && blockId != -1)
             val usable = when (bt.action) {
                 A_HEAL -> p.flasks > 0
-                A_ATTACK, A_HEAVY, A_ROLL -> p.stamina > 0f
+                A_ATTACK, A_HEAVY, A_ROLL, A_BLOCK -> p.stamina > 0f
                 else -> true
             }
-            val on = bt.action == A_LOCK && g.locked
+            val on = (bt.action == A_LOCK && g.locked) || (bt.action == A_BLOCK && p.state == PState.BLOCK)
             val r = bt.r * (if (pressed) 0.92f else 1f)
             // Dark glass disc with a soft inner gradient
             fill.shader = RadialGradient(bt.x, bt.y - r * 0.4f, r * 1.3f,
@@ -318,7 +340,7 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         c.restore()
     }
 
-    /** Simple symbols: sword, heavy swing, dodge, flask, target, pause. */
+    /** Simple symbols: sword, heavy swing, dodge, flask, target, pause, shield. */
     private fun drawIcon(c: Canvas, action: Int, cx: Float, cy: Float, s: Float, color: Int) {
         iconStroke.color = color; iconFill.color = color
         iconStroke.strokeWidth = s * 0.14f
@@ -374,6 +396,21 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
             A_PAUSE -> {
                 c.drawRect(cx - s * 0.45f, cy - s * 0.55f, cx - s * 0.12f, cy + s * 0.55f, iconFill)
                 c.drawRect(cx + s * 0.12f, cy - s * 0.55f, cx + s * 0.45f, cy + s * 0.55f, iconFill)
+            }
+            A_BLOCK -> {
+                // Heater shield outline with a cross on it
+                iconStroke.strokeWidth = s * 0.13f
+                iconPath.reset()
+                iconPath.moveTo(cx - s * 0.62f, cy - s * 0.72f)
+                iconPath.lineTo(cx + s * 0.62f, cy - s * 0.72f)
+                iconPath.lineTo(cx + s * 0.62f, cy - s * 0.05f)
+                iconPath.quadTo(cx + s * 0.55f, cy + s * 0.6f, cx, cy + s * 0.92f)
+                iconPath.quadTo(cx - s * 0.55f, cy + s * 0.6f, cx - s * 0.62f, cy - s * 0.05f)
+                iconPath.close()
+                c.drawPath(iconPath, iconStroke)
+                iconStroke.strokeWidth = s * 0.1f
+                c.drawLine(cx, cy - s * 0.5f, cx, cy + s * 0.55f, iconStroke)
+                c.drawLine(cx - s * 0.38f, cy - s * 0.15f, cx + s * 0.38f, cy - s * 0.15f, iconStroke)
             }
         }
     }
@@ -492,6 +529,7 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
             "Left side: drag to move   ·   Right side: drag to look around",
             "ATTACK swings (tap again for a combo)   ·   HEAVY hits hard and breaks its balance",
             "ROLL through attacks: you can't be hurt mid-roll   ·   HEAL drinks a flask (you have 4)",
+            "Hold BLOCK to raise your shield: it soaks most of a hit, but costs stamina and a little health",
             "LOCK keeps the camera on the boss   ·   Everything uses stamina (the green bar)",
             "Watch its eyes: they burn brighter right before it strikes."
         )
