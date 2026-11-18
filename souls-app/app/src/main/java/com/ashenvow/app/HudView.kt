@@ -551,7 +551,7 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         val lines = listOf(
             "Left side: drag to move   ·   Right side: drag to look around",
             "ATTACK swings (tap again for a combo)   ·   HEAVY hits hard and breaks its balance",
-            "ROLL through attacks: you can't be hurt mid-roll   ·   HEAL drinks a flask (you have 4)",
+            "ROLL through attacks: you can't be hurt mid-roll   ·   HEAL drinks a flask (you have ${Player.MAX_FLASKS})",
             "Hold BLOCK to raise your shield: it soaks most of a hit, but costs stamina and a little health",
             "LOCK keeps the camera on the boss   ·   Everything uses stamina (the green bar)",
             "Watch its eyes: they burn brighter right before it strikes."

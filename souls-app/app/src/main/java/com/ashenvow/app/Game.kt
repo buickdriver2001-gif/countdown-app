@@ -81,7 +81,9 @@ class Player {
     companion object {
         const val MAX_HP = 120f
         const val MAX_STAMINA = 100f
-        const val MAX_FLASKS = 4
+        const val MAX_FLASKS = 10
+        /** Health restored by one flask (out of MAX_HP). */
+        const val FLASK_HEAL = 36f
         const val RADIUS = 0.45f
     }
 }
@@ -324,7 +326,7 @@ class Game(seed: Int = 1) {
                 moveSpeed = 1.3f * stick
                 if (!p.healed && p.t > 0.65f) {
                     p.healed = true; p.flasks--
-                    p.hp = min(Player.MAX_HP, p.hp + 60f)
+                    p.hp = min(Player.MAX_HP, p.hp + Player.FLASK_HEAL)
                     repeat(14) { sparks.add(Spark(p.x, 1f, p.z, rnd.nextFloat() - 0.5f, 1.5f + rnd.nextFloat() * 2f, rnd.nextFloat() - 0.5f, 0.9f, true)) }
                 }
                 if (p.t >= 1.15f) { p.state = PState.IDLE; p.t = 0f }
