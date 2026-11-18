@@ -38,6 +38,9 @@ class NexusAccessibility : AccessibilityService() {
             Recents.remove(c, pkg)
         }
 
+        /** Opens the phone's own recent apps screen on purpose (NEXUS doesn't swap it out that time). */
+        fun openPhoneRecents(): Boolean = instance?.askPhoneRecents() ?: false
+
         @Volatile var running = false
         /** The running helper (so the NEXUS lock screen can say when it's ready). */
         @Volatile var instance: NexusAccessibility? = null
@@ -286,6 +289,21 @@ class NexusAccessibility : AccessibilityService() {
 
     override fun onAccessibilityEvent(e: AccessibilityEvent?) = safe { handleEvent(e) }
 
+    private var phoneRecentsAskedUntil = 0L
+    private var phoneRecentsOpen = false
+
+    fun askPhoneRecents(): Boolean {
+        phoneRecentsAskedUntil = SystemClock.uptimeMillis() + 3000
+        val ok = try { performGlobalAction(GLOBAL_ACTION_RECENTS) } catch (_: Exception) { false }
+        if (!ok) phoneRecentsAskedUntil = 0L
+        return ok
+    }
+
+    /** You've left the phone's own recent apps: back to NEXUS (home or lock screen) or into an app. */
+    private fun leftPhoneRecents(pkg: String, cls: String) =
+        if (pkg == packageName) cls.contains("MainActivity") || cls.contains("LockActivity")
+        else pkg != "com.android.systemui" && pkg != "android" && pkg !in homePkgs && "inputmethod" !in pkg && "keyboard" !in pkg
+
     private fun handleEvent(e: AccessibilityEvent?) {
         if (e == null || e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = e.packageName?.toString() ?: return
@@ -302,6 +320,14 @@ class NexusAccessibility : AccessibilityService() {
         val systemScreen = pkg in homePkgs || pkg == "com.android.systemui"
         val isRecents = systemScreen && pkg != packageName &&
             cls.contains("Recents", ignoreCase = true) && !cls.contains("Launcher", ignoreCase = true)
+        // The phone's own recent apps, asked for on purpose (to fully close apps): leave it alone while it's open,
+        // until you go back to NEXUS or into an app
+        if (phoneRecentsOpen && !isRecents && leftPhoneRecents(pkg, cls)) phoneRecentsOpen = false
+        if (isRecents && (phoneRecentsOpen || SystemClock.uptimeMillis() < phoneRecentsAskedUntil)) {
+            if (!phoneRecentsOpen) LockTrace.log(this, "phone's own recent apps open (asked for)")
+            phoneRecentsOpen = true; phoneRecentsAskedUntil = 0L
+            return
+        }
         if (isRecents && takeOverRecents() && HomeMode.isOn(this) && HomeMode.isDefault(this)) {
             val now = SystemClock.uptimeMillis()
             if (now - lastSwitcher > 800) {

@@ -106,12 +106,44 @@ class SwitcherActivity : Activity() {
         try { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName"))) } catch (_: Exception) {}
     }
 
-    /** Closes an app's background process (the app itself stays installed). */
-    fun closeApp(pkg: String) {
-        // Our own apps close completely; for other apps Android only lets NEXUS stop them in the background
-        if (pkg in NexusAccessibility.OWN_APPS) NexusAccessibility.closeOwnApp(this, pkg)
+    /**
+     * Takes an app off NEXUS Recent Apps. NEXUS's own games close completely. Android doesn't let any app
+     * close other apps (only the phone's own recent-apps screen can), so those just leave NEXUS's list.
+     * Returns true if the app was fully closed.
+     */
+    fun closeApp(pkg: String): Boolean {
+        val own = pkg in NexusAccessibility.OWN_APPS
+        if (own) NexusAccessibility.closeOwnApp(this, pkg)
+        // (Only has an effect on older Android versions, and only for apps already in the background)
         try { (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).killBackgroundProcesses(pkg) } catch (_: Exception) {}
         Recents.remove(this, pkg)
+        return own
+    }
+
+    /**
+     * The first time an app other than NEXUS's own games is swiped away, say plainly what that does and
+     * how to close apps fully. Returns true if the note was shown ([after] runs when it's closed with OK).
+     */
+    fun explainOnce(after: (() -> Unit)? = null): Boolean {
+        val p = getSharedPreferences("hub", MODE_PRIVATE)
+        if (p.getBoolean("closeNoteSeen", false)) return false
+        p.edit().putBoolean("closeNoteSeen", true).apply()
+        val opts = ArrayList<NexusUi.Option>()
+        if (NexusAccessibility.instance != null) opts.add(NexusUi.Option("Open phone's recent apps", primary = true) { openPhoneRecents() })
+        opts.add(NexusUi.Option("OK", primary = opts.isEmpty()) { after?.invoke() })
+        NexusUi.panel(this, "Removed from NEXUS",
+            "Android only lets the phone's own recent apps screen close other apps, so it's still listed there. " +
+            "(Android also closes background apps by itself when it needs the memory.) NEXUS's own games, " +
+            "Ashen Vow, Zombie Dots and SynthPad, do close completely.\n\n" +
+            "To fully close other apps, open the phone's recent apps and swipe them away there. " +
+            "The link is always at the bottom of NEXUS Recent Apps.", opts, cancel = null)
+        return true
+    }
+
+    /** Opens the phone's own recent apps screen (where swiping an app away really closes it). */
+    fun openPhoneRecents() {
+        if (!NexusAccessibility.openPhoneRecents())
+            android.widget.Toast.makeText(this, "Turn on the Recent Apps helper in NEXUS settings first", android.widget.Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -144,6 +176,8 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
     private val clip = Path()
     private val r = RectF()
     private val clearRect = RectF()
+    private val phoneRect = RectF()
+    private val PHONE_LINK = "Fully close apps in the phone's recent apps  ›"
     private val homeRect = RectF()
     private val helperRect = RectF()
     private val restrictRect = RectF()
@@ -332,6 +366,15 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         homeRect.set(w / 2 + 10 * d, h - 70 * d, w / 2 + 150 * d, h - 30 * d)
         pill(c, clearRect, "CLEAR ALL", live.isNotEmpty())
         pill(c, homeRect, "NEXUS", true)
+        // Above them: the way to fully close other apps (Android only lets its own recent apps screen do that)
+        if (NexusAccessibility.instance != null) {
+            text.textAlign = Paint.Align.CENTER; text.textSize = 12 * d; text.letterSpacing = 0.04f
+            text.color = Color.argb(200, 170, 200, 240)
+            val ly = h - 88 * d
+            c.drawText(PHONE_LINK, w / 2, ly, text)
+            val tw = text.measureText(PHONE_LINK) / 2 + 16 * d
+            phoneRect.set(w / 2 - tw, ly - 24 * d, w / 2 + tw, ly + 12 * d)
+        } else phoneRect.setEmpty()
         drawOpening(c, dt)
         postInvalidateOnAnimation()
     }
@@ -513,7 +556,8 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
                                 // Swiped away: it flies off the top (keeping your swipe's speed) and closes
                                 card.flying = true
                                 card.flyV = max(1600f * d, -vy)
-                                sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY); a.closeApp(card.pkg)
+                                sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+                                if (!a.closeApp(card.pkg)) a.explainOnce()
                                 pos = pos.coerceAtMost((live().size - 1).coerceAtLeast(0).toFloat())
                             }
                         }
@@ -530,11 +574,14 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
     private fun tap(x: Float, y: Float, l: List<Card>) {
         if (clearRect.contains(x, y) && l.isNotEmpty()) {
             sfx.confirm()
-            for (c in l) a.closeApp(c.pkg)
+            var anyOther = false
+            for (c in l) if (!a.closeApp(c.pkg)) anyOther = true
             Recents.clear(a)
+            if (anyOther && a.explainOnce { a.goNexus() }) return
             a.goNexus(); return
         }
         if (homeRect.contains(x, y)) { sfx.confirm(); a.goNexus(); return }
+        if (phoneRect.contains(x, y)) { sfx.confirm(); a.openPhoneRecents(); return }
         if (l.isEmpty()) {
             if (helperRect.contains(x, y)) { sfx.confirm(); a.openSetting(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS) }
             else if (restrictRect.contains(x, y)) { sfx.confirm(); a.openAppInfo() }
