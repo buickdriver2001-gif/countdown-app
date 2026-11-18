@@ -244,7 +244,18 @@ object Recents {
         val l = list(c).filter { it.first != pkg }.toMutableList()
         l.add(0, pkg to System.currentTimeMillis())
         save(c, l.take(20))
+        // Count how often each app is opened (for "apps you use most")
+        val counts = useCounts(c).toMutableMap()
+        counts[pkg] = (counts[pkg] ?: 0) + 1
+        c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit()
+            .putString("usecount", counts.entries.sortedByDescending { it.value }.take(60).joinToString(",") { "${it.key}|${it.value}" }).apply()
     }
+
+    /** How many times each app has been opened (most used first). */
+    fun useCounts(c: Context): Map<String, Int> =
+        c.getSharedPreferences("hub", Context.MODE_PRIVATE).getString("usecount", "")!!
+            .split(",").mapNotNull { e -> val p = e.split("|"); if (p.size == 2) p[0] to (p[1].toIntOrNull() ?: 0) else null }
+            .toMap()
 
     fun remove(c: Context, pkg: String) {
         save(c, list(c).filter { it.first != pkg })

@@ -156,19 +156,24 @@ class LockView(private val a: LockActivity) : View(a) {
     private val power = a.getSystemService(android.os.PowerManager::class.java)
     fun reset() { dragY = 0f; dragging = false; asked = false; invalidate() }
 
-    /** Icons for the cube's six faces: the apps you have in NEXUS (in your NEXUS order). */
+    /**
+     * Icons for the cube's six faces: your most recent apps first, then the apps you use most,
+     * then the apps in your NEXUS list, so the cube is never empty.
+     */
     @Volatile private var faces: List<Bitmap> = emptyList()
 
     private fun loadFaces() {
         Thread {
             val pm = a.packageManager
             val prefs = a.getSharedPreferences("hub", Context.MODE_PRIVATE)
+            val recent = Recents.list(a).map { it.first }
+            val mostUsed = Recents.useCounts(a).entries.sortedByDescending { it.value }.map { it.key }
             val builtIn = listOf("com.zombiedots.app", "com.ashenvow.app", "com.synthpad.app")
             val custom = prefs.getString("custom", "")!!.split(",").filter { it.isNotBlank() }
-            val all = (builtIn + custom).distinct()
             val order = prefs.getString("order", "")!!.split(",").filter { it.isNotBlank() }
-            val pkgs = (order.filter { it in all } + all.filter { it !in order })
-                .filter { pm.getLaunchIntentForPackage(it) != null }
+            val nexusApps = (order + builtIn + custom).distinct()
+            val pkgs = (recent + mostUsed + nexusApps).distinct()
+                .filter { it != a.packageName && pm.getLaunchIntentForPackage(it) != null }
             val out = ArrayList<Bitmap>()
             val size = 256
             for (pkg in pkgs) {
