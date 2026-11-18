@@ -28,6 +28,16 @@ class NexusAccessibility : AccessibilityService() {
     private val homePkgs = HashSet<String>()
 
     companion object {
+        /** Our own apps, which close completely when you leave them for NEXUS (others keep Android's usual behaviour). */
+        val OWN_APPS = setOf("com.zombiedots.app", "com.ashenvow.app", "com.synthpad.app")
+
+        /** Asks one of our own apps to close itself completely, and takes it off Recent Apps. */
+        fun closeOwnApp(c: Context, pkg: String) {
+            if (pkg !in OWN_APPS) return
+            try { c.sendBroadcast(Intent("com.gamehub.action.CLOSE_APP").setPackage(pkg)) } catch (_: Exception) {}
+            Recents.remove(c, pkg)
+        }
+
         @Volatile var running = false
         /** The running helper (so the NEXUS lock screen can say when it's ready). */
         @Volatile var instance: NexusAccessibility? = null
@@ -42,6 +52,7 @@ class NexusAccessibility : AccessibilityService() {
      */
     private val screenOn = object : android.content.BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
+            if (i.action == Intent.ACTION_SCREEN_OFF) leftByScreenOff = true
             if (!LockActivity.enabled(c)) { if (!coverWanted()) dropCover(); return }
             // Never cover a phone call or a ringing call/alarm (the screen also turns off during calls)
             val am = getSystemService(android.media.AudioManager::class.java)
@@ -49,7 +60,7 @@ class NexusAccessibility : AccessibilityService() {
             if (mode == android.media.AudioManager.MODE_RINGTONE || mode == android.media.AudioManager.MODE_IN_CALL ||
                 mode == android.media.AudioManager.MODE_IN_COMMUNICATION) { removeCover(); return }
             when (i.action) {
-                Intent.ACTION_SCREEN_OFF -> { otherAppSinceOff = false; coverToken++; h.removeCallbacks(safety); cover?.showBlack(); addCover(); showLock(c) }
+                Intent.ACTION_SCREEN_OFF -> { otherAppSinceOff = false; leftByScreenOff = true; coverToken++; h.removeCallbacks(safety); cover?.showBlack(); addCover(); showLock(c) }
                 Intent.ACTION_SCREEN_ON -> {
                     ensureCover()
                     val km = getSystemService(KeyguardManager::class.java)
@@ -289,6 +300,8 @@ class NexusAccessibility : AccessibilityService() {
             val pm = getSystemService(PowerManager::class.java)
             val km = getSystemService(KeyguardManager::class.java)
             if (pm?.isInteractive != true || km?.isKeyguardLocked == true || !isAppScreen(pkg, cls)) return
+            lastApp = pkg; leftByScreenOff = false
+            if (pkg == pendingClose) pendingClose = null // went straight back into it: keep it
             if (pkg != current) {
                 current = pkg
                 val token = ++openToken
@@ -300,8 +313,28 @@ class NexusAccessibility : AccessibilityService() {
                     }
                 }, 1500)
             }
-        } else if (pkg in homePkgs || pkg == packageName) { current = null; openToken++ }
+        } else if (pkg in homePkgs || pkg == packageName) {
+            current = null; openToken++
+            // Back on the NEXUS home screen straight from one of our own apps: that app closes completely
+            // (not when the screen just went off and came back, and not via the square button's Recent Apps)
+            if (pkg == packageName && cls == MainActivity::class.java.name) {
+                val app = lastApp
+                lastApp = null
+                if (app != null && app in OWN_APPS && !leftByScreenOff) {
+                    // A moment later, once it has fully left the screen
+                    pendingClose = app
+                    h.postDelayed({ if (pendingClose == app) { pendingClose = null; closeOwnApp(this, app) } }, 800)
+                }
+            }
+        }
     }
+
+    /** One of our own apps about to be closed (cancelled if you go straight back into it). */
+    private var pendingClose: String? = null
+    /** The last app that was really in front (our own screens don't count). */
+    private var lastApp: String? = null
+    /** The screen went off since then (unlocking can bring you to NEXUS, which isn't "leaving" the app). */
+    @Volatile private var leftByScreenOff = false
 
     /** Invalidates a pending "this app was opened" when something else comes to the front first. */
     private var openToken = 0

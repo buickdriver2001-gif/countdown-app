@@ -108,6 +108,8 @@ class SwitcherActivity : Activity() {
 
     /** Closes an app's background process (the app itself stays installed). */
     fun closeApp(pkg: String) {
+        // Our own apps close completely; for other apps Android only lets NEXUS stop them in the background
+        if (pkg in NexusAccessibility.OWN_APPS) NexusAccessibility.closeOwnApp(this, pkg)
         try { (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).killBackgroundProcesses(pkg) } catch (_: Exception) {}
         Recents.remove(this, pkg)
     }

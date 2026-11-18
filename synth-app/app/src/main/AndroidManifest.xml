@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Lets NEXUS (signed by the same developer, nobody else) close this app when you go back to NEXUS -->
+    <permission android:name="com.gamehub.permission.CLOSE_APP" android:protectionLevel="signature" />
     <queries>
         <package android:name="com.gamehub.app" />
     </queries>
@@ -27,5 +29,13 @@
             android:name=".CrashActivity"
             android:exported="false"
             android:process=":crash" />
+        <receiver
+            android:name=".CloseReceiver"
+            android:exported="true"
+            android:permission="com.gamehub.permission.CLOSE_APP">
+            <intent-filter>
+                <action android:name="com.gamehub.action.CLOSE_APP" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

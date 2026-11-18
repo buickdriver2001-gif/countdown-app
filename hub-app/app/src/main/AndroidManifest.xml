@@ -28,6 +28,9 @@
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
     <!-- System screen: shows the connection type and speed estimate -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Closing Zombie Dots, Ashen Vow and SynthPad when you leave them for NEXUS (same developer only) -->
+    <permission android:name="com.gamehub.permission.CLOSE_APP" android:protectionLevel="signature" />
+    <uses-permission android:name="com.gamehub.permission.CLOSE_APP" />
 
     <application
         android:name=".App"

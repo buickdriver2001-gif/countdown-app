@@ -30,6 +30,10 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
+    companion object {
+        /** A finished recording waiting for "Save or Discard" (SynthPad won't be closed while there is one). */
+        @Volatile var pendingRecording: Recorder? = null
+    }
 
     private lateinit var engine: SynthEngine
     private lateinit var keyboard: KeyboardView
@@ -439,6 +443,7 @@ class MainActivity : Activity() {
 
     private fun stopRecording() {
         val r = recorder ?: return
+        pendingRecording = r
         engine.recorder = null
         recorder = null
         handler.removeCallbacks(recTick)
@@ -452,8 +457,9 @@ class MainActivity : Activity() {
     }
 
     private fun askToSave(r: Recorder) {
-        if (isDestroyed) { r.file.delete(); return }
+        if (isDestroyed) { pendingRecording = null; r.file.delete(); return }
         if (r.frames < engine.sampleRate / 4) {
+            pendingRecording = null
             r.file.delete()
             Toast.makeText(this, "Recording was too short", Toast.LENGTH_SHORT).show()
             return
@@ -474,6 +480,7 @@ class MainActivity : Activity() {
             .setView(box)
             .setCancelable(false)
             .setPositiveButton("Save") { _, _ ->
+                pendingRecording = null
                 val name = input.text.toString()
                 Thread {
                     val ok = WavStore.save(applicationContext, r.file, r.sampleRate, name)
@@ -486,7 +493,7 @@ class MainActivity : Activity() {
                     }
                 }.start()
             }
-            .setNegativeButton("Discard") { _, _ -> r.file.delete() }
+            .setNegativeButton("Discard") { _, _ -> pendingRecording = null; r.file.delete() }
             .show()
     }
 
