@@ -9,6 +9,7 @@ import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -32,6 +33,8 @@ class Pose {
     var armLYaw = 0f; var armLPitch = 0f; var elbowL = 0f
     /** Turns the shield round the forearm so its face points forward when guarding. */
     var shieldRoll = 0f
+    /** Turns the hips and legs (not the upper body) toward where the feet are going. */
+    var hipYaw = 0f
     /** Moves this pose part of the way toward [o] (k = 0..1): removes pops between moves. */
     fun blendToward(o: Pose, k: Float) {
         fun l(a: Float, b: Float) = a + (b - a) * k
@@ -44,7 +47,7 @@ class Pose {
         legL = l(legL, o.legL); legR = l(legR, o.legR); kneeL = l(kneeL, o.kneeL); kneeR = l(kneeR, o.kneeR); kneel = l(kneel, o.kneel)
         armRYaw = l(armRYaw, o.armRYaw); armRPitch = l(armRPitch, o.armRPitch); elbowR = l(elbowR, o.elbowR); wristR = l(wristR, o.wristR)
         armLYaw = l(armLYaw, o.armLYaw); armLPitch = l(armLPitch, o.armLPitch); elbowL = l(elbowL, o.elbowL)
-        shieldRoll = l(shieldRoll, o.shieldRoll)
+        shieldRoll = l(shieldRoll, o.shieldRoll); hipYaw = l(hipYaw, o.hipYaw)
     }
 
     fun copyFrom(o: Pose) { blendToward(o, 1f); rootPitch = o.rootPitch }
@@ -53,7 +56,7 @@ class Pose {
         rootPitch = 0f; rootRoll = 0f; lift = 0f; lean = 0f; twist = 0f; sway = 0f; headPitch = 0f
         legL = 0f; legR = 0f; kneeL = 5f; kneeR = 5f; kneel = 0f
         armRYaw = 0f; armRPitch = -20f; elbowR = 20f; wristR = -70f
-        armLYaw = 0f; armLPitch = -30f; elbowL = 40f; shieldRoll = 0f
+        armLYaw = 0f; armLPitch = -30f; elbowL = 40f; shieldRoll = 0f; hipYaw = 0f
     }
 }
 
@@ -92,6 +95,23 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
     private val braziers = ArrayList<FloatArray>()
     private val plPos = FloatArray(12)
     private val plCol = FloatArray(12)
+    private val lockIn = FloatArray(4)
+    private val lockOut = FloatArray(4)
+    private val noLight = floatArrayOf(0f, -50f, 0f)
+    /** Indexes of the four braziers nearest the player (they light the scene). */
+    private val near = IntArray(4)
+    private val nearD = FloatArray(4)
+
+    private fun pickNearBraziers(x: Float, z: Float) {
+        for (k in 0 until 4) { near[k] = -1; nearD[k] = Float.MAX_VALUE }
+        for ((i, bz) in braziers.withIndex()) {
+            val dd = (bz[0] - x) * (bz[0] - x) + (bz[2] - z) * (bz[2] - z)
+            var k = 3
+            if (dd >= nearD[3]) continue
+            while (k > 0 && dd < nearD[k - 1]) { near[k] = near[k - 1]; nearD[k] = nearD[k - 1]; k-- }
+            near[k] = i; nearD[k] = dd
+        }
+    }
 
     private var pts: FloatBuffer = ByteBuffer.allocateDirect(7 * 4 * 1200).order(ByteOrder.nativeOrder()).asFloatBuffer()
     private val pose = Pose()
@@ -99,6 +119,8 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
     private val shownBoss = Pose()
     private var poseInit = false
     private var frameDt = 0f
+    private var smoothDt = 0f
+    private var timeDebt = 0f
     private var texId = 0
     private var uTex = 0; private var uMat = 0; private var uLocal = 0; private var uTexScale = 0; private var uSpec = 0; private var uTexK = 0
 
@@ -128,6 +150,9 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         GLES20.glGenerateMipmap(GLES20.GL_TEXTURE_2D)
         poseInit = false
         curMat = -1; curLocal = false
+        tProg = link(TVS, TFS)
+        tPos = GLES20.glGetAttribLocation(tProg, "aP"); tVP = GLES20.glGetUniformLocation(tProg, "uVP"); tColor = GLES20.glGetUniformLocation(tProg, "uColor")
+        playerTrail.clear(); bossTrail.clear()
         pProg = link(PVS, PFS)
         pPos = GLES20.glGetAttribLocation(pProg, "aPos"); pCol = GLES20.glGetAttribLocation(pProg, "aCol")
         pMVP = GLES20.glGetUniformLocation(pProg, "uMVP"); pSize = GLES20.glGetUniformLocation(pProg, "uSize")
@@ -148,7 +173,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
         width = w; height = h
         GLES20.glViewport(0, 0, w, h)
-        Matrix.perspectiveM(proj, 0, 58f, w.toFloat() / h, 0.1f, 140f)
+        Matrix.perspectiveM(proj, 0, 58f, w.toFloat() / h, 0.2f, 260f)
     }
 
     // ------------------------------------------------------------------ the arena (built once)
@@ -159,10 +184,14 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         val stone = rgb(0x6A6660)
         val stoneDk = rgb(0x4A4743)
         fun sh(c: FloatArray, k: Float) = floatArrayOf(c[0] * k, c[1] * k, c[2] * k)
+        // Everything is laid out from the arena's size (a wide floor with room to fight)
+        val R = Game.ARENA_R            // edge of the fighting floor
+        val RW = R + 2.4f               // outer wall
+        val S = R / 17f                 // how much bigger than the original arena
         // Ground far below / around
-        b.annulus(0f, 70f, -0.05f, 32, rgb(0x14161C))
+        b.annulus(0f, RW + 100f, -0.05f, 48, rgb(0x14161C))
         // Stone floor: rings of slabs with gaps, some cracked, some mossy
-        for (ri in 1 until 9) {
+        for (ri in 1 until (R / 2f).toInt()) {
             val r0 = ri * 2f; val r1 = r0 + 2f
             val n = max(6, (r1 * 3.1f).toInt())
             for (i in 0 until n) {
@@ -189,9 +218,10 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         b.annulus(0.7f, 0.8f, 0.055f, 24, rgb(0x8A7444))
         for (i in 0 until 8) { val a = (i / 8.0 * 2 * PI).toFloat(); b.box(sin(a) * 1.18f, 0.058f, cos(a) * 1.18f, 0.08f, 0.01f, 0.7f, rgb(0x8A7444), (a * 180 / PI).toFloat()) }
         // Low curb around the fighting floor
-        for (i in 0 until 48) {
-            val a = (i / 48.0 * 2 * PI).toFloat()
-            b.box(sin(a) * 17.5f, 0.2f, cos(a) * 17.5f, 2.2f, 0.4f, 0.7f, sh(stoneDk, 0.9f + r.nextFloat() * 0.2f), (a * 180 / PI).toFloat())
+        val curbs = (48 * S).toInt()
+        for (i in 0 until curbs) {
+            val a = (i.toFloat() / curbs * 2 * PI).toFloat()
+            b.box(sin(a) * (R + 0.5f), 0.2f, cos(a) * (R + 0.5f), 2.2f, 0.4f, 0.7f, sh(stoneDk, 0.9f + r.nextFloat() * 0.2f), (a * 180 / PI).toFloat())
         }
 
         // Pillars: fluted columns on stepped plinths; some whole, some broken
@@ -248,11 +278,11 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
             }
         }
 
-        // Braziers between the pillars: fire bowls on stands
+        // Braziers around the floor: fire bowls on stands (the nearest ones light the fight)
         braziers.clear()
-        for (i in 0 until 4) {
-            val a = (i / 4.0 * 2 * PI).toFloat()
-            val x = sin(a) * 15.3f; val z = cos(a) * 15.3f
+        for (i in 0 until 8) {
+            val a = (i / 8.0 * 2 * PI).toFloat()
+            val x = sin(a) * (R * 0.9f); val z = cos(a) * (R * 0.9f)
             b.box(x, 0.15f, z, 1.1f, 0.3f, 1.1f, rgb(0x3E3B37), (a * 180 / PI).toFloat())
             b.cylinder(x, 0.3f, z, 0.3f, 0.8f, 8, rgb(0x3E3B37))
             for (leg in 0 until 3) { val la = leg * 2.094f + a; b.box(x + sin(la) * 0.35f, 0.7f, z + cos(la) * 0.35f, 0.08f, 0.8f, 0.08f, rgb(0x2C2A28), (la * 180 / PI).toFloat(), 15f) }
@@ -262,9 +292,9 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         }
 
         // Kneeling stone knight statues by the wall, swords planted point-down
-        for (i in 0 until 4) {
-            val a = ((i + 0.5f) / 4.0 * 2 * PI).toFloat()
-            val x = sin(a) * 17.9f; val z = cos(a) * 17.9f
+        for (i in 0 until 8) {
+            val a = ((i + 0.5f) / 8.0 * 2 * PI).toFloat()
+            val x = sin(a) * (R + 0.9f); val z = cos(a) * (R + 0.9f)
             val yd = (a * 180 / PI).toFloat() + 180f // facing the centre
             val fx = -sin(a); val fz = -cos(a)
             val st = rgb(0x77736C)
@@ -278,13 +308,13 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         }
 
         // Outer wall: tall ruined segments with buttresses, battlements, windows and banners
-        val segs = 36
+        val segs = (36 * RW / 19.4f).toInt()
         for (i in 0 until segs) {
             val a = (i.toFloat() / segs * 2 * PI).toFloat()
             val yd = (a * 180 / PI).toFloat()
             val ruined = r.nextFloat() < 0.18f
             val h = if (ruined) 1.5f + r.nextFloat() * 2f else 5.5f + r.nextFloat() * 2.5f
-            val x = sin(a) * 19.4f; val z = cos(a) * 19.4f
+            val x = sin(a) * RW; val z = cos(a) * RW
             val wc = sh(stoneDk, 0.9f + r.nextFloat() * 0.2f)
             b.box(x, h / 2, z, 3.45f, h, 1.4f, wc, yd)
             if (ruined) {
@@ -298,16 +328,16 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
             }
             // Buttress on the inside every other segment
             if (i % 2 == 0) {
-                b.box(sin(a) * 18.5f, h * 0.4f, cos(a) * 18.5f, 0.9f, h * 0.8f, 0.8f, sh(wc, 0.9f), yd)
-                b.box(sin(a) * 18.2f, 0.6f, cos(a) * 18.2f, 1.1f, 1.2f, 0.7f, sh(wc, 0.85f), yd)
+                b.box(sin(a) * (RW - 0.9f), h * 0.4f, cos(a) * (RW - 0.9f), 0.9f, h * 0.8f, 0.8f, sh(wc, 0.9f), yd)
+                b.box(sin(a) * (RW - 1.2f), 0.6f, cos(a) * (RW - 1.2f), 1.1f, 1.2f, 0.7f, sh(wc, 0.85f), yd)
             } else if (h > 6f) {
                 // Narrow dark window
-                b.box(sin(a) * 18.68f, h * 0.62f, cos(a) * 18.68f, 0.45f, 1.5f, 0.05f, rgb(0x0B0C10), yd)
-                b.box(sin(a) * 18.68f, h * 0.62f + 0.85f, cos(a) * 18.68f, 0.6f, 0.2f, 0.06f, sh(wc, 1.1f), yd)
+                b.box(sin(a) * (RW - 0.72f), h * 0.62f, cos(a) * (RW - 0.72f), 0.45f, 1.5f, 0.05f, rgb(0x0B0C10), yd)
+                b.box(sin(a) * (RW - 0.72f), h * 0.62f + 0.85f, cos(a) * (RW - 0.72f), 0.6f, 0.2f, 0.06f, sh(wc, 1.1f), yd)
             }
             // Tattered banners hanging on some segments
             if (i % 6 == 3) {
-                val bx = sin(a) * 18.6f; val bz = cos(a) * 18.6f
+                val bx = sin(a) * (RW - 0.8f); val bz = cos(a) * (RW - 0.8f)
                 b.box(bx, h - 0.25f, bz, 1.5f, 0.12f, 0.12f, rgb(0x3A2A1A), yd)
                 b.box(bx, h - 1.9f, bz, 1.2f, 3.2f, 0.04f, rgb(0x5E1A1A), yd)
                 b.box(bx, h - 1.9f, bz - 0.0f, 0.3f, 2.4f, 0.05f, rgb(0x9A7A38), yd)
@@ -316,7 +346,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         }
         // A great gate behind the player's start
         run {
-            val gz = -19.4f
+            val gz = -RW
             b.box(-2.6f, 4.5f, gz, 1.6f, 9f, 2f, rgb(0x46433F)); b.box(2.6f, 4.5f, gz, 1.6f, 9f, 2f, rgb(0x46433F))
             b.box(0f, 8.6f, gz, 6.8f, 1.4f, 2f, rgb(0x46433F))
             b.box(0f, 3.5f, gz - 0.2f, 3.6f, 7f, 0.3f, rgb(0x2A1E14))
@@ -324,24 +354,24 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
             b.box(-2.6f, 9.6f, gz, 1.9f, 0.8f, 2.3f, rgb(0x46433F)); b.box(2.6f, 9.6f, gz, 1.9f, 0.8f, 2.3f, rgb(0x46433F))
         }
         // Fallen warriors' swords stuck in the floor
-        repeat(14) {
-            val a = r.nextFloat() * 6.283f; val d = 6f + r.nextFloat() * 10.5f
+        repeat(30) {
+            val a = r.nextFloat() * 6.283f; val d = 6f + r.nextFloat() * (R - 7f)
             val sx = sin(a) * d; val sz = cos(a) * d
             val yd = r.nextFloat() * 360f; val tilt = 10f + r.nextFloat() * 25f
             b.box(sx, 0.55f, sz, 0.05f, 1.1f, 0.12f, rgb(0x6C7078), yd, tilt)
             b.box(sx + sin(yd * PI.toFloat() / 180) * sin(tilt * PI.toFloat() / 180) * 1.1f, 1.08f, sz + cos(yd * PI.toFloat() / 180) * sin(tilt * PI.toFloat() / 180) * 1.1f, 0.3f, 0.05f, 0.08f, rgb(0x4A3A28), yd, tilt)
         }
         // Scattered rubble and bones
-        repeat(55) {
-            val a = r.nextFloat() * 6.283f; val d = 3f + r.nextFloat() * 14f
+        repeat(120) {
+            val a = r.nextFloat() * 6.283f; val d = 3f + r.nextFloat() * (R - 3f)
             val s = 0.1f + r.nextFloat() * 0.3f
             val bone = r.nextFloat() < 0.25f
             if (bone) b.box(sin(a) * d, 0.04f, cos(a) * d, 0.07f, 0.06f, 0.5f, rgb(0xB8B09A), r.nextFloat() * 180f)
             else b.box(sin(a) * d, s / 2, cos(a) * d, s * 1.5f, s, s * 1.2f, rgb(0x4C4A45), r.nextFloat() * 180f, r.nextFloat() * 25f)
         }
         // Dead trees just outside the walls
-        repeat(10) {
-            val a = r.nextFloat() * 6.283f; val d = 22f + r.nextFloat() * 6f
+        repeat(20) {
+            val a = r.nextFloat() * 6.283f; val d = RW + 2.6f + r.nextFloat() * 6f
             val tx = sin(a) * d; val tz = cos(a) * d
             val th = 6f + r.nextFloat() * 5f
             b.cylinder(tx, 0f, tz, 0.35f, th, 6, rgb(0x2A221C), top = true, rTop = 0.12f)
@@ -352,7 +382,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         }
         // A ruined castle on the hills, fading into the fog
         run {
-            val cx = 10f; val cz = 52f
+            val cx = 10f * S; val cz = RW + 33f
             b.box(cx, 6f, cz, 24f, 12f, 8f, rgb(0x262931))
             for (k in -2..2) {
                 val tx = cx + k * 6f
@@ -362,13 +392,13 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
             }
         }
         // Distant cliffs
-        repeat(26) {
-            val a = r.nextFloat() * 6.283f; val d = 34f + r.nextFloat() * 20f
+        repeat(40) {
+            val a = r.nextFloat() * 6.283f; val d = RW + 15f + r.nextFloat() * 22f
             val h = 8f + r.nextFloat() * 20f; val w = 4f + r.nextFloat() * 8f
             b.box(sin(a) * d, h / 2 - 1f, cos(a) * d, w, h, w * (0.6f + r.nextFloat()), rgb(0x23262E), r.nextFloat() * 90f)
         }
         // The moon
-        b.sphere(-38f, 34f, 62f, 5f, 8, 14, rgb(0xE8EEF8))
+        b.sphere(-60f, 52f, 98f, 7.5f, 8, 14, rgb(0xE8EEF8))
         return b.build()
     }
 
@@ -376,9 +406,19 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
 
     override fun onDrawFrame(gl: GL10?) {
         val now = System.nanoTime()
-        val dt = if (lastNs == 0L) 0f else ((now - lastNs) / 1e9f)
+        val raw = if (lastNs == 0L) 0f else ((now - lastNs) / 1e9f)
         lastNs = now
-        frameDt = kotlin.math.min(dt, 0.1f)
+        // Frame times on phones jitter (14 ms, 19 ms, 15 ms...) even at a steady frame rate, which makes motion
+        // judder. Step the game with a smoothed frame time instead, paying back any difference gradually so
+        // game time never drifts from real time. Big hitches still go through (capped).
+        val dtIn = kotlin.math.min(raw, 0.1f)
+        smoothDt = if (smoothDt == 0f) dtIn else smoothDt + (dtIn - smoothDt) * 0.18f
+        timeDebt += dtIn - smoothDt
+        val pay = timeDebt * 0.12f
+        timeDebt -= pay
+        val dt = (smoothDt + pay).coerceIn(0f, 0.1f)
+        frameDt = dt
+        trailClock += dt
         game.update(dt)
 
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
@@ -388,8 +428,8 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         Matrix.setLookAtM(view, 0, g.camX + jx, g.camY + jy, g.camZ, g.lookX, g.lookY + jy, g.lookZ, 0f, 1f, 0f)
         Matrix.multiplyMM(vp, 0, proj, 0, view, 0)
         // Where the boss's chest is on screen (for the lock-on marker)
-        val bp = floatArrayOf(g.boss.x, g.boss.y + 3.4f, g.boss.z, 1f)
-        val out = FloatArray(4)
+        val bp = lockIn; bp[0] = g.boss.x; bp[1] = g.boss.y + 3.4f; bp[2] = g.boss.z; bp[3] = 1f
+        val out = lockOut
         Matrix.multiplyMV(out, 0, vp, 0, bp, 0)
         if (out[3] > 0.1f) {
             lockX = (out[0] / out[3] * 0.5f + 0.5f) * width
@@ -407,10 +447,11 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         GLES20.glUniform3f(uCam, g.camX, g.camY, g.camZ)
         GLES20.glUniform3f(uFog, fog[0], fog[1], fog[2])
         GLES20.glUniform1f(uAlpha, 1f)
-        // Warm flickering fire light from the braziers (the boss burns too in phase two)
+        // Warm flickering fire light from the four braziers nearest the fight (the boss burns too in phase two)
         val t = g.time
+        pickNearBraziers(g.player.x, g.player.z)
         for (i in 0 until 4) {
-            val bz = braziers.getOrNull(i) ?: floatArrayOf(0f, -50f, 0f)
+            val bz = braziers.getOrNull(near[i]) ?: noLight
             val flick = 0.85f + 0.15f * sin(t * 9f + i * 2f) * sin(t * 13.7f + i)
             if (i == 3 && g.boss.phase2 && g.boss.state != BState.DEAD) {
                 plPos[i * 3] = g.boss.x; plPos[i * 3 + 1] = g.boss.y + 3f; plPos[i * 3 + 2] = g.boss.z
@@ -448,6 +489,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         drawKnight(g.player)
         drawBoss(g)
         setMat(M_NONE, local = false)
+        drawTrails(g)
         drawEffects(g)
         drawParticles(g)
         firstFrameDone = true
@@ -547,14 +589,56 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         q.headPitch = -q.lean * 0.5f
     }
 
+    // Motion the knight's body reacts to (worked out each frame from how the knight is moving)
+    private var locoInit = false
+    private var pvF = 0f; private var accF = 0f
+    private var pYaw = 0f; private var turnRate = 0f
+    private var lastState = PState.IDLE
+    private var sinceRoll = 9f
+    private val basePose = Pose()
+
+    private fun trackMotion(p: Player) {
+        val dt = frameDt.coerceAtLeast(1e-4f)
+        val fwd = p.vx * sin(p.yaw) + p.vz * cos(p.yaw)
+        if (!locoInit) { pvF = fwd; pYaw = p.yaw; locoInit = true }
+        val a = ((fwd - pvF) / dt).coerceIn(-60f, 60f)
+        accF += (a - accF) * min(1f, dt * 10f)
+        val turn = (wrapAngle(p.yaw - pYaw) / dt).coerceIn(-12f, 12f)
+        turnRate += (turn - turnRate) * min(1f, dt * 10f)
+        pvF = fwd; pYaw = p.yaw
+        if (lastState == PState.ROLL && p.state != PState.ROLL) sinceRoll = 0f else sinceRoll += dt
+        lastState = p.state
+    }
+
     private fun knightPose(p: Player) {
         val q = pose; q.reset()
         val s = min(1f, p.speedNow / 5.2f)
-        // Breathing while standing
-        val breathe = sin(game.time * 2.2f) * (1f - s)
-        gait(q, p.walkPhase * 0.85f, s, 46f, heavy = false)
+        val time = game.time
+        // Where the feet are going compared with where the knight faces (locked on: strafing or backing off)
+        val fx = sin(p.yaw); val fz = cos(p.yaw)
+        val fwd = p.vx * fx + p.vz * fz
+        val side = p.vx * -fz + p.vz * fx          // + = toward the knight's right
+        val rel = if (s > 0.05f) kotlin.math.atan2(side, fwd) else 0f
+        val backward = s > 0.05f && abs(rel) > 1.9f
+        // Run cycle (played in reverse when walking backward, so the feet never slide)
+        gait(q, if (backward) -p.walkPhase * 0.85f else p.walkPhase * 0.85f, s, if (backward) 34f else 46f, heavy = false)
+        if (p.state == PState.IDLE || p.state == PState.BLOCK || p.state == PState.HEAL) {
+            // Hips and legs turn toward the direction of travel; the chest keeps facing forward
+            val hip = if (!backward) -deg(rel).coerceIn(-65f, 65f) else -deg(wrapAngle(rel - PI.toFloat())).coerceIn(-50f, 50f)
+            q.hipYaw = hip * min(1f, s * 2.5f)
+            if (backward) q.lean = -5f * s
+            // Lean into speeding up / slowing down, and into turns
+            q.lean += (accF * 0.16f).coerceIn(-7f, 9f) * (if (p.state == PState.IDLE) 1f else 0.5f)
+            q.rootRoll += (-turnRate * 4.5f * s).coerceIn(-9f, 9f)
+        }
+        // Breathing and a slow shift of weight while standing
+        val still = 1f - s
+        val breathe = sin(time * 2.2f) * still
         q.lift += breathe * 0.012f
         q.armLPitch += breathe * 2f
+        q.rootRoll += sin(time * 0.7f) * 1.2f * still
+        q.twist += sin(time * 0.45f) * 3f * still
+        q.headPitch += sin(time * 0.37f + 1f) * 2f * still
         // Guard stance when locked on and standing still: shield up, sword ready
         if (game.locked && s < 0.3f) {
             val k = 1f - s / 0.3f
@@ -563,14 +647,21 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
             q.kneeL += 14f * k; q.kneeR += 14f * k; q.legL += 10f * k; q.legR -= 8f * k; q.lift -= 0.04f * k
         }
         q.wristR = -80f + q.elbowR
+        // Getting up out of a roll: a quick crouch that rises back to standing
+        if (p.state == PState.IDLE && sinceRoll < 0.3f) {
+            val k = 1f - ease(sinceRoll / 0.3f)
+            q.kneeL += 45f * k; q.kneeR += 32f * k; q.legL += 22f * k; q.legR -= 10f * k
+            q.lift -= 0.16f * k; q.lean += 18f * k; q.armLPitch -= 12f * k; q.armRPitch -= 10f * k
+        }
+        // Actions settle back into this stance at the end, instead of snapping out
+        basePose.copyFrom(q)
         when (p.state) {
             PState.ATTACK -> {
                 val len = if (p.combo == 2) 0.72f else 0.52f
                 val k = p.t / len
-                q.legL = 22f; q.legR = -18f; q.kneeL = 25f; q.kneeR = 15f; q.lift = -0.06f
                 when (p.combo) {
                     0, 1 -> {
-                        // Horizontal slash: gather to one side, snap across, follow through
+                        // Horizontal slash: gather to one side, step in and snap across, follow through, settle
                         val dir = if (p.combo == 0) 1f else -1f
                         val wind = ease(k / 0.3f)
                         val cut = snap((k - 0.3f) / 0.24f)
@@ -578,19 +669,30 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
                         q.armRYaw = if (dir > 0) yaw else -yaw - 15f
                         q.armRPitch = lerp(-60f, -85f, wind); q.elbowR = lerp(40f, 5f, wind); q.wristR = lerp(-60f, -10f, wind)
                         q.twist = lerp(lerp(0f, -30f, wind), 30f, cut) * dir
-                        q.lean = 10f + 8f * cut
-                        q.armLPitch = -45f; q.elbowL = 60f
+                        q.lean = lerp(6f, 10f, wind) + 10f * cut
+                        q.sway = -6f * dir * wind + 10f * dir * cut
+                        q.headPitch = 4f * cut
+                        // The front foot steps into the cut and the weight drops onto it
+                        q.legL = lerp(14f, 30f, cut); q.legR = lerp(-12f, -22f, cut)
+                        q.kneeL = lerp(22f, 40f, cut); q.kneeR = lerp(14f, 22f, cut)
+                        q.lift = lerp(-0.03f, -0.1f, cut)
+                        q.armLPitch = lerp(-40f, -55f, cut); q.elbowL = 60f; q.armLYaw = -12f * dir * cut
+                        q.hipYaw = 10f * dir * cut
+                        q.blendToward(basePose, ease((k - 0.66f) / 0.34f))
                     }
                     else -> {
-                        // Overhead finisher: rise up, then crash down with the whole body
+                        // Overhead finisher: rise up on the toes, then crash down with the whole body
                         val up = ease(k / 0.42f)
                         val down = snap((k - 0.42f) / 0.16f)
                         q.armRPitch = lerp(lerp(-30f, -170f, up), -40f, down); q.elbowR = lerp(lerp(30f, 40f, up), 5f, down)
                         q.wristR = lerp(-80f, -15f, down)
                         q.armLPitch = lerp(-30f, -140f, up * (1f - down)); q.elbowL = 30f
-                        q.lean = lerp(-10f * up, 26f, down)
-                        q.lift = lerp(0.02f * up, -0.12f, down)
-                        q.kneeL = lerp(15f, 45f, down); q.kneeR = lerp(15f, 30f, down)
+                        q.lean = lerp(-10f * up, 28f, down)
+                        q.lift = lerp(0.03f * up, -0.14f, down)
+                        q.headPitch = lerp(-8f * up, 10f, down)
+                        q.legL = lerp(18f, 30f, down); q.legR = lerp(-12f, -20f, down)
+                        q.kneeL = lerp(12f, 48f, down); q.kneeR = lerp(12f, 32f, down)
+                        q.blendToward(basePose, ease((k - 0.72f) / 0.28f))
                     }
                 }
             }
@@ -602,13 +704,18 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
                 q.armLPitch = lerp(-30f, -165f, up * (1f - down)); q.elbowL = lerp(40f, 50f, up)
                 q.lean = lerp(-14f * up, 32f, down)
                 q.lift = lerp(-0.05f * up, -0.18f, down)
+                q.headPitch = lerp(-10f * up, 12f, down)
+                q.twist = lerp(-12f * up, 6f, down)
                 q.legL = lerp(10f, 32f, down); q.legR = lerp(-5f, -25f, down)
                 q.kneeL = lerp(20f, 55f, down); q.kneeR = lerp(20f, 35f, down)
+                q.blendToward(basePose, ease((p.t - 0.78f) / 0.27f))
             }
             PState.ROLL -> {
                 val k = p.t / ROLL_TIME
-                q.rootPitch = 360f * ease(k)
-                q.lift = -0.45f * sin(k * PI.toFloat())
+                // Dip, roll over the shoulder close to the ground, and come up already moving
+                val rk = ((k - 0.04f) / 0.82f).coerceIn(0f, 1f)
+                q.rootPitch = 360f * (rk * rk * (3f - 2f * rk))
+                q.lift = -0.12f * ease(k / 0.1f) - 0.36f * sin(rk * PI.toFloat())
                 // Tucked up tight
                 q.legL = 80f; q.legR = 70f; q.kneeL = 120f; q.kneeR = 115f
                 q.armRPitch = -70f; q.armLPitch = -70f; q.elbowR = 80f; q.elbowL = 90f
@@ -616,8 +723,10 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
             }
             PState.HEAL -> {
                 val k = ease(p.t / 0.5f) * (1f - ease((p.t - 0.85f) / 0.3f))
+                val drink = ease((p.t - 0.45f) / 0.15f) * (1f - ease((p.t - 0.75f) / 0.2f))
                 q.armLPitch = lerp(q.armLPitch, -60f, k); q.armLYaw = lerp(0f, -25f, k); q.elbowL = lerp(q.elbowL, 120f, k)
-                q.headPitch = -18f * k
+                q.headPitch = -18f * k - 12f * drink
+                q.lean -= 4f * drink
             }
             PState.BLOCK -> {
                 // Shield raised square in front of the chest, sword drawn back behind it, knees bent.
@@ -636,9 +745,15 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
                 q.twist = lerp(q.twist, -8f, up)
             }
             PState.STAGGER -> {
-                val k = 1f - ease(p.t / p.staggerLen)
-                q.lean = -24f * k; q.headPitch = -15f * k; q.armRPitch = -55f * k - 15f; q.armLPitch = -70f * k - 15f
+                // Snaps back from the blow, wobbles, then recovers
+                val hit = snap(p.t / 0.07f)
+                val rec = ease((p.t - 0.12f) / (p.staggerLen - 0.12f))
+                val k = hit * (1f - rec)
+                val wob = sin(p.t * 18f) * 4f * k
+                q.lean = -24f * k + wob; q.headPitch = -15f * k; q.armRPitch = -55f * k - 15f; q.armLPitch = -70f * k - 15f
+                q.elbowR = 30f + 20f * k; q.elbowL = 40f + 25f * k
                 q.legL = 18f * k; q.kneeL = 30f * k; q.kneeR = 20f * k; q.lift = -0.06f * k
+                q.rootRoll += wob * 0.6f; q.twist += 10f * k
             }
             PState.DEAD -> {
                 val k = ease(p.t / 0.8f)
@@ -651,6 +766,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
     }
 
     private fun drawKnight(p: Player) {
+        trackMotion(p)
         knightPose(p)
         // Blend toward the new pose so nothing snaps (rolls and deaths follow exactly)
         if (!poseInit) shownPlayer.copyFrom(pose)
@@ -663,6 +779,8 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         tr(p.x, 0f, p.z)
         rot(deg(p.yaw), 0f, 1f, 0f)
         drawHumanoid(q, isBoss = false)
+        val swinging = p.state == PState.ATTACK || p.state == PState.HEAVY
+        playerTrail.commit(trailClock, frameDt, swinging, 5f, 9f)
         // Healing glow
         if (p.state == PState.HEAL) {
             emitR = 0.9f; emitG = 0.6f; emitB = 0.2f
@@ -683,6 +801,8 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
     private val cPommel = rgb(0x3A3A40)
 
     /** Shared body for the knight and the boss (the boss is a bigger, darker, broken knight). */
+    private val legSides = intArrayOf(-1, 1)
+
     private fun drawHumanoid(q: Pose, isBoss: Boolean) {
         val armor = if (isBoss) bArmor else kArmor
         val armorDk = if (isBoss) bArmorDk else kArmorDk
@@ -693,8 +813,9 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         tr(0f, 0.92f + q.lift - q.kneel * 0.42f, 0f)
         rot(q.rootPitch, 1f, 0f, 0f)
         rot(q.rootRoll, 0f, 0f, 1f)
-        // Legs: thigh, knee, shin, boot
-        for (side in intArrayOf(-1, 1)) {
+        // Legs: thigh, knee, shin, boot (the hips can turn toward where the feet are going)
+        push(); rot(q.hipYaw, 0f, 1f, 0f)
+        for (side in legSides) {
             push()
             tr(side * 0.13f, 0f, 0f)
             val right = side < 0
@@ -720,6 +841,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         }
         // Mail skirt hanging from the belt
         part(0f, -0.1f, 0f, 0.44f, 0.24f, 0.3f, if (isBoss) cBossMail else cMail, M_CLOTH, 0.5f)
+        pop()
         // Upper body
         push()
         rot(q.lean, 1f, 0f, 0f)
@@ -800,6 +922,7 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         part(0f, -0.17f, 0f, 0.14f, 0.05f, 0.15f, armor)
         push(); tr(0f, -0.22f, 0f); rot(q.wristR, 1f, 0f, 0f)
         part(0f, 0f, 0f, 0.13f, 0.11f, 0.13f, cGauntlet)                                 // gauntlet
+        captureBlade(isBoss)
         if (isBoss) drawGreatsword() else drawKnightSword()
         pop(); pop(); pop()
         // Left arm + shield (knight) / clawed hand (boss)
@@ -1052,7 +1175,126 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
         else shownBoss.blendToward(pose, 1f - kotlin.math.exp(-frameDt * 17f))
         poseInit = true
         drawHumanoid(shownBoss, isBoss = true)
+        val attacking = b.state == BState.CHAIN || b.state == BState.LUNGE || b.state == BState.LEAP || b.state == BState.SKYFALL
+        bossTrail.commit(trailClock, frameDt, attacking, 8f, 16f)
         emitR = 0f; emitG = 0f; emitB = 0f
+    }
+
+    // ------------------------------------------------------------------ sword trails
+
+    /** The last moments of a blade's path: where its base and tip were, and how bright the trail is there. */
+    private class Trail {
+        val n = 40
+        val b = FloatArray(n * 3); val tp = FloatArray(n * 3); val a = FloatArray(n); val tm = FloatArray(n)
+        var count = 0; var head = -1
+        val cur = FloatArray(6) // this frame's blade (base xyz, tip xyz)
+        fun clear() { count = 0; head = -1 }
+        /** Stores this frame's blade position; brightness comes from how fast the tip is moving. */
+        fun commit(time: Float, dt: Float, active: Boolean, minSpeed: Float, fullSpeed: Float) {
+            var alpha = 0f
+            if (active && head >= 0 && dt > 0f) {
+                val dx = cur[3] - tp[head * 3]; val dy = cur[4] - tp[head * 3 + 1]; val dz = cur[5] - tp[head * 3 + 2]
+                val speed = sqrt(dx * dx + dy * dy + dz * dz) / dt
+                alpha = ((speed - minSpeed) / (fullSpeed - minSpeed)).coerceIn(0f, 1f)
+            }
+            head = (head + 1) % n
+            for (k in 0 until 3) { b[head * 3 + k] = cur[k]; tp[head * 3 + k] = cur[3 + k] }
+            a[head] = alpha; tm[head] = time
+            if (count < n) count++
+        }
+    }
+    private val playerTrail = Trail()
+    private val bossTrail = Trail()
+    private var trailClock = 0f
+    private val bladeIn = FloatArray(4)
+    private val bladeOut = FloatArray(4)
+    private var tProg = 0; private var tPos = 0; private var tVP = 0; private var tColor = 0
+    private val trailBuf: FloatBuffer = ByteBuffer.allocateDirect(4 * 4 * 2 * 160).order(ByteOrder.nativeOrder()).asFloatBuffer()
+    private val ptsB = FloatArray(40 * 3); private val ptsT = FloatArray(40 * 3); private val ptsA = FloatArray(40); private val ptsAge = FloatArray(40)
+
+    /** Where the blade's base and tip are in the world right now (called with the hand's matrix current). */
+    private fun captureBlade(isBoss: Boolean) {
+        val t = if (isBoss) bossTrail else playerTrail
+        val baseY = if (isBoss) -0.35f else -0.3f
+        val tipY = if (isBoss) -2.2f else -1.25f
+        bladeIn[0] = 0f; bladeIn[1] = baseY; bladeIn[2] = 0f; bladeIn[3] = 1f
+        Matrix.multiplyMV(bladeOut, 0, stack, sp * 16, bladeIn, 0)
+        t.cur[0] = bladeOut[0]; t.cur[1] = bladeOut[1]; t.cur[2] = bladeOut[2]
+        bladeIn[1] = tipY
+        Matrix.multiplyMV(bladeOut, 0, stack, sp * 16, bladeIn, 0)
+        t.cur[3] = bladeOut[0]; t.cur[4] = bladeOut[1]; t.cur[5] = bladeOut[2]
+    }
+
+    private fun drawTrails(g: Game) {
+        val p2 = g.boss.phase2
+        drawTrail(playerTrail, 0.16f, 0.72f, 0.86f, 1f, 0.9f)
+        if (p2) drawTrail(bossTrail, 0.2f, 1f, 0.45f, 0.12f, 1f)
+        else drawTrail(bossTrail, 0.2f, 0.85f, 0.82f, 0.78f, 0.55f)
+    }
+
+    /** Draws a smooth ribbon through the recent blade positions (curved between frames, fading with age). */
+    private fun drawTrail(t: Trail, maxAge: Float, r: Float, gr: Float, bl: Float, strength: Float) {
+        if (t.count < 2 || t.head < 0) return
+        // Gather the recent samples, oldest first
+        var m = 0
+        var idx = t.head
+        for (k in 0 until t.count) {
+            val age = trailClock - t.tm[idx]
+            if (age > maxAge) break
+            m++
+            idx = (idx - 1 + t.n) % t.n
+        }
+        if (m < 2) return
+        var any = false
+        idx = t.head
+        for (k in m - 1 downTo 0) {
+            for (c in 0 until 3) { ptsB[k * 3 + c] = t.b[idx * 3 + c]; ptsT[k * 3 + c] = t.tp[idx * 3 + c] }
+            ptsA[k] = t.a[idx]; ptsAge[k] = trailClock - t.tm[idx]
+            if (t.a[idx] > 0.01f) any = true
+            idx = (idx - 1 + t.n) % t.n
+        }
+        if (!any) return
+        // Catmull-Rom between samples so a fast swing draws a smooth arc, not straight segments
+        trailBuf.clear()
+        var verts = 0
+        val sub = 4
+        for (i in 0 until m - 1) {
+            val i0 = if (i == 0) 0 else i - 1; val i1 = i; val i2 = i + 1; val i3 = if (i + 2 < m) i + 2 else m - 1
+            val steps = if (i == m - 2) sub + 1 else sub
+            for (st in 0 until steps) {
+                val u = st.toFloat() / sub
+                val u2 = u * u; val u3 = u2 * u
+                val w0 = -0.5f * u3 + u2 - 0.5f * u; val w1 = 1.5f * u3 - 2.5f * u2 + 1f
+                val w2 = -1.5f * u3 + 2f * u2 + 0.5f * u; val w3 = 0.5f * u3 - 0.5f * u2
+                val alphaS = ptsA[i1] + (ptsA[i2] - ptsA[i1]) * u
+                val age = ptsAge[i1] + (ptsAge[i2] - ptsAge[i1]) * u
+                val fade = (1f - age / maxAge).coerceIn(0f, 1f)
+                val av = alphaS * fade * fade * strength
+                for (end in 0..1) {
+                    val src = if (end == 0) ptsB else ptsT
+                    for (c in 0 until 3) {
+                        trailBuf.put(w0 * src[i0 * 3 + c] + w1 * src[i1 * 3 + c] + w2 * src[i2 * 3 + c] + w3 * src[i3 * 3 + c])
+                    }
+                    trailBuf.put(if (end == 0) av * 0.12f else av)
+                    verts++
+                }
+            }
+        }
+        if (verts < 4) return
+        trailBuf.position(0)
+        GLES20.glUseProgram(tProg)
+        GLES20.glUniformMatrix4fv(tVP, 1, false, vp, 0)
+        GLES20.glUniform3f(tColor, r, gr, bl)
+        GLES20.glEnable(GLES20.GL_BLEND)
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)
+        GLES20.glDepthMask(false)
+        GLES20.glEnableVertexAttribArray(tPos)
+        GLES20.glVertexAttribPointer(tPos, 4, GLES20.GL_FLOAT, false, 16, trailBuf)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, verts)
+        GLES20.glDisableVertexAttribArray(tPos)
+        GLES20.glDepthMask(true)
+        GLES20.glDisable(GLES20.GL_BLEND)
+        GLES20.glUseProgram(prog)
     }
 
     // ------------------------------------------------------------------ effects
@@ -1234,10 +1476,26 @@ class GameRenderer(private val game: Game) : GLSurfaceView.Renderer {
                 // Cool rim light so figures stand out from the dark
                 c += vec3(0.12, 0.16, 0.26) * pow(1.0 - max(dot(n, V), 0.0), 3.0) * uLocal;
                 c += uEmit;
-                float f = clamp((length(vWorld - uCam) - 14.0) / 40.0, 0.0, 1.0);
+                float f = clamp((length(vWorld - uCam) - 22.0) / 85.0, 0.0, 1.0);
                 c = mix(c, uFog, f);
                 gl_FragColor = vec4(c, uAlpha);
             }
+        """
+        /** Sword trails: a ribbon of light following the blade, fading out behind it. */
+        const val TVS = """
+            uniform mat4 uVP;
+            attribute vec4 aP;
+            varying float vA;
+            void main() {
+                vA = aP.w;
+                gl_Position = uVP * vec4(aP.xyz, 1.0);
+            }
+        """
+        const val TFS = """
+            precision mediump float;
+            uniform vec3 uColor;
+            varying float vA;
+            void main() { gl_FragColor = vec4(uColor, vA); }
         """
         const val PVS = """
             uniform mat4 uMVP;

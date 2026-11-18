@@ -85,6 +85,7 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         place(buttons[A_PAUSE], bx - 36 * d, 34 * d, 22 * d)
         place(buttons[A_BLOCK], bx - 268 * d, by - 150 * d, 34 * d)
         hubRect.set(16 * d, 14 * d, 150 * d, 50 * d)
+        btnShaders.fill(null); barShaders.clear(); flaskGlow = null
         pauseHubRect.set(bx / 2 - 110 * d, by * 0.45f + 58 * d, bx / 2 + 110 * d, by * 0.45f + 102 * d)
     }
 
@@ -267,7 +268,8 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
             stroke.color = Color.argb(110, 255, 255, 255); stroke.strokeWidth = 2f * d
             c.drawCircle(joyCX, joyCY, 62 * d, stroke)
             for (k in 0 until 4) chevron(c, joyCX, joyCY, 50 * d, k * 90f, Color.argb(120, 255, 255, 255))
-            fill.shader = RadialGradient(joyX, joyY - 6 * d, 30 * d, intArrayOf(Color.argb(230, 255, 255, 255), Color.argb(150, 190, 190, 200)), null, Shader.TileMode.CLAMP)
+            joyMatrix.setTranslate(joyX, joyY); joyShader.setLocalMatrix(joyMatrix)
+            fill.shader = joyShader
             c.drawCircle(joyX, joyY, 27 * d, fill); fill.shader = null
         } else {
             stroke.color = Color.argb(60, 255, 255, 255); stroke.strokeWidth = 1.5f * d
@@ -285,9 +287,8 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
             }
             val on = (bt.action == A_LOCK && g.locked) || (bt.action == A_BLOCK && p.state == PState.BLOCK)
             val r = bt.r * (if (pressed) 0.92f else 1f)
-            // Dark glass disc with a soft inner gradient
-            fill.shader = RadialGradient(bt.x, bt.y - r * 0.4f, r * 1.3f,
-                intArrayOf(Color.argb(if (pressed) 200 else 130, 70, 70, 80), Color.argb(if (pressed) 200 else 120, 10, 10, 14)), null, Shader.TileMode.CLAMP)
+            // Dark glass disc with a soft inner gradient (made once per button and state, not every frame)
+            fill.shader = btnShader(bt, pressed, r)
             c.drawCircle(bt.x, bt.y, r, fill); fill.shader = null
             // Outer ring: gold when active / pressed
             stroke.strokeWidth = (if (bt.action == A_ATTACK) 2.5f else 2f) * d
@@ -316,6 +317,28 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
             c.drawText("Tap to keep fighting", w / 2, h * 0.45f + 34 * d, text)
             hubButton(c, pauseHubRect, "⌂  Back to NEXUS")
         }
+    }
+
+    private val joyShader = RadialGradient(0f, -6 * d, 30 * d, intArrayOf(Color.argb(230, 255, 255, 255), Color.argb(150, 190, 190, 200)), null, Shader.TileMode.CLAMP)
+    private val joyMatrix = android.graphics.Matrix()
+    private var flaskGlow: Shader? = null
+    private val btnShaders = arrayOfNulls<Shader>(16)
+    private fun btnShader(bt: Btn, pressed: Boolean, r: Float): Shader {
+        val i = bt.action * 2 + (if (pressed) 1 else 0)
+        return btnShaders[i] ?: RadialGradient(bt.x, bt.y - r * 0.4f, r * 1.3f,
+            intArrayOf(Color.argb(if (pressed) 200 else 130, 70, 70, 80), Color.argb(if (pressed) 200 else 120, 10, 10, 14)), null, Shader.TileMode.CLAMP)
+            .also { btnShaders[i] = it }
+    }
+
+    /** Bar gradients, kept between frames (a handful of bars, so a tiny list is enough). */
+    private class BarShader(val y: Float, val h: Float, val bright: Int, val dark: Int, val shader: Shader)
+    private val barShaders = ArrayList<BarShader>()
+    private fun barShader(y: Float, h: Float, bright: Int, dark: Int): Shader {
+        for (b in barShaders) if (b.y == y && b.h == h && b.bright == bright && b.dark == dark) return b.shader
+        if (barShaders.size > 12) barShaders.clear()
+        val sh = LinearGradient(0f, y, 0f, y + h, intArrayOf(bright, dark), null, Shader.TileMode.CLAMP)
+        barShaders.add(BarShader(y, h, bright, dark, sh))
+        return sh
     }
 
     private fun hubButton(c: Canvas, r: RectF, label: String) {
@@ -437,7 +460,7 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
         c.drawRoundRect(rect, 2 * d, 2 * d, fill)
         if (ghost > f) { fill.color = Color.argb(210, 235, 215, 160); c.drawRect(x, y, x + w * ghost.coerceIn(0f, 1f), y + h, fill) }
         if (f > 0f) {
-            fill.shader = LinearGradient(0f, y, 0f, y + h, intArrayOf(bright, dark), null, Shader.TileMode.CLAMP)
+            fill.shader = barShader(y, h, bright, dark)
             c.drawRect(x, y, x + w * f, y + h, fill); fill.shader = null
             fill.color = Color.argb(90, 255, 255, 255)
             c.drawRect(x, y + h * 0.12f, x + w * f, y + h * 0.3f, fill)
@@ -463,13 +486,13 @@ class HudView(context: Context, private val game: Game, private val renderer: Ga
     private fun drawFlask(c: Canvas, cx: Float, cy: Float, n: Int) {
         val full = n > 0
         if (full) {
-            fill.shader = RadialGradient(cx, cy, 22 * d, intArrayOf(Color.argb(120, 255, 150, 40), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+            fill.shader = flaskGlow ?: RadialGradient(cx, cy, 22 * d, intArrayOf(Color.argb(120, 255, 150, 40), Color.TRANSPARENT), null, Shader.TileMode.CLAMP).also { flaskGlow = it }
             c.drawCircle(cx, cy, 22 * d, fill); fill.shader = null
         }
         // Liquid
         iconPath.reset(); iconPath.addCircle(cx, cy + 3 * d, 10 * d, android.graphics.Path.Direction.CW)
         c.save(); c.clipPath(iconPath)
-        fill.shader = LinearGradient(0f, cy - 4 * d, 0f, cy + 13 * d, intArrayOf(if (full) Color.rgb(255, 196, 80) else Color.rgb(70, 60, 50), if (full) Color.rgb(200, 90, 20) else Color.rgb(40, 34, 30)), null, Shader.TileMode.CLAMP)
+        fill.shader = barShader(cy - 4 * d, 17 * d, if (full) Color.rgb(255, 196, 80) else Color.rgb(70, 60, 50), if (full) Color.rgb(200, 90, 20) else Color.rgb(40, 34, 30))
         c.drawRect(cx - 12 * d, cy - 1 * d, cx + 12 * d, cy + 14 * d, fill); fill.shader = null
         c.restore()
         // Glass, neck and cork

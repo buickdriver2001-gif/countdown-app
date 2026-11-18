@@ -58,7 +58,7 @@ fun wrapAngle(a: Float): Float {
 }
 
 class Player {
-    var x = 0f; var z = -9f
+    var x = 0f; var z = -12f
     var yaw = 0f
     var vx = 0f; var vz = 0f
     var hp = MAX_HP; var stamina = MAX_STAMINA
@@ -87,7 +87,7 @@ class Player {
 }
 
 class Boss {
-    var x = 0f; var z = 6f
+    var x = 0f; var z = 8f
     var yaw = PI.toFloat()
     var hp = MAX_HP
     var poise = MAX_POISE
@@ -152,13 +152,16 @@ class Game(seed: Int = 1) {
     val evGuardBreak = AtomicInteger()
 
     companion object {
-        const val ARENA_R = 17f
+        /** A wide arena: plenty of room to run, roll and circle the boss. */
+        const val ARENA_R = 38f
+        /** Where the ring of columns stands. */
+        const val PILLAR_RING = ARENA_R * 0.735f
         /** Pillars around the arena: x, z, radius. */
         val PILLARS = run {
             val list = ArrayList<FloatArray>()
-            for (i in 0 until 8) {
-                val a = (i / 8.0 * 2 * PI + PI / 8).toFloat()
-                list.add(floatArrayOf(sin(a) * 12.5f, cos(a) * 12.5f, 0.85f))
+            for (i in 0 until 16) {
+                val a = (i / 16.0 * 2 * PI + PI / 16).toFloat()
+                list.add(floatArrayOf(sin(a) * PILLAR_RING, cos(a) * PILLAR_RING, 0.85f))
             }
             list
         }
@@ -437,7 +440,9 @@ class Game(seed: Int = 1) {
                 if (p.state == PState.DEAD) return
                 turn(2.6f * bossSpeed())
                 b.cooldown -= dt
-                if (dist > 4.3f) { fwd(3.0f * bossSpeed()); b.moving = 1f; b.walkPhase += dt * 3f }
+                // Far away (it's a big arena) it breaks into a heavy run to close the gap
+                if (dist > 12f) { fwd(5.4f * bossSpeed()); b.moving = 1.25f; b.walkPhase += dt * 4.6f }
+                else if (dist > 4.3f) { fwd(3.0f * bossSpeed()); b.moving = 1f; b.walkPhase += dt * 3f }
                 if (b.cooldown <= 0f) chooseAttack(dist)
             }
             BState.CHAIN -> updateChain(dt, dist, toP)
@@ -582,6 +587,8 @@ class Game(seed: Int = 1) {
         b.t = 0f; b.hitDone = false; b.comboStep = 0; b.y = 0f
         when {
             p2 && b.skyCd <= 0f && dist > 6f && r < 0.35f -> { b.state = BState.SKYFALL; b.skyCd = 22f }
+            // From far off it often leaps right at you
+            dist > 16f -> b.state = if (r < (if (p2) 0.7f else 0.55f)) BState.LEAP else BState.LUNGE
             dist > 9f -> b.state = if (r < (if (p2) 0.45f else 0.25f)) BState.LEAP else BState.LUNGE
             dist > 4.8f -> when {
                 r < 0.35f -> startChain(if (p2) listOf(Move.THRUST, Move.SWEEP, Move.SLAM) else listOf(Move.THRUST, Move.BACKHAND))
@@ -763,8 +770,8 @@ class Game(seed: Int = 1) {
             else { s.vy -= 14f * dt; if (s.y < 0.05f) { s.y = 0.05f; s.vy = -s.vy * 0.3f; s.vx *= 0.6f; s.vz *= 0.6f } }
         }
         // Ambient embers drifting through the arena
-        if (rnd.nextFloat() < dt * 6f && sparks.size < 400) {
-            val a = rnd.nextFloat() * 6.283f; val r = rnd.nextFloat() * 15f
+        if (rnd.nextFloat() < dt * 14f && sparks.size < 400) {
+            val a = rnd.nextFloat() * 6.283f; val r = rnd.nextFloat() * ARENA_R * 0.85f
             sparks.add(Spark(sin(a) * r, 0.2f, cos(a) * r, (rnd.nextFloat() - 0.5f) * 0.4f, 0.4f + rnd.nextFloat() * 0.5f, (rnd.nextFloat() - 0.5f) * 0.4f, 3f + rnd.nextFloat() * 3f, true))
         }
     }
@@ -780,8 +787,8 @@ class Game(seed: Int = 1) {
         }
         val fx = sin(camYaw); val fz = cos(camYaw)
         val fy = if (title) 0f else 0f
-        var dist = if (title) 22f else 6.2f
-        val height = if (title) 9f else 3.1f
+        var dist = if (title) 34f else 6.2f
+        val height = if (title) 13f else 3.1f
         val cx0 = if (title) 0f else p.x
         val cz0 = if (title) 0f else p.z
         // Keep the camera inside the arena walls
