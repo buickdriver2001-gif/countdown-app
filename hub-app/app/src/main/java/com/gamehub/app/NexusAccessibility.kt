@@ -38,8 +38,14 @@ class NexusAccessibility : AccessibilityService() {
             Recents.remove(c, pkg)
         }
 
-        /** Opens the phone's own recent apps screen on purpose (NEXUS doesn't swap it out that time). */
-        fun openPhoneRecents(): Boolean = instance?.askPhoneRecents() ?: false
+        /**
+         * From NEXUS Recent Apps: the phone's own recent apps screen, on purpose (NEXUS doesn't swap it out
+         * that time). NEXUS Recent Apps goes back to the NEXUS home screen first and the phone's screen opens
+         * from there. (Opened straight over NEXUS Recent Apps, the phone's recent-apps app, Quickstep, could
+         * crash: NEXUS Recent Apps closes itself as it's left, in the middle of Quickstep's opening animation.)
+         * Returns false if the helper isn't running.
+         */
+        fun openPhoneRecentsViaHome(): Boolean = instance?.let { it.preparePhoneRecents(); true } ?: false
 
         @Volatile var running = false
         /** The running helper (so the NEXUS lock screen can say when it's ready). */
@@ -292,6 +298,18 @@ class NexusAccessibility : AccessibilityService() {
     private var phoneRecentsAskedUntil = 0L
     private var phoneRecentsOpen = false
 
+    /** Waiting for the NEXUS home screen to appear, to open the phone's own recent apps from there. */
+    private var phoneRecentsViaHome = false
+    private var viaHomeToken = 0
+
+    fun preparePhoneRecents() {
+        phoneRecentsViaHome = true
+        phoneRecentsAskedUntil = SystemClock.uptimeMillis() + 4000
+        val token = ++viaHomeToken
+        // Never left waiting: if the home screen doesn't appear, forget it
+        h.postDelayed({ if (token == viaHomeToken && phoneRecentsViaHome) { phoneRecentsViaHome = false; phoneRecentsAskedUntil = 0L } }, 3000)
+    }
+
     fun askPhoneRecents(): Boolean {
         phoneRecentsAskedUntil = SystemClock.uptimeMillis() + 3000
         val ok = try { performGlobalAction(GLOBAL_ACTION_RECENTS) } catch (_: Exception) { false }
@@ -384,6 +402,14 @@ class NexusAccessibility : AccessibilityService() {
             current = null; openToken++
             // Back on the NEXUS home screen straight from one of our own apps: that app closes completely
             // (not when the screen just went off and came back, and not via the square button's Recent Apps)
+            if (pkg == packageName && cls == MainActivity::class.java.name && phoneRecentsViaHome) {
+                // Only passing through the home screen on the way to the phone's own recent apps: nothing
+                // closes; once NEXUS has finished appearing, open the phone's screen from here
+                phoneRecentsViaHome = false
+                val token = ++viaHomeToken
+                h.postDelayed({ safe { if (token == viaHomeToken) askPhoneRecents() } }, 420)
+                return
+            }
             if (pkg == packageName && cls == MainActivity::class.java.name) {
                 val app = lastApp
                 lastApp = null

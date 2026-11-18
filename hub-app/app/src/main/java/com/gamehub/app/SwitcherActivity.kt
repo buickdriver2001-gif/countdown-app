@@ -80,7 +80,12 @@ class SwitcherActivity : Activity() {
         if (last != null && packageManager.getLaunchIntentForPackage(last) != null) view.openWithZoom(last) else goNexus()
     }
     override fun onDestroy() { super.onDestroy(); sfx.release() }
-    override fun onPause() { super.onPause(); if (!isFinishing) finish() }
+    /**
+     * Closes itself once it's fully off screen (including when the screen turns off). Not the moment it's
+     * paused: pressing the square button here starts the phone's recent-apps animation from this screen,
+     * and closing it in the middle of that animation can crash the phone's recent-apps app (Quickstep).
+     */
+    override fun onStop() { super.onStop(); if (!isFinishing) finish() }
 
     /** Opens an app. [revealed]: its card has already grown to fill the screen, so it just comes alive. */
     fun openApp(pkg: String, revealed: Boolean = false): Boolean {
@@ -140,10 +145,10 @@ class SwitcherActivity : Activity() {
         return true
     }
 
-    /** Opens the phone's own recent apps screen (where swiping an app away really closes it). */
+    /** Opens the phone's own recent apps screen (where swiping an app away really closes it), via the NEXUS home screen. */
     fun openPhoneRecents() {
-        if (!NexusAccessibility.openPhoneRecents())
-            android.widget.Toast.makeText(this, "Turn on the Recent Apps helper in NEXUS settings first", android.widget.Toast.LENGTH_SHORT).show()
+        if (NexusAccessibility.openPhoneRecentsViaHome()) goNexus()
+        else android.widget.Toast.makeText(this, "Turn on the Recent Apps helper in NEXUS settings first", android.widget.Toast.LENGTH_SHORT).show()
     }
 }
 
