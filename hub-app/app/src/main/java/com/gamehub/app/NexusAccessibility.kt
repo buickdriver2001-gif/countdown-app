@@ -24,6 +24,8 @@ class NexusAccessibility : AccessibilityService() {
 
     private val h = Handler(Looper.getMainLooper())
     private var current: String? = null
+    /** The screen (activity) of [current] that's showing. */
+    private var currentCls: String? = null
     private var lastSwitcher = 0L
     private val homePkgs = HashSet<String>()
 
@@ -80,17 +82,17 @@ class NexusAccessibility : AccessibilityService() {
             " front=" + (current ?: "-") + " audioMode=" + (getSystemService(android.media.AudioManager::class.java)?.mode ?: -1))
         if (!LockActivity.enabled(c)) { if (!coverWanted()) dropCover(); return }
         // Never cover a phone call or a ringing call/alarm (the screen also turns off during calls).
-        // An internet call (Discord, WhatsApp...) only counts while an app is on screen, since that may be its
-        // call screen: with the call in the background (e.g. in a Discord voice channel while on the NEXUS home
-        // screen) the NEXUS lock screen works as usual, just as the phone's own lock screen does.
+        // An internet call (Discord, WhatsApp...) only counts when its call screen is what's showing (that kind
+        // of screen comes up over the lock screen). Otherwise, e.g. sitting in a Discord voice channel, the NEXUS
+        // lock screen works as usual, just as the phone's own lock screen does.
         val am = getSystemService(android.media.AudioManager::class.java)
         val mode = am?.mode ?: android.media.AudioManager.MODE_NORMAL
-        val internetCallOnScreen = mode == android.media.AudioManager.MODE_IN_COMMUNICATION && current != null
+        val internetCallOnScreen = mode == android.media.AudioManager.MODE_IN_COMMUNICATION && callScreenShowing()
         if (mode == android.media.AudioManager.MODE_RINGTONE || mode == android.media.AudioManager.MODE_IN_CALL || internetCallOnScreen) {
             LockTrace.log(this, "  " + when {
                 mode == android.media.AudioManager.MODE_RINGTONE -> "phone ringing"
                 mode == android.media.AudioManager.MODE_IN_CALL -> "phone call in progress"
-                else -> "internet call with an app on screen"
+                else -> "internet call screen showing ($current)"
             } + ": NEXUS lock screen left out (the phone's own lock screen shows)")
             removeCover(); return
         }
@@ -119,6 +121,19 @@ class NexusAccessibility : AccessibilityService() {
             }
         }
     }
+
+    /**
+     * Is the app in front showing a call screen? Going by the screen's name (WhatsApp's VoipActivity, Signal's
+     * WebRtcCallActivity, Meet's CallActivity, Zoom's ConfActivity...). Discord's voice channels, for example,
+     * are in its main screen, which doesn't come up over the lock screen, so that doesn't count. If it's not
+     * known which screen is showing, it counts (the safe side).
+     */
+    private fun callScreenShowing(): Boolean {
+        if (current == null) return false
+        val name = currentCls?.substringAfterLast('.')?.lowercase() ?: return true
+        return CALL_WORDS.any { it in name }
+    }
+    private val CALL_WORDS = listOf("call", "voip", "rtc", "ringing", "incoming", "conf", "meeting", "dial", "phone")
 
     // ------------------------------------------------------------------ wake-up cover
     // A black layer that is created in advance (fully see-through) while the screen is on, and switched
@@ -395,6 +410,9 @@ class NexusAccessibility : AccessibilityService() {
             if (pm?.isInteractive != true || km?.isKeyguardLocked == true || !isAppScreen(pkg, cls)) return
             lastApp = pkg; leftByScreenOff = false
             if (pkg == pendingClose) pendingClose = null // went straight back into it: keep it
+            // Which screen of the app is showing (only real screens: some apps report a view's name instead)
+            val screen = if (isActivity(pkg, cls)) cls else null
+            if (pkg != current) currentCls = screen else if (screen != null) currentCls = screen
             if (pkg != current) {
                 current = pkg
                 val token = ++openToken
@@ -409,7 +427,7 @@ class NexusAccessibility : AccessibilityService() {
                 }, 1500)
             }
         } else if (pkg in homePkgs || pkg == packageName) {
-            current = null; openToken++
+            current = null; currentCls = null; openToken++
             // Back on the NEXUS home screen straight from one of our own apps: that app closes completely
             // (not when the screen just went off and came back, and not via the square button's Recent Apps)
             if (pkg == packageName && cls == MainActivity::class.java.name && phoneRecentsViaHome) {
@@ -448,10 +466,22 @@ class NexusAccessibility : AccessibilityService() {
      * Most apps report the screen's name; some only report a general view type (for example a FrameLayout),
      * so anything that isn't clearly a pop-up counts as the app's screen.
      */
+    private val activityCache = HashMap<String, Boolean>()
+    /** Is [cls] one of [pkg]'s screens (activities), rather than the name of a view or pop-up? */
+    private fun isActivity(pkg: String, cls: String): Boolean {
+        if (cls.isEmpty()) return false
+        val key = "$pkg/$cls"
+        activityCache[key]?.let { return it }
+        val ok = try { packageManager.getActivityInfo(android.content.ComponentName(pkg, cls), 0); true } catch (_: Exception) { false }
+        if (activityCache.size > 400) activityCache.clear()
+        activityCache[key] = ok
+        return ok
+    }
+
     private fun isAppScreen(pkg: String, cls: String): Boolean {
         val key = "$pkg/$cls"
         screenCache[key]?.let { return it }
-        val activity = cls.isNotEmpty() && try { packageManager.getActivityInfo(android.content.ComponentName(pkg, cls), 0); true } catch (_: Exception) { false }
+        val activity = isActivity(pkg, cls)
         val popup = POPUP_WORDS.any { cls.contains(it, ignoreCase = true) }
         val ok = activity || !popup
         if (screenCache.size > 400) screenCache.clear()
