@@ -61,8 +61,19 @@ class LockActivity : Activity() {
     override fun onResume() {
         super.onResume()
         val km = getSystemService(KeyguardManager::class.java)
-        if (km?.isKeyguardLocked != true) { finish(); return }
+        // Phone didn't actually lock (woken again within a few seconds): get out of the way instantly
+        if (km?.isKeyguardLocked != true) {
+            finish()
+            @Suppress("DEPRECATION") overridePendingTransition(0, 0)
+            return
+        }
+        showing = true
         view.restart()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        showing = false
     }
 
     override fun onDestroy() {
@@ -100,6 +111,9 @@ class LockActivity : Activity() {
     }
 
     companion object {
+        /** True while the NEXUS lock screen is on screen. */
+        @Volatile var showing = false
+
         /** Whether the NEXUS lock screen is switched on (off unless the user turns it on). */
         fun enabled(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("lockScreen", false)
     }

@@ -33,29 +33,41 @@ class NexusAccessibility : AccessibilityService() {
         fun snapFile(c: Context, pkg: String) = File(snapDir(c), "$pkg.jpg")
     }
 
-    /** Screen turned on: show the NEXUS lock screen on top of the phone's (if switched on). */
+    /**
+     * The NEXUS lock screen (if switched on) is put in place while the screen turns OFF, so it's already
+     * showing the moment the screen turns on: no flash of the phone's own lock screen.
+     * If it somehow isn't there when the screen turns on, it's shown then as a fallback.
+     */
     private val screenOn = object : android.content.BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
-            if (i.action != Intent.ACTION_SCREEN_ON || !LockActivity.enabled(c)) return
-            val km = getSystemService(KeyguardManager::class.java)
-            if (km?.isKeyguardLocked != true) return
-            // Never cover a phone call or a ringing alarm/call
+            if (!LockActivity.enabled(c)) return
+            // Never cover a phone call or a ringing call/alarm (the screen also turns off during calls)
             val am = getSystemService(android.media.AudioManager::class.java)
             val mode = am?.mode ?: android.media.AudioManager.MODE_NORMAL
             if (mode == android.media.AudioManager.MODE_RINGTONE || mode == android.media.AudioManager.MODE_IN_CALL ||
                 mode == android.media.AudioManager.MODE_IN_COMMUNICATION) return
-            try {
-                startActivity(Intent(c, LockActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION), SwitcherActivity.noIconSplash(c))
-            } catch (_: Exception) {}
+            when (i.action) {
+                Intent.ACTION_SCREEN_OFF -> showLock(c)
+                Intent.ACTION_SCREEN_ON -> {
+                    val km = getSystemService(KeyguardManager::class.java)
+                    if (km?.isKeyguardLocked == true && !LockActivity.showing) showLock(c)
+                }
+            }
         }
+    }
+
+    private fun showLock(c: Context) {
+        try {
+            startActivity(Intent(c, LockActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION), SwitcherActivity.noIconSplash(c))
+        } catch (_: Exception) {}
     }
 
     override fun onServiceConnected() {
         running = true
         refreshHomes()
         h.postDelayed(tick, 2000)
-        val f = android.content.IntentFilter(Intent.ACTION_SCREEN_ON)
+        val f = android.content.IntentFilter(Intent.ACTION_SCREEN_ON).apply { addAction(Intent.ACTION_SCREEN_OFF) }
         try {
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOn, f, Context.RECEIVER_NOT_EXPORTED) else registerReceiver(screenOn, f)
         } catch (_: Exception) {}
