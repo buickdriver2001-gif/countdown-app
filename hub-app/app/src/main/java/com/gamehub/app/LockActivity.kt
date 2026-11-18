@@ -297,13 +297,6 @@ class LockView(private val a: LockActivity) : View(a) {
             text.color = if (charging) Color.argb((220 * fade).toInt(), 150, 235, 175) else Color.argb((170 * fade).toInt(), 170, 200, 245)
             c.drawText(label, bx + bw + 11 * d, byy + bh - 1 * d, text)
             text.textAlign = Paint.Align.CENTER
-            fullInText(batFullIn)?.let {
-                if (charging && bat < 100) {
-                    text.textSize = 11 * d; text.letterSpacing = 0.12f
-                    text.color = Color.argb((140 * fade).toInt(), 160, 200, 230)
-                    c.drawText(it, w / 2, byy + bh + 20 * d, text)
-                }
-            }
         }
 
         // A smaller glass cube turning slowly in its own space below the text
