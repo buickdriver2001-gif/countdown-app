@@ -354,16 +354,22 @@ class NexusAccessibility : AccessibilityService() {
     private var openToken = 0
     private val screenCache = HashMap<String, Boolean>()
 
-    /** Is [cls] one of [pkg]'s full screens (an activity), rather than a dialog, pop-up or notification? */
+    /**
+     * Is this one of [pkg]'s own screens, rather than a dialog, pop-up, menu or notification?
+     * Most apps report the screen's name; some only report a general view type (for example a FrameLayout),
+     * so anything that isn't clearly a pop-up counts as the app's screen.
+     */
     private fun isAppScreen(pkg: String, cls: String): Boolean {
-        if (cls.isEmpty()) return false
         val key = "$pkg/$cls"
         screenCache[key]?.let { return it }
-        val ok = try { packageManager.getActivityInfo(android.content.ComponentName(pkg, cls), 0); true } catch (_: Exception) { false }
+        val activity = cls.isNotEmpty() && try { packageManager.getActivityInfo(android.content.ComponentName(pkg, cls), 0); true } catch (_: Exception) { false }
+        val popup = POPUP_WORDS.any { cls.contains(it, ignoreCase = true) }
+        val ok = activity || !popup
         if (screenCache.size > 400) screenCache.clear()
         screenCache[key] = ok
         return ok
     }
+    private val POPUP_WORDS = listOf("Dialog", "Popup", "PopUp", "Toast", "Menu", "Notification", "Tooltip", "Snackbar", "BottomSheet")
 
     private fun takeOverRecents() = getSharedPreferences("hub", MODE_PRIVATE).getBoolean("replaceRecents", true)
 
