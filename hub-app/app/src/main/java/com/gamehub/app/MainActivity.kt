@@ -316,8 +316,13 @@ class MainActivity : Activity() {
             prefs.edit().putBoolean("replaceRecents", !replace).apply()
             openAppsSettings()
         })
+        val full = NexusAccessibility.fullCloseOn(this)
+        opts.add(NexusUi.Option("Fully close apps you swipe away:  " + (if (full) "ON" else "OFF")) {
+            prefs.edit().putBoolean("fullClose", !full).apply()
+            openAppsSettings()
+        })
         opts.add(NexusUi.Option("Show Recent Apps now") { openSwitcher() })
-        NexusUi.panel(this, "Recent apps", "$status\n\nStep 1: in Accessibility, choose NEXUS Recent Apps and switch it on.\nStep 2: if Android says \"Restricted setting\", open App info, tap ⋮ at the top right and choose Allow restricted settings. Then do step 1 again.\n\nPictures of your apps stay on this phone and are never sent anywhere.", opts, cancel = "Done")
+        NexusUi.panel(this, "Recent apps", "$status\n\nStep 1: in Accessibility, choose NEXUS Recent Apps and switch it on.\nStep 2: if Android says \"Restricted setting\", open App info, tap ⋮ at the top right and choose Allow restricted settings. Then do step 1 again.\n\nFully closing apps: Android only lets the phone's own recent apps screen close other apps, so when you swipe apps away, NEXUS opens that screen behind a CLOSING APPS screen and presses Close for you. It only reads that screen, only while closing apps.\n\nPictures of your apps stay on this phone and are never sent anywhere.", opts, cancel = "Done")
     }
 
     /** Closing NEXUS on purpose: NEXUS mode off until it's opened again from its icon. */
@@ -477,7 +482,7 @@ class MainActivity : Activity() {
             NexusUi.Option("Report a problem") { reportProblem() },
             NexusUi.Option("How it works") {
                 NexusUi.panel(this, "How it works",
-                    "• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on. Pressing Home on NEXUS closes anything open and goes back to the top.\n• Close NEXUS (here) and Home goes to your normal home screen.\n• Open NEXUS from its icon to make it your home again.\n• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n• Hold an app to see its shortcuts (like New incognito tab), App info and Uninstall. Hold and drag to move it.\n• Swipe down on the list to see your notifications.\n• Tap RECENT (or press the square button, once the helper is on) for your recent apps. Swipe an app up to take it off the list: NEXUS's own games close completely. Android only lets the phone's own recent apps screen close other apps, so use the link at the bottom of Recent Apps to fully close them.\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.",
+                    "• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on. Pressing Home on NEXUS closes anything open and goes back to the top.\n• Close NEXUS (here) and Home goes to your normal home screen.\n• Open NEXUS from its icon to make it your home again.\n• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n• Hold an app to see its shortcuts (like New incognito tab), App info and Uninstall. Hold and drag to move it.\n• Swipe down on the list to see your notifications.\n• Tap RECENT (or press the square button, once the helper is on) for your recent apps. Swipe an app up to close it. Android only lets the phone's own recent apps screen fully close apps, so when you get back to the NEXUS home screen, NEXUS briefly opens it behind a CLOSING APPS screen and presses Close for you (switch this off under Recent apps).\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.",
                     emptyList(), cancel = "OK")
             },
             NexusUi.Option("Close NEXUS", danger = true) { askClose() }

@@ -12,6 +12,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import java.io.File
 import java.io.FileOutputStream
 
@@ -49,6 +50,16 @@ class NexusAccessibility : AccessibilityService() {
          */
         fun openPhoneRecentsViaHome(): Boolean = instance?.let { it.preparePhoneRecents(); true } ?: false
 
+        /**
+         * Apps swiped away in NEXUS Recent Apps, to be closed fully (Android only lets the phone's own recent-apps
+         * screen do that, so NEXUS presses Close there for you, next time the NEXUS home screen shows).
+         * [all] = Clear all. Returns false if that can't happen (helper not running, or switched off).
+         */
+        fun closeFully(pkgs: List<String>, all: Boolean): Boolean = instance?.enqueueClose(pkgs, all) ?: false
+
+        /** Is closing apps fully switched on (NEXUS settings → Recent apps)? */
+        fun fullCloseOn(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("fullClose", true)
+
         @Volatile var running = false
         /** The running helper (so the NEXUS lock screen can say when it's ready). */
         @Volatile var instance: NexusAccessibility? = null
@@ -75,6 +86,7 @@ class NexusAccessibility : AccessibilityService() {
 
     private fun handleScreen(c: Context, i: Intent) {
         if (i.action == Intent.ACTION_SCREEN_OFF) { leftByScreenOff = true; persistShot() }
+        closeJob?.let { endClose(it, "the screen turned off", goHome = false) }
         val kmT = getSystemService(KeyguardManager::class.java)
         LockTrace.log(this, "screen " + (if (i.action == Intent.ACTION_SCREEN_OFF) "OFF" else "ON") +
             ": lockScreen=" + LockActivity.enabled(c) + " phoneLocked=" + kmT?.isKeyguardLocked +
@@ -325,6 +337,192 @@ class NexusAccessibility : AccessibilityService() {
     private var phoneRecentsAskedUntil = 0L
     private var phoneRecentsOpen = false
 
+    // ------------------------------------------------------------------ closing apps fully
+    // Android only lets the phone's own recent-apps screen close other apps. So for apps swiped away in NEXUS
+    // Recent Apps, NEXUS (next time its home screen shows) puts up its cover ("CLOSING APPS"), opens the phone's
+    // recent apps underneath, presses Close on those apps' cards (the same button TalkBack users have), goes
+    // back home and lowers the cover. It only looks at the phone's recent-apps screen, and only while doing this.
+
+    /** Apps waiting to be closed fully. */
+    private val toClose = LinkedHashSet<String>()
+    private var closeAllPending = false
+    private class CloseJob(val pkgs: List<String>, val all: Boolean) {
+        /** 1 opening the phone's recent apps, 2 closing, 3 going home. */
+        var stage = 0; var tries = 0; var closed = 0; var recentsPkg = ""; var missed = 0
+    }
+    private var closeJob: CloseJob? = null
+
+    fun enqueueClose(pkgs: List<String>, all: Boolean): Boolean {
+        if (!fullCloseOn(this) || Build.VERSION.SDK_INT < 26) return false
+        for (p in pkgs) if (p !in OWN_APPS && p != packageName) toClose.add(p)
+        if (all) closeAllPending = true
+        return true
+    }
+
+    private fun startClose() {
+        if (closeJob != null || (toClose.isEmpty() && !closeAllPending)) return
+        val pm = getSystemService(PowerManager::class.java)
+        val km = getSystemService(KeyguardManager::class.java)
+        if (pm?.isInteractive != true || km?.isKeyguardLocked == true) return
+        val j = CloseJob(toClose.toList(), closeAllPending)
+        toClose.clear(); closeAllPending = false
+        closeJob = j; j.stage = 1
+        LockTrace.log(this, "closing apps fully: " + if (j.all) "all" else j.pkgs.joinToString())
+        // The cover comes up (fading in), and takes touches meanwhile so nothing underneath gets tapped by accident
+        ensureCover(force = true)
+        val v = cover; val lp = coverLp
+        if (v == null || lp == null) { closeJob = null; return }
+        coverToken++; fadeToken++; h.removeCallbacks(safety)
+        v.showClosing(if (j.all || j.pkgs.size > 1) "CLOSING APPS" else "CLOSING " + label(j.pkgs.first()).uppercase())
+        lp.flags = lp.flags and android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        lp.alpha = 1f
+        v.animate().cancel(); v.alpha = 1f; v.alpha = 0f
+        try { getSystemService(android.view.WindowManager::class.java)?.updateViewLayout(v, lp) } catch (_: Throwable) {}
+        v.animate().alpha(1f).setDuration(200).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+        h.postDelayed({ safe { if (closeJob === j && !askPhoneRecents()) endClose(j, "couldn't open the phone's recent apps", goHome = false) } }, 240)
+        // Whatever happens, it never takes more than a few seconds
+        h.postDelayed({ safe { if (closeJob === j) endClose(j, "took too long", goHome = j.stage == 2) } }, 7000)
+    }
+
+    /** In the phone's recent apps: Clear all, or Close on each app's card in turn. */
+    private fun runCloses(j: CloseJob) {
+        if (closeJob !== j) return
+        val root = try { rootInActiveWindow } catch (_: Throwable) { null }
+        if (root == null || root.packageName?.toString() != j.recentsPkg) {
+            if (++j.tries < 10) h.postDelayed({ safe { runCloses(j) } }, 200) else goHomeAfterClose(j, "couldn't read the phone's recent apps")
+            return
+        }
+        if (j.all) {
+            // Clear all if the button can be pressed; then Close on any cards still there, one by one
+            val clear = findByWords(root, setOf("clear all"))
+            val pressed = clear != null && clear.isEnabled && clear.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            if (pressed) LockTrace.log(this, "  pressed Clear all")
+            h.postDelayed({ safe { closeEveryCard(j, 0) } }, if (pressed) 700L else 0L)
+            return
+        }
+        closeNext(j, ArrayDeque(j.pkgs))
+    }
+
+    /** Clear all: Close on every card left, one at a time, until none are left. */
+    private fun closeEveryCard(j: CloseJob, round: Int) {
+        if (closeJob !== j) return
+        val root = try { rootInActiveWindow } catch (_: Throwable) { null }
+        val card = if (round < 40 && root != null && root.packageName?.toString() == j.recentsPkg) findAnyCard(root) else null
+        if (card == null || !card.first.performAction(card.second)) {
+            h.postDelayed({ safe { goHomeAfterClose(j, if (round == 0) "nothing left to close" else "closed $round") } }, 300)
+            return
+        }
+        h.postDelayed({ safe { closeEveryCard(j, round + 1) } }, 380)
+    }
+
+    /** Any app card with a Close button (for Clear all). */
+    private fun findAnyCard(root: AccessibilityNodeInfo): Pair<AccessibilityNodeInfo, Int>? {
+        val q = ArrayDeque<AccessibilityNodeInfo>(); q.add(root)
+        var seen = 0
+        while (q.isNotEmpty() && seen++ < 3000) {
+            val n = q.removeFirst()
+            closeAction(n)?.let { return n to it }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        return null
+    }
+
+    private fun closeNext(j: CloseJob, left: ArrayDeque<String>) {
+        if (closeJob !== j) return
+        val pkg = left.removeFirstOrNull()
+        if (pkg == null) {
+            h.postDelayed({ safe { goHomeAfterClose(j, "closed ${j.closed}" + (if (j.missed > 0) ", ${j.missed} not found" else "")) } }, 350)
+            return
+        }
+        val name = label(pkg)
+        val root = try { rootInActiveWindow } catch (_: Throwable) { null }
+        val card = root?.let { findCard(it, name) }
+        if (card != null && card.first.performAction(card.second)) { j.closed++; LockTrace.log(this, "  closed $name") }
+        else { j.missed++; LockTrace.log(this, "  $name wasn't in the phone's recent apps (already closed?)") }
+        h.postDelayed({ safe { closeNext(j, left) } }, 400) // the card's close animation
+    }
+
+    private fun goHomeAfterClose(j: CloseJob, why: String) {
+        if (closeJob !== j) return
+        LockTrace.log(this, "  $why: back to NEXUS")
+        j.stage = 3
+        try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (_: Throwable) {}
+        h.postDelayed({ safe { if (closeJob === j) endClose(j, null, goHome = false) } }, 1500)
+    }
+
+    /** Done (or given up): the cover stops taking touches and fades away. */
+    private fun endClose(j: CloseJob, problem: String?, goHome: Boolean) {
+        if (closeJob !== j) return
+        closeJob = null
+        if (problem != null) LockTrace.log(this, "  closing apps stopped: $problem")
+        if (goHome) try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (_: Throwable) {}
+        val v = cover; val lp = coverLp
+        if (v != null && lp != null) {
+            lp.flags = lp.flags or android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            try { getSystemService(android.view.WindowManager::class.java)?.updateViewLayout(v, lp) } catch (_: Throwable) {}
+        }
+        if (problem != "the screen turned off") fadeCover()
+    }
+
+    private fun label(pkg: String): String = AppCache.get(this, pkg)?.label
+        ?: try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { pkg }
+
+    /** The words on a node and just inside it (lower case). */
+    private fun namesOf(n: AccessibilityNodeInfo): List<String> {
+        val out = ArrayList<String>(4)
+        fun add(x: CharSequence?) { x?.toString()?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { out.add(it) } }
+        add(n.contentDescription); add(n.text)
+        for (i in 0 until minOf(n.childCount, 8)) n.getChild(i)?.let { c ->
+            add(c.contentDescription); add(c.text)
+            for (k in 0 until minOf(c.childCount, 8)) c.getChild(k)?.let { g -> add(g.contentDescription); add(g.text) }
+        }
+        return out
+    }
+
+    /** The Close (dismiss) button an app card offers, if this node is one. */
+    private fun closeAction(n: AccessibilityNodeInfo): Int? {
+        for (a in n.actionList) {
+            val l = a.label?.toString()?.trim()?.lowercase() ?: continue
+            if (l == "close" || l == "dismiss" || l == "remove" || l == "close app") return a.id
+        }
+        if (n.actionList.any { it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_DISMISS.id }) return AccessibilityNodeInfo.AccessibilityAction.ACTION_DISMISS.id
+        return null
+    }
+
+    /** The card for the app called [name] (its exact name first), with its Close button. */
+    private fun findCard(root: AccessibilityNodeInfo, name: String): Pair<AccessibilityNodeInfo, Int>? {
+        val want = name.trim().lowercase()
+        var loose: Pair<AccessibilityNodeInfo, Int>? = null
+        val q = ArrayDeque<AccessibilityNodeInfo>(); q.add(root)
+        var seen = 0
+        while (q.isNotEmpty() && seen++ < 3000) {
+            val n = q.removeFirst()
+            val act = closeAction(n)
+            if (act != null) {
+                val names = namesOf(n)
+                if (names.any { it == want }) return n to act
+                if (loose == null && names.any { it.startsWith("$want,") }) loose = n to act
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        return loose
+    }
+
+    /** A button showing exactly one of [words] (or the clickable thing it sits in). */
+    private fun findByWords(root: AccessibilityNodeInfo, words: Set<String>): AccessibilityNodeInfo? {
+        val q = ArrayDeque<AccessibilityNodeInfo>(); q.add(root)
+        var seen = 0
+        while (q.isNotEmpty() && seen++ < 3000) {
+            val n = q.removeFirst()
+            val w = (n.text ?: n.contentDescription)?.toString()?.trim()?.lowercase()
+            if (w != null && w in words) {
+                return if (n.isClickable) n else null
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        return null
+    }
+
     /** Waiting for the NEXUS home screen to appear, to open the phone's own recent apps from there. */
     private var phoneRecentsViaHome = false
     private var viaHomeToken = 0
@@ -371,6 +569,8 @@ class NexusAccessibility : AccessibilityService() {
         if (isRecents && (phoneRecentsOpen || SystemClock.uptimeMillis() < phoneRecentsAskedUntil)) {
             if (!phoneRecentsOpen) LockTrace.log(this, "phone's own recent apps open (asked for)")
             phoneRecentsOpen = true; phoneRecentsAskedUntil = 0L
+            // NEXUS opened it to close apps: let it settle, then press Close on their cards
+            closeJob?.let { j -> if (j.stage == 1) { j.stage = 2; j.recentsPkg = pkg; h.postDelayed({ safe { runCloses(j) } }, 450) } }
             return
         }
         if (isRecents && takeOverRecents() && HomeMode.isOn(this) && HomeMode.isDefault(this)) {
@@ -415,6 +615,7 @@ class NexusAccessibility : AccessibilityService() {
             // Which screen of the app is showing (only real screens: some apps report a view's name instead)
             val screen = if (isActivity(pkg, cls)) cls else null
             if (pkg != current) currentCls = screen else if (screen != null) currentCls = screen
+            toClose.remove(pkg) // opened again before it was closed: leave it open
             if (pkg != current) {
                 persistShot()
                 current = pkg
@@ -434,6 +635,18 @@ class NexusAccessibility : AccessibilityService() {
             current = null; currentCls = null; openToken++
             // Back on the NEXUS home screen straight from one of our own apps: that app closes completely
             // (not when the screen just went off and came back, and not via the square button's Recent Apps)
+            // Back home at the end of closing apps fully: lower the cover, nothing else to do
+            closeJob?.let { j ->
+                if (pkg == packageName && cls == MainActivity::class.java.name && j.stage == 3) {
+                    h.postDelayed({ safe { endClose(j, null, goHome = false) } }, 280)
+                    return
+                }
+            }
+            // The NEXUS home screen with apps waiting to be closed fully: do that now
+            if (pkg == packageName && cls == MainActivity::class.java.name && !phoneRecentsViaHome && closeJob == null &&
+                (toClose.isNotEmpty() || closeAllPending)) {
+                h.postDelayed({ safe { startClose() } }, 380)
+            }
             if (pkg == packageName && cls == MainActivity::class.java.name && phoneRecentsViaHome) {
                 // Only passing through the home screen on the way to the phone's own recent apps: nothing
                 // closes; once NEXUS has finished appearing, open the phone's screen from here

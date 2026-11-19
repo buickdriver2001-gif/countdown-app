@@ -62,6 +62,12 @@ class CoverView(c: Context) : FrameLayout(c) {
     private var recents = false
     private var start = 0L
     private var bg: Bitmap? = null
+    /** Words shown on the backdrop (while NEXUS closes apps), or null. */
+    private var label: String? = null
+    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(220, 200, 220, 255); textAlign = Paint.Align.CENTER; letterSpacing = 0.4f
+        typeface = android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL)
+    }
 
     /** The backdrop (or plain black). */
     private val back = object : View(c) {
@@ -70,6 +76,7 @@ class CoverView(c: Context) : FrameLayout(c) {
             val cur = bg
             val b = if (cur != null && cur.width == width && cur.height == height) cur else backdrop(width, height, d).also { bg = it }
             canvas.drawBitmap(b, 0f, 0f, null)
+            label?.let { labelPaint.textSize = 15 * d; canvas.drawText(it, width / 2f, height * 0.47f, labelPaint) }
         }
     }
 
@@ -103,7 +110,7 @@ class CoverView(c: Context) : FrameLayout(c) {
 
     /** Gets the Recent Apps opening ready. [s] is the last picture of the app you were in (null: just the backdrop). */
     fun showRecents(s: Bitmap?) {
-        recents = true; start = 0L
+        recents = true; start = 0L; label = null
         resetCard()
         card.shot = s
         card.visibility = if (s != null) VISIBLE else GONE
@@ -120,9 +127,17 @@ class CoverView(c: Context) : FrameLayout(c) {
     }
 
     /** Back to plain black (ready for the screen turning off). */
+    /** The NEXUS backdrop with a few words on it (while NEXUS closes apps in the phone's recent apps). */
+    fun showClosing(words: String) {
+        recents = true; start = 0L; label = words
+        resetCard()
+        card.shot = null; card.visibility = GONE
+        back.invalidate()
+    }
+
     fun showBlack() {
         if (!recents && card.visibility == GONE) return
-        recents = false; start = 0L
+        recents = false; start = 0L; label = null
         resetCard()
         card.shot = null; card.visibility = GONE
         back.invalidate()

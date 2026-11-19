@@ -116,13 +116,15 @@ class SwitcherActivity : Activity() {
      * close other apps (only the phone's own recent-apps screen can), so those just leave NEXUS's list.
      * Returns true if the app was fully closed.
      */
-    fun closeApp(pkg: String): Boolean {
+    fun closeApp(pkg: String, queue: Boolean = true): Boolean {
         val own = pkg in NexusAccessibility.OWN_APPS
         if (own) NexusAccessibility.closeOwnApp(this, pkg)
         // (Only has an effect on older Android versions, and only for apps already in the background)
         try { (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).killBackgroundProcesses(pkg) } catch (_: Exception) {}
         Recents.remove(this, pkg)
-        return own
+        if (own) return true
+        // Other apps: closed fully through the phone's own recent apps, next time the NEXUS home screen shows
+        return queue && NexusAccessibility.closeFully(listOf(pkg), all = false)
     }
 
     /**
@@ -372,7 +374,8 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         pill(c, clearRect, "CLEAR ALL", live.isNotEmpty())
         pill(c, homeRect, "NEXUS", true)
         // Above them: the way to fully close other apps (Android only lets its own recent apps screen do that)
-        if (NexusAccessibility.instance != null) {
+        // (Only needed when NEXUS isn't closing swiped-away apps fully by itself)
+        if (NexusAccessibility.instance != null && !NexusAccessibility.fullCloseOn(context)) {
             text.textAlign = Paint.Align.CENTER; text.textSize = 12 * d; text.letterSpacing = 0.04f
             text.color = Color.argb(200, 170, 200, 240)
             val ly = h - 88 * d
@@ -579,10 +582,11 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
     private fun tap(x: Float, y: Float, l: List<Card>) {
         if (clearRect.contains(x, y) && l.isNotEmpty()) {
             sfx.confirm()
+            val queued = l.any { it.pkg !in NexusAccessibility.OWN_APPS } && NexusAccessibility.closeFully(l.map { it.pkg }, all = true)
             var anyOther = false
-            for (c in l) if (!a.closeApp(c.pkg)) anyOther = true
+            for (c in l) if (!a.closeApp(c.pkg, queue = false)) anyOther = true
             Recents.clear(a)
-            if (anyOther && a.explainOnce { a.goNexus() }) return
+            if (anyOther && !queued && a.explainOnce { a.goNexus() }) return
             a.goNexus(); return
         }
         if (homeRect.contains(x, y)) { sfx.confirm(); a.goNexus(); return }
