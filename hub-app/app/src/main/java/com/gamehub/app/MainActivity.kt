@@ -424,7 +424,10 @@ class MainActivity : Activity() {
         val helper = Recents.serviceOn(this)
         val msg = "When your screen turns on, NEXUS shows its own lock screen (clock, date, battery) on top of your phone's. " +
             "Swipe up and your phone's normal PIN, pattern or fingerprint unlock appears, so your phone stays just as secure. " +
-            "It never covers calls or alarms, and your notifications and camera are still on the phone's lock screen underneath." +
+            "It never covers calls or alarms, and the camera is still on the phone's lock screen underneath.\n\n" +
+            "Notifications: NEXUS can show them on its lock screen too (tap one, unlock, and it opens). It follows the same " +
+            "privacy rules as your phone's lock screen: apps set to stay off the lock screen never appear, and with " +
+            "\"Hide sensitive content\" private notifications only show the app's name. Nothing is stored or sent anywhere." +
             (if (!helper) "\n\nNeeds the Recent Apps helper switched on (Gear icon → Recent apps)." else "")
         val opts = ArrayList<NexusUi.Option>()
         if (!helper) opts.add(NexusUi.Option("Turn on helper first", primary = true) { openAppsSettings() })
@@ -433,7 +436,32 @@ class MainActivity : Activity() {
             NexusAccessibility.instance?.refreshCover()
             Toast.makeText(this, if (!on) "NEXUS lock screen on. Turn your screen off and on to see it." else "NEXUS lock screen off", Toast.LENGTH_SHORT).show()
         })
+        // Notifications on the NEXUS lock screen
+        if (!NexusNotifications.granted(this)) {
+            opts.add(NexusUi.Option("Show notifications here: allow access") { openNotificationAccess() })
+        } else {
+            val mode = NexusNotifications.mode(this)
+            val name = when (mode) { "content" -> "Show all content"; "private" -> "Hide sensitive content"; else -> "Off" }
+            opts.add(NexusUi.Option("Notifications:  $name") {
+                NexusNotifications.setMode(this, when (mode) { "content" -> "private"; "private" -> "off"; else -> "content" })
+                lockSettings()
+            })
+        }
         NexusUi.panel(this, "NEXUS lock screen", msg, opts, cancel = "Done")
+    }
+
+    /** Android's Notification access page for NEXUS (where it can be allowed or taken away). */
+    private fun openNotificationAccess() {
+        val cn = android.content.ComponentName(this, NexusNotifications::class.java).flattenToString()
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 30)
+                startActivity(Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME, cn))
+            else startActivity(Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        } catch (_: Exception) {
+            try { startActivity(Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } catch (_: Exception) {}
+        }
+        Toast.makeText(this, "Switch on NEXUS lock screen notifications. If Android says \"Restricted setting\", allow restricted settings in NEXUS's App info first.", Toast.LENGTH_LONG).show()
     }
 
     private fun setNexusWallpaper(lock: Boolean) {

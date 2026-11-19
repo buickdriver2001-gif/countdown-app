@@ -70,6 +70,7 @@ class LockActivity : Activity() {
         // While the screen is off the phone may take a moment to lock: stay ready rather than closing early
         if (!stillNeeded()) return
         showing = true
+        NexusNotifications.refresh()
         view.restart()
     }
 
@@ -112,6 +113,34 @@ class LockActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {}
 
+    /** A notification tapped on the lock screen: it opens once the phone has been unlocked. */
+    private var pendingOpen: NexusNotifications.Item? = null
+
+    fun openNotification(item: NexusNotifications.Item) {
+        pendingOpen = item
+        requestUnlock()
+    }
+
+    /** Opens what a notification leads to (as if it had been tapped in the notification shade). */
+    private fun sendNotification(item: NexusNotifications.Item) {
+        val pi = item.intent
+        var ok = false
+        if (pi != null) {
+            ok = try {
+                val opts = if (android.os.Build.VERSION.SDK_INT >= 34)
+                    @Suppress("DEPRECATION") android.app.ActivityOptions.makeBasic()
+                        .setPendingIntentBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED).toBundle()
+                else null
+                pi.send(this, 0, null, null, null, null, opts); true
+            } catch (_: Exception) { false }
+        }
+        if (!ok) {
+            // No way in from the notification itself: just open the app
+            try { packageManager.getLaunchIntentForPackage(item.pkg)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } } catch (_: Exception) {}
+        }
+        if (item.autoCancel) NexusNotifications.dismiss(item.key)
+    }
+
     /** Swipe up: ask the phone to unlock (its own secure PIN / pattern / fingerprint screen). */
     fun requestUnlock() {
         val km = getSystemService(KeyguardManager::class.java) ?: return finish()
@@ -119,14 +148,23 @@ class LockActivity : Activity() {
         unlockAsked = true
         km.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
             override fun onDismissSucceeded() { afterUnlock(byNexus = true) }
-            override fun onDismissCancelled() { unlockAsked = false; view.reset() }
-            override fun onDismissError() { unlockAsked = false; view.reset() }
+            override fun onDismissCancelled() { unlockAsked = false; pendingOpen = null; view.reset() }
+            override fun onDismissError() { unlockAsked = false; pendingOpen = null; view.reset() }
         })
     }
 
     /** [byNexus]: unlocked by swiping up on the NEXUS lock screen (rather than from the notification shade etc.). */
     private fun afterUnlock(byNexus: Boolean) {
         if (isFinishing) return
+        // A notification was tapped here: open it (not the NEXUS home screen)
+        pendingOpen?.let { item ->
+            pendingOpen = null
+            LockTrace.log(this, "  unlocked: opening a notification from ${item.app}")
+            sendNotification(item)
+            finish()
+            @Suppress("DEPRECATION") overridePendingTransition(0, 0)
+            return
+        }
         // Unlocked while the lock screen wasn't the window in use (the notification shade was down, or a
         // notification was tapped): an app is opening, so NEXUS gets out of the way instead of landing on top of it
         val appOpening = !byNexus && !hasWindowFocus()
@@ -195,6 +233,90 @@ class LockView(private val a: LockActivity) : View(a) {
         clockText = timeFmt.format(date); dateText = dateFmt.format(date).uppercase()
     }
     // Shaders made once and placed by moving the canvas (no new objects while drawing)
+    // ---- Notifications (cards under the clock; the cube moves down and shrinks a little to make room)
+    private class Card(val item: NexusNotifications.Item, val head: String, val title: String, val body: String, val icon: android.graphics.drawable.Drawable?)
+    private var cards: List<Card> = emptyList()
+    private var cardsFrom: List<NexusNotifications.Item>? = null
+    private var cardsW = -1f
+    private var cardsMinute = -1L
+    private val cardRects = ArrayList<RectF>()
+    private val cardPool = List(4) { RectF() }
+    private val cardR = RectF()
+    private val tp = android.text.TextPaint(Paint.ANTI_ALIAS_FLAG)
+    private var cubeY = -1f
+    private var cubeK = 1f
+    private var downX = 0f
+    private var downAt = 0L
+    private var pressed = -1
+
+    /** Builds the cards' text (shortened to fit) when the notifications, the width or the minute change. */
+    private fun buildCards(w: Float) {
+        val items = NexusNotifications.items
+        val minute = System.currentTimeMillis() / 60_000
+        if (items === cardsFrom && w == cardsW && minute == cardsMinute) return
+        cardsFrom = items; cardsW = w; cardsMinute = minute
+        val textW = w - 32 * d - 16 * d - 30 * d - 12 * d - 14 * d
+        cards = items.map { it2 ->
+            val ago = ((System.currentTimeMillis() - it2.time) / 60_000).coerceAtLeast(0)
+            val whenTxt = when { ago < 1 -> "now"; ago < 60 -> "${ago}m"; ago < 24 * 60 -> "${ago / 60}h"; else -> "${ago / (24 * 60)}d" }
+            tp.typeface = light; tp.letterSpacing = 0.08f; tp.textSize = 11 * d
+            val head = android.text.TextUtils.ellipsize(it2.app.uppercase() + (if (it2.count > 1) "  ·  ${it2.count}" else "") + "  ·  " + whenTxt, tp, textW, android.text.TextUtils.TruncateAt.END).toString()
+            tp.letterSpacing = 0.01f; tp.textSize = 14.5f * d
+            val title = android.text.TextUtils.ellipsize(it2.title, tp, textW, android.text.TextUtils.TruncateAt.END).toString()
+            tp.textSize = 13 * d
+            val body = android.text.TextUtils.ellipsize(it2.text, tp, textW, android.text.TextUtils.TruncateAt.END).toString()
+            Card(it2, head, title, body, AppCache.get(context, it2.pkg)?.icon)
+        }
+    }
+
+    /** Draws the notification cards from [top]; returns where they end (or [top] if there are none). */
+    private fun drawCards(c: Canvas, w: Float, top: Float, maxBottom: Float, fade: Float): Float {
+        cardRects.clear()
+        buildCards(w)
+        if (cards.isEmpty()) return top
+        val ch = 64 * d; val gap = 8 * d
+        val fit = (((maxBottom - top) + gap) / (ch + gap)).toInt().coerceIn(1, 4)
+        val shown = min(fit, cards.size)
+        var y = top
+        for (i in 0 until shown) {
+            val cd = cards[i]
+            cardR.set(16 * d, y, w - 16 * d, y + ch)
+            cardRects.add(cardPool[i].apply { set(cardR) })
+            val press = if (pressed == i) 1.6f else 1f
+            fill.color = Color.argb((min(255f, 64 * press) * fade).toInt(), 30, 60, 140)
+            c.drawRoundRect(cardR, 16 * d, 16 * d, fill)
+            line.strokeWidth = 1f * d; line.color = Color.argb((90 * fade).toInt(), 140, 190, 255)
+            c.drawRoundRect(cardR, 16 * d, 16 * d, line)
+            val ix = cardR.left + 14 * d; val isz = 30 * d; val iy = cardR.centerY() - isz / 2
+            cd.icon?.let { ic -> ic.setBounds(ix.toInt(), iy.toInt(), (ix + isz).toInt(), (iy + isz).toInt()); ic.alpha = (255 * fade).toInt(); ic.draw(c); ic.alpha = 255 }
+            val tx = ix + isz + 12 * d
+            text.textAlign = Paint.Align.LEFT; text.typeface = light
+            text.textSize = 11 * d; text.letterSpacing = 0.08f; text.color = Color.argb((150 * fade).toInt(), 170, 200, 245)
+            val hasTitle = cd.title.isNotEmpty()
+            val hy = if (hasTitle) cardR.top + 19 * d else cardR.top + 25 * d
+            c.drawText(cd.head, tx, hy, text)
+            text.letterSpacing = 0.01f
+            if (hasTitle) {
+                text.textSize = 14.5f * d; text.color = Color.argb((240 * fade).toInt(), 240, 245, 255)
+                c.drawText(cd.title, tx, cardR.top + 38 * d, text)
+                text.textSize = 13 * d; text.color = Color.argb((175 * fade).toInt(), 205, 220, 245)
+                c.drawText(cd.body, tx, cardR.top + 55 * d, text)
+            } else {
+                text.textSize = 14 * d; text.color = Color.argb((220 * fade).toInt(), 225, 235, 255)
+                c.drawText(cd.body, tx, cardR.top + 46 * d, text)
+            }
+            y += ch + gap
+        }
+        if (cards.size > shown) {
+            text.textAlign = Paint.Align.CENTER; text.textSize = 11.5f * d; text.letterSpacing = 0.12f
+            text.color = Color.argb((140 * fade).toInt(), 170, 200, 245)
+            c.drawText("+ ${cards.size - shown} more", w / 2, y + 10 * d, text)
+            y += 18 * d
+        }
+        text.textAlign = Paint.Align.CENTER
+        return y
+    }
+
     private val glowShader = RadialGradient(0f, 0f, 1f, Color.rgb(60, 120, 255), Color.TRANSPARENT, Shader.TileMode.CLAMP)
     private val ruleShader = LinearGradient(-1f, 0f, 1f, 0f, intArrayOf(Color.TRANSPARENT, Color.rgb(140, 190, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
     private val edges = intArrayOf(0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7)
@@ -385,9 +507,21 @@ class LockView(private val a: LockActivity) : View(a) {
             text.textAlign = Paint.Align.CENTER
         }
 
+        // Notifications, under the clock (only if NEXUS has notification access and you've allowed them here)
+        val handleY = h - 70 * d
+        val cardsTop = clockY + 92 * d + lift * 0.4f
+        val cardsEnd = drawCards(c, w, cardsTop, handleY - 170 * d, fade)
+        val hasCards = cardsEnd > cardsTop
+        // The cube: in its usual place, or lower and a little smaller when there are notifications
+        val cubeTarget = if (hasCards) (cardsEnd + handleY) / 2f - 6 * d else h * 0.6f
+        val kTarget = if (hasCards) 0.72f else 1f
+        if (cubeY < 0f) { cubeY = cubeTarget; cubeK = kTarget }
+        val ease = min(1f, dt * 6f)
+        cubeY += (cubeTarget - cubeY) * ease; cubeK += (kTarget - cubeK) * ease
+
         // A smaller glass cube turning slowly in its own space below the text
-        val cx = w / 2; val cy = h * 0.6f + lift * 0.3f
-        val s = min(w, h) * 0.16f * (0.85f + 0.15f * intro)
+        val cx = w / 2; val cy = cubeY + lift * 0.3f
+        val s = min(w, h) * 0.16f * cubeK * (0.85f + 0.15f * intro)
         c.save(); c.translate(cx, cy); c.scale(s * 3.2f, s * 3.2f)
         fill.color = Color.WHITE; fill.alpha = (80 * intro).toInt(); fill.shader = glowShader
         c.drawCircle(0f, 0f, 1f, fill); fill.shader = null
@@ -486,12 +620,29 @@ class LockView(private val a: LockActivity) : View(a) {
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> { downY = e.y; dragging = true }
+            MotionEvent.ACTION_DOWN -> {
+                downY = e.y; downX = e.x; downAt = e.eventTime; dragging = true
+                pressed = cardRects.indexOfFirst { it.contains(e.x, e.y) }
+            }
             MotionEvent.ACTION_MOVE -> {
                 dragY = max(0f, downY - e.y)
+                if (kotlin.math.abs(e.y - downY) > 10 * d || kotlin.math.abs(e.x - downX) > 10 * d) pressed = -1
                 if (!asked && dragY > height * 0.18f) { asked = true; performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY); a.requestUnlock() }
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> dragging = false
+            MotionEvent.ACTION_UP -> {
+                dragging = false
+                val tapped = pressed
+                pressed = -1
+                // A tap on a notification: unlock with the phone's own PIN / fingerprint, then it opens
+                if (!asked && tapped >= 0 && e.eventTime - downAt < 600) {
+                    cards.getOrNull(tapped)?.let { cd ->
+                        asked = true
+                        performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+                        a.openNotification(cd.item)
+                    }
+                }
+            }
+            MotionEvent.ACTION_CANCEL -> { dragging = false; pressed = -1 }
         }
         return true
     }
