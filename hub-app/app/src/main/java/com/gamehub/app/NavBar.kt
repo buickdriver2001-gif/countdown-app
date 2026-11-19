@@ -32,6 +32,7 @@ class NavBar(c: Context, private val onBack: () -> Unit, private val onHome: () 
     init {
         orientation = HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
+        layoutDirection = LAYOUT_DIRECTION_LTR
         setWillNotDraw(false)
         arrange(order(c))
     }
@@ -41,7 +42,8 @@ class NavBar(c: Context, private val onBack: () -> Unit, private val onHome: () 
         if (o == current) return
         current = o
         removeAllViews()
-        val keys = if (o == "rhb") "rhb" else "brh"
+        // Left to right (b = Back, h = Home, r = Recent apps)
+        val keys = if (o == "rhb") "rhb" else "bhr"
         for (k in keys) addView(Button(context, k), LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
     }
 
