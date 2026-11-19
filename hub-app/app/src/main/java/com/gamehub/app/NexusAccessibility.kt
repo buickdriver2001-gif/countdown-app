@@ -383,6 +383,11 @@ class NexusAccessibility : AccessibilityService() {
         var stage = 0; var tries = 0; var closed = 0; var recentsPkg = ""; var missed = 0
         /** Where it's going back to: true NEXUS Recent Apps, false the home screen. */
         var backToSwitcher = false
+        val startedAt = SystemClock.uptimeMillis()
+        /** Cards already pressed Close on (so one that won't go away can't keep it going). */
+        val tried = HashSet<String>()
+        /** Closing stops after this long, so the whole thing stays about 2 seconds. */
+        fun outOfTime() = SystemClock.uptimeMillis() - startedAt > 2300
     }
     private var closeJob: CloseJob? = null
 
@@ -462,9 +467,11 @@ class NexusAccessibility : AccessibilityService() {
     private fun closeEveryCard(j: CloseJob, round: Int) {
         if (closeJob !== j) return
         val root = recentsRoot(j)
-        val card = if (round < 40 && root != null) findAnyCard(root) else null
+        // Each card once (a card that doesn't go away isn't pressed again), and never past the time limit
+        val card = if (round < 20 && root != null && !j.outOfTime()) findAnyCard(root, j.tried) else null
         if (card == null || !card.first.performAction(card.second)) {
-            h.postDelayed({ safe { goHomeAfterClose(j, if (round == 0) "nothing left to close" else "closed $round") } }, 100)
+            val why = if (j.outOfTime() && card != null) "time's up, closed $round" else if (round == 0) "nothing left to close" else "closed $round"
+            h.postDelayed({ safe { goHomeAfterClose(j, why) } }, 80)
             return
         }
         cover?.peel(null)
@@ -484,13 +491,24 @@ class NexusAccessibility : AccessibilityService() {
         return out
     }
 
-    /** Any app card with a Close button (for Clear all). */
-    private fun findAnyCard(root: AccessibilityNodeInfo): Pair<AccessibilityNodeInfo, Int>? {
+    /**
+     * Any app card with a Close button (for Clear all): only real app cards (they carry the app's name), and
+     * not one already pressed (if it's still there, it won't close, so it's left alone).
+     */
+    private fun findAnyCard(root: AccessibilityNodeInfo, tried: MutableSet<String>): Pair<AccessibilityNodeInfo, Int>? {
         val q = ArrayDeque<AccessibilityNodeInfo>(); q.add(root)
         var seen = 0
+        val r = android.graphics.Rect()
         while (q.isNotEmpty() && seen++ < 3000) {
             val n = q.removeFirst()
-            closeAction(n)?.let { return n to it }
+            val act = closeAction(n)
+            if (act != null) {
+                val name = namesOf(n).firstOrNull()
+                if (name != null) {
+                    n.getBoundsInScreen(r)
+                    if (tried.add(name + "|" + r.flattenToString())) return n to act
+                }
+            }
             for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
         }
         return null
@@ -498,6 +516,7 @@ class NexusAccessibility : AccessibilityService() {
 
     private fun closeNext(j: CloseJob, left: ArrayDeque<String>) {
         if (closeJob !== j) return
+        if (j.outOfTime() && left.isNotEmpty()) { goHomeAfterClose(j, "time's up, closed ${j.closed}"); return }
         val pkg = left.removeFirstOrNull()
         if (pkg == null) {
             h.postDelayed({ safe { goHomeAfterClose(j, "closed ${j.closed}" + (if (j.missed > 0) ", ${j.missed} not found" else "")) } }, 120)
@@ -526,7 +545,7 @@ class NexusAccessibility : AccessibilityService() {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION))
             } catch (_: Throwable) { try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (_: Throwable) {} }
         } else try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (_: Throwable) {}
-        h.postDelayed({ safe { if (closeJob === j) endClose(j, null, goHome = false) } }, 900)
+        h.postDelayed({ safe { if (closeJob === j) endClose(j, null, goHome = false) } }, 500)
     }
 
     /** Done (or given up): the cover stops taking touches and fades away. */
