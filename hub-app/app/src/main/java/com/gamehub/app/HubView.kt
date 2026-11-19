@@ -653,7 +653,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.color = Color.argb((170 * a).toInt(), 190, 210, 245)
         updateClock()
         text.textAlign = Paint.Align.LEFT; c.drawText(dateText, 20 * d, 32 * d, text)
+        val dateEnd = 20 * d + text.measureText(dateText)
         text.textAlign = Paint.Align.RIGHT; c.drawText(clockText, w - 20 * d, 32 * d, text)
+        // NEXUS's own status bar: signal and battery beside the clock, notification icons beside the date
+        val clockStart = w - 20 * d - text.measureText(clockText)
+        drawStatus(c, dateEnd, clockStart, 32 * d, a)
         // Settings gear under the clock
         gearRect.set(w - 50 * d, 40 * d, w - 14 * d, 76 * d)
         drawGear(c, gearRect.centerX(), gearRect.centerY(), 8 * d, Color.argb((150 * a).toInt(), 180, 205, 245))
@@ -889,6 +893,127 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
     /** When each tile's picture file was last read (so unchanged pictures aren't read again). */
     private val liveStamp = HashMap<String, Long>()
+
+    // ------------------------------------------------------------------ status bar
+    // Signal (Wi-Fi or mobile), battery and notification icons, read every few seconds (not every frame)
+    private var statusAt = 0L
+    private var batLevel = -1
+    private var batCharging = false
+    /** 0 no connection, 1 Wi-Fi, 2 mobile data. */
+    private var netType = 0
+    private var netLevel = 0
+    private var netOk = true
+    private val conn by lazy { context.getSystemService(android.net.ConnectivityManager::class.java) }
+    private val tel by lazy { context.getSystemService(android.telephony.TelephonyManager::class.java) }
+    private val statusIcon = RectF()
+
+    private fun readStatus() {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - statusAt < 3000L && statusAt != 0L) return
+        statusAt = now
+        try {
+            val i = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+            if (i != null) {
+                val lvl = i.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1); val sc = i.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100)
+                batLevel = if (lvl >= 0 && sc > 0) lvl * 100 / sc else -1
+                val st = i.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+                batCharging = st == android.os.BatteryManager.BATTERY_STATUS_CHARGING || st == android.os.BatteryManager.BATTERY_STATUS_FULL
+            }
+        } catch (_: Exception) {}
+        try {
+            val caps = conn?.let { cm -> cm.activeNetwork?.let { cm.getNetworkCapabilities(it) } }
+            when {
+                caps == null -> { netType = 0; netLevel = 0 }
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> {
+                    netType = 1
+                    val rssi = if (android.os.Build.VERSION.SDK_INT >= 29) caps.signalStrength else Int.MIN_VALUE
+                    netLevel = when {
+                        rssi == Int.MIN_VALUE || rssi == android.net.NetworkCapabilities.SIGNAL_STRENGTH_UNSPECIFIED -> 3
+                        rssi >= -60 -> 3; rssi >= -70 -> 2; rssi >= -80 -> 1; else -> 0
+                    }
+                }
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> {
+                    netType = 2
+                    netLevel = try { if (android.os.Build.VERSION.SDK_INT >= 28) tel?.signalStrength?.level ?: 4 else 4 } catch (_: Exception) { 4 }
+                }
+                else -> { netType = 1; netLevel = 3 }
+            }
+            netOk = caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED) ?: false
+        } catch (_: Exception) {}
+    }
+
+    /** Draws the status bar between the date ([left]) and the clock ([right]) on the line at [base]. */
+    private fun drawStatus(c: Canvas, left: Float, right: Float, base: Float, a: Float) {
+        readStatus()
+        val col = Color.argb((170 * a).toInt(), 190, 210, 245)
+        val dim = Color.argb((60 * a).toInt(), 190, 210, 245)
+        var x = right - 12 * d
+        // Battery: percentage, then the battery itself
+        if (batLevel >= 0) {
+            text.textAlign = Paint.Align.RIGHT
+            val pct = "$batLevel%"
+            c.drawText(pct, x, base, text)
+            x -= text.measureText(pct) + 5 * d
+            val bw = 19 * d; val bh = 9.5f * d; val top = base - bh - 0.5f * d
+            line.strokeWidth = 1.1f * d; line.color = col
+            statusIcon.set(x - bw, top, x - 2 * d, top + bh)
+            c.drawRoundRect(statusIcon, 2 * d, 2 * d, line)
+            c.drawRect(x - 2 * d + 0.5f * d, top + bh * 0.3f, x, top + bh * 0.7f, line)
+            val low = batLevel <= 15 && !batCharging
+            fill.color = when {
+                batCharging -> Color.argb((220 * a).toInt(), 110, 230, 150)
+                low -> Color.argb((220 * a).toInt(), 255, 120, 110)
+                else -> col
+            }
+            val inner = (bw - 2 * d - 3 * d) * batLevel / 100f
+            c.drawRect(x - bw + 1.5f * d, top + 1.5f * d, x - bw + 1.5f * d + inner, top + bh - 1.5f * d, fill)
+            x -= bw + 9 * d
+        }
+        // Signal: Wi-Fi fan, or mobile bars; dimmed with a slash when there's no connection
+        val sh = 11 * d
+        if (netType == 1) {
+            val cx = x - 7.5f * d; val by = base - 0.5f * d
+            for (k in 1..3) {
+                line.color = if (k <= netLevel) col else dim; line.strokeWidth = 1.6f * d
+                val r = k * 3.6f * d
+                statusIcon.set(cx - r, by - r, cx + r, by + r)
+                c.drawArc(statusIcon, 225f, 90f, false, line)
+            }
+            fill.color = col; c.drawCircle(cx, by - 0.6f * d, 1.3f * d, fill)
+            x -= 15 * d + 8 * d
+        } else {
+            val bw = 2.6f * d; val gap = 1.5f * d
+            for (k in 0 until 4) {
+                val bh = sh * (k + 1) / 4f
+                fill.color = if (netType == 2 && k < netLevel) col else dim
+                val bx = x - (4 - k) * (bw + gap)
+                c.drawRect(bx, base - bh, bx + bw, base, fill)
+            }
+            if (netType == 0) { line.color = col; line.strokeWidth = 1.3f * d; c.drawLine(x - 4 * (bw + gap), base - sh, x - gap, base, line) }
+            x -= 4 * (bw + gap) + 8 * d
+        }
+        if (netType != 0 && !netOk) {
+            // Connected, but not to the internet
+            text.textAlign = Paint.Align.RIGHT; c.drawText("!", x + 4 * d, base, text)
+            x -= 6 * d
+        }
+        // Notification icons after the date (apps with notifications, newest first)
+        val apps = NexusNotifications.homeApps
+        if (apps.isNotEmpty()) {
+            val isz = 14 * d
+            var ix = left + 10 * d
+            var shown = 0
+            for (pkg in apps) {
+                if (ix + isz > x - 8 * d || shown >= 4) break
+                val icon = AppCache.get(context, pkg)?.icon ?: continue
+                icon.setBounds(ix.toInt(), (base - isz + 1 * d).toInt(), (ix + isz).toInt(), (base + 1 * d).toInt())
+                icon.alpha = (230 * a).toInt(); icon.draw(c); icon.alpha = 255
+                ix += isz + 5 * d; shown++
+            }
+            if (apps.size > shown && shown > 0 && ix + 10 * d < x) { text.textAlign = Paint.Align.LEFT; c.drawText("+", ix, base, text) }
+        }
+        text.textAlign = Paint.Align.LEFT
+    }
 
     /** Lets go of the tile pictures to free memory (they're read again next time NEXUS comes back). */
     fun releasePictures() { liveShots.clear(); liveStamp.clear() }
@@ -1547,6 +1672,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     sfx.tick(); onDrawer()
                 } else if (!longFired && launchFlash <= 0f && t > readyT && gearRect.contains(e.x, e.y)) {
                     sfx.tick(); onSettings()
+                } else if (!longFired && launchFlash <= 0f && t > readyT && e.y < 44 * d && downY < 44 * d) {
+                    // A tap on the status bar: the notifications, like other phones
+                    onPullDown()
                 } else if (!longFired && !caught && launchFlash <= 0f && t > readyT) {
                     val r = rowAt(e.x, e.y)
                     if (r >= 0 && r == downRow) {

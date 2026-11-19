@@ -62,6 +62,11 @@ class CoverView(c: Context) : FrameLayout(c) {
     private var recents = false
     private var start = 0L
     private var bg: Bitmap? = null
+    /** A picture of the NEXUS lock screen, shown the moment the screen lights up (or null). */
+    private var picture: Bitmap? = null
+    private var pictureAt = 0L
+    private val picturePaint = Paint(Paint.FILTER_BITMAP_FLAG)
+
     /** Words shown on the backdrop (while NEXUS closes apps), or null. */
     private var label: String? = null
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -72,6 +77,15 @@ class CoverView(c: Context) : FrameLayout(c) {
     /** The backdrop (or plain black). */
     private val back = object : View(c) {
         override fun onDraw(canvas: Canvas) {
+            val pic = picture
+            if (pic != null) {
+                canvas.drawColor(Color.BLACK)
+                val k = ((SystemClock.uptimeMillis() - pictureAt) / 110f).coerceIn(0f, 1f)
+                picturePaint.alpha = (255 * k).toInt()
+                canvas.drawBitmap(pic, 0f, 0f, picturePaint)
+                if (k < 1f) postInvalidateOnAnimation()
+                return
+            }
             if (!recents) { canvas.drawColor(Color.BLACK); return }
             val cur = bg
             val b = if (cur != null && cur.width == width && cur.height == height) cur else backdrop(width, height, d).also { bg = it }
@@ -113,8 +127,14 @@ class CoverView(c: Context) : FrameLayout(c) {
     }
 
     /** Gets the Recent Apps opening ready. [s] is the last picture of the app you were in (null: just the backdrop). */
+    /** The lock screen's picture, over the black (the screen has just come on). */
+    fun showPicture(b: Bitmap) {
+        picture = b; pictureAt = SystemClock.uptimeMillis()
+        back.invalidate()
+    }
+
     fun showRecents(s: Bitmap?) {
-        recents = true; start = 0L; label = null; closeCube.stop()
+        recents = true; start = 0L; label = null; closeCube.stop(); picture = null
         resetCard()
         card.shot = s
         card.visibility = if (s != null) VISIBLE else GONE
@@ -148,6 +168,7 @@ class CoverView(c: Context) : FrameLayout(c) {
     fun fallsEnd(): Long = closeCube.fallsEnd()
 
     fun showBlack() {
+        if (picture != null) { picture = null; back.invalidate() }
         if (!recents && card.visibility == GONE) return
         recents = false; start = 0L; label = null; closeCube.stop()
         resetCard()

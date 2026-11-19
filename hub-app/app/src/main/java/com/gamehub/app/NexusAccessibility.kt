@@ -257,6 +257,18 @@ class NexusAccessibility : AccessibilityService() {
         try { getSystemService(android.view.WindowManager::class.java)?.removeView(v) } catch (_: Throwable) {}
     }
 
+    /**
+     * Called by the NEXUS lock screen as soon as it's in front with the screen on: a picture of it to show on
+     * the cover while Android finishes handing the screen over. Returns false if the cover isn't up.
+     */
+    fun lockPreview(b: Bitmap): Boolean {
+        val v = cover ?: return false
+        if ((coverLp?.alpha ?: 0f) < 0.5f || v.closing) return false
+        v.showPicture(b)
+        LockTrace.log(this, "  lock screen shown on the cover at once")
+        return true
+    }
+
     /** Called by the NEXUS lock screen once it is lit and in front (the phone's own lock screen is no longer drawn). */
     fun lockReady() {
         val ms = SystemClock.uptimeMillis() - screenOnAt

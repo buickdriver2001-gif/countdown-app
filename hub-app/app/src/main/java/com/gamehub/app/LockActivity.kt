@@ -73,6 +73,12 @@ class LockActivity : Activity() {
         showing = true
         NexusNotifications.refresh()
         view.restart()
+        // The screen is on: hand the wake-up cover a picture of this lock screen right away, so it shows
+        // the moment the screen lights up instead of black while Android finishes handing over the screen
+        if (getSystemService(android.os.PowerManager::class.java)?.isInteractive == true) {
+            val pic = view.renderPreview()
+            if (pic != null && NexusAccessibility.instance?.lockPreview(pic) == true) view.previewShown()
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -325,8 +331,31 @@ class LockView(private val a: LockActivity) : View(a) {
     private val sortedFaces = arrayOf(0, 1, 2, 3, 4, 5)
     private var bg: Bitmap? = null
 
-    fun restart() { t = 0f; lastNs = 0L; reset(); loadFaces(); notified = false; invalidate() }
+    fun restart() { t = 0f; lastNs = 0L; reset(); loadFaces(); notified = false; previewed = false; invalidate() }
     private var notified = false
+
+    /**
+     * The wake-up cover is already showing this lock screen (a picture of it, made the moment the screen came
+     * on), so there's no fade-in here: the same frame stays put until the cover lifts, then it carries on.
+     */
+    private var previewed = false
+    private var holdUntil = 0L
+    /** Making that picture right now (no time passes, nothing else happens). */
+    private var previewing = false
+
+    /** Draws the lock screen once into a picture for the wake-up cover. */
+    fun renderPreview(): Bitmap? {
+        if (width <= 0 || height <= 0) return null
+        return try {
+            val b = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            previewing = true
+            drawFrame(Canvas(b))
+            b
+        } catch (_: Throwable) { null } finally { previewing = false }
+    }
+
+    /** The cover took the picture: skip the fade-in, and hold the picture's frame until the cover lifts. */
+    fun previewShown() { previewed = true; holdUntil = android.os.SystemClock.uptimeMillis() + 1500; lastNs = 0L }
     private val power = a.getSystemService(android.os.PowerManager::class.java)
 
     private fun litAndInFront(): Boolean {
@@ -430,20 +459,25 @@ class LockView(private val a: LockActivity) : View(a) {
 
     private fun drawFrame(c: Canvas) {
         val now = System.nanoTime()
-        val dt = if (lastNs == 0L) 0f else min(0.05f, (now - lastNs) / 1e9f)
-        lastNs = now; t += dt
+        // Time stands still while making the cover's picture, and while the cover still shows that picture
+        val hold = previewing || (previewed && !notified && android.os.SystemClock.uptimeMillis() < holdUntil)
+        val dt = if (lastNs == 0L || hold) 0f else min(0.05f, (now - lastNs) / 1e9f)
+        if (!previewing) lastNs = now
+        t += dt
         val w = width.toFloat(); val h = height.toFloat()
-        // Quick, eased reveal once it's on screen (ease-out: most of it shows in the first moment)
-        val introK = min(1f, t / LockActivity.INTRO_LEN)
+        // Quick, eased reveal once it's on screen (ease-out: most of it shows in the first moment);
+        // none when the cover already showed it
+        val introK = if (previewing || previewed) 1f else min(1f, t / LockActivity.INTRO_LEN)
         val intro = 1f - (1f - introK) * (1f - introK) * (1f - introK)
         val lift = -dragY // content follows the finger up
         c.drawBitmap(backdrop(), 0f, 0f, null)
         // Lift the black wake-up cover only once the NEXUS lock screen is really what's on screen:
         // the screen is lit, and NEXUS has the focus (it doesn't while the phone's own lock screen is
         // still drawn on top). The fade-in then starts from black, so the switch is seamless.
-        if (!notified && litAndInFront()) {
+        if (!previewing && !notified && litAndInFront()) {
             notified = true
-            t = 0f
+            if (!previewed) t = 0f
+            lastNs = now
             NexusAccessibility.instance?.lockReady()
         }
 

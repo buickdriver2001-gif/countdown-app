@@ -30,6 +30,9 @@ class NexusNotifications : NotificationListenerService() {
         @Volatile var items: List<Item> = emptyList()
             private set
         @Volatile private var instance: NexusNotifications? = null
+        /** Apps with notifications, newest first, for the icons in the NEXUS status bar (home screen only). */
+        @Volatile var homeApps: List<String> = emptyList()
+            private set
 
         fun granted(c: Context): Boolean = try {
             c.getSystemService(NotificationManager::class.java)
@@ -60,19 +63,26 @@ class NexusNotifications : NotificationListenerService() {
     }
 
     override fun onListenerConnected() { instance = this; rebuild() }
-    override fun onListenerDisconnected() { if (instance === this) instance = null; items = emptyList() }
-    override fun onDestroy() { if (instance === this) { instance = null; items = emptyList() }; super.onDestroy() }
+    override fun onListenerDisconnected() { if (instance === this) instance = null; items = emptyList(); homeApps = emptyList() }
+    override fun onDestroy() { if (instance === this) { instance = null; items = emptyList(); homeApps = emptyList() }; super.onDestroy() }
     override fun onNotificationPosted(sbn: StatusBarNotification?, rankingMap: RankingMap?) = rebuild()
     override fun onNotificationRemoved(sbn: StatusBarNotification?, rankingMap: RankingMap?) = rebuild()
     override fun onNotificationRankingUpdate(rankingMap: RankingMap?) = rebuild()
 
     private fun rebuild() {
         try {
-            val mode = mode(this)
-            if (mode == "off") { items = emptyList(); return }
             val all = activeNotifications ?: emptyArray()
             val ranking = currentRanking
             val r = Ranking()
+            // Status bar icons (home screen, phone unlocked): every app with a notification you'd be alerted to
+            homeApps = all.filter { sbn ->
+                val n = sbn.notification
+                sbn.packageName != packageName && n != null &&
+                    n.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_FOREGROUND_SERVICE) == 0 &&
+                    (ranking == null || !ranking.getRanking(sbn.key, r) || r.importance >= NotificationManager.IMPORTANCE_DEFAULT)
+            }.sortedByDescending { it.postTime }.map { it.packageName }.distinct()
+            val mode = mode(this)
+            if (mode == "off") { items = emptyList(); return }
             // Groups that have their own notifications showing (their summary card would only repeat them)
             val withChildren = all.filter { it.notification.flags and Notification.FLAG_GROUP_SUMMARY == 0 }.map { it.groupKey }.toHashSet()
 
