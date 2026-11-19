@@ -93,6 +93,8 @@ class NexusAccessibility : AccessibilityService() {
             " lockAlive=" + LockActivity.alive + " lockShowing=" + LockActivity.showing + " otherApp=" + otherAppSinceOff +
             " front=" + (current ?: "-") + " audioMode=" + (getSystemService(android.media.AudioManager::class.java)?.mode ?: -1))
         if (!LockActivity.enabled(c)) { if (!coverWanted()) dropCover(); return }
+        // With TalkBack on, the phone's own lock screen is used: it's the one that works with TalkBack
+        if (talkBackOn()) { LockTrace.log(this, "  TalkBack is on: NEXUS lock screen left out (the phone's own lock screen works with TalkBack)"); removeCover(); return }
         // Never cover a phone call or a ringing call/alarm (the screen also turns off during calls).
         // An internet call (Discord, WhatsApp...) only counts when its call screen is what's showing (that kind
         // of screen comes up over the lock screen). Otherwise, e.g. sitting in a Discord voice channel, the NEXUS
@@ -133,6 +135,10 @@ class NexusAccessibility : AccessibilityService() {
             }
         }
     }
+
+    /** Is TalkBack (or another screen reader that explores by touch) on? */
+    private fun talkBackOn(): Boolean =
+        getSystemService(android.view.accessibility.AccessibilityManager::class.java)?.isTouchExplorationEnabled == true
 
     /**
      * Is the app in front showing a call screen? Going by the screen's name (WhatsApp's VoipActivity, Signal's
@@ -385,13 +391,24 @@ class NexusAccessibility : AccessibilityService() {
     }
 
     /** In the phone's recent apps: Clear all, or Close on each app's card in turn. */
+    /** The phone's recent-apps screen, to look at (the active window, or found among the windows on screen). */
+    private fun recentsRoot(j: CloseJob): AccessibilityNodeInfo? {
+        val a = try { rootInActiveWindow } catch (_: Throwable) { null }
+        if (a != null && a.packageName?.toString() == j.recentsPkg) return a
+        return try { windows.firstNotNullOfOrNull { w -> w.root?.takeIf { it.packageName?.toString() == j.recentsPkg } } } catch (_: Throwable) { null }
+    }
+
     private fun runCloses(j: CloseJob) {
         if (closeJob !== j) return
-        val root = try { rootInActiveWindow } catch (_: Throwable) { null }
-        if (root == null || root.packageName?.toString() != j.recentsPkg) {
-            if (++j.tries < 10) h.postDelayed({ safe { runCloses(j) } }, 200) else goHomeAfterClose(j, "couldn't read the phone's recent apps")
+        val root = recentsRoot(j)
+        if (root == null) {
+            if (++j.tries < 10) { h.postDelayed({ safe { runCloses(j) } }, 200); return }
+            // Most likely the helper needs switching off and on once, to get the access it now needs
+            App.noteProblem(this, "closing apps fully", IllegalStateException("Android didn't let the helper look at the phone's recent apps. In NEXUS settings > Recent apps, turn the helper off and on again."))
+            goHomeAfterClose(j, "couldn't look at the phone's recent apps (helper may need turning off and on)")
             return
         }
+        LockTrace.log(this, "  phone's recent apps: " + cardNames(root).let { if (it.isEmpty()) "no app cards found" else "cards " + it.joinToString() })
         if (j.all) {
             // Clear all if the button can be pressed; then Close on any cards still there, one by one
             val clear = findByWords(root, setOf("clear all"))
@@ -406,13 +423,26 @@ class NexusAccessibility : AccessibilityService() {
     /** Clear all: Close on every card left, one at a time, until none are left. */
     private fun closeEveryCard(j: CloseJob, round: Int) {
         if (closeJob !== j) return
-        val root = try { rootInActiveWindow } catch (_: Throwable) { null }
-        val card = if (round < 40 && root != null && root.packageName?.toString() == j.recentsPkg) findAnyCard(root) else null
+        val root = recentsRoot(j)
+        val card = if (round < 40 && root != null) findAnyCard(root) else null
         if (card == null || !card.first.performAction(card.second)) {
             h.postDelayed({ safe { goHomeAfterClose(j, if (round == 0) "nothing left to close" else "closed $round") } }, 300)
             return
         }
         h.postDelayed({ safe { closeEveryCard(j, round + 1) } }, 380)
+    }
+
+    /** The names on the app cards that have a Close button (for the log, to see what NEXUS found). */
+    private fun cardNames(root: AccessibilityNodeInfo): List<String> {
+        val out = ArrayList<String>()
+        val q = ArrayDeque<AccessibilityNodeInfo>(); q.add(root)
+        var seen = 0
+        while (q.isNotEmpty() && seen++ < 3000 && out.size < 20) {
+            val n = q.removeFirst()
+            if (closeAction(n) != null) out.add(namesOf(n).firstOrNull() ?: "?")
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        return out
     }
 
     /** Any app card with a Close button (for Clear all). */
@@ -435,7 +465,7 @@ class NexusAccessibility : AccessibilityService() {
             return
         }
         val name = label(pkg)
-        val root = try { rootInActiveWindow } catch (_: Throwable) { null }
+        val root = recentsRoot(j)
         val card = root?.let { findCard(it, name) }
         if (card != null && card.first.performAction(card.second)) { j.closed++; LockTrace.log(this, "  closed $name") }
         else { j.missed++; LockTrace.log(this, "  $name wasn't in the phone's recent apps (already closed?)") }
@@ -573,7 +603,7 @@ class NexusAccessibility : AccessibilityService() {
             closeJob?.let { j -> if (j.stage == 1) { j.stage = 2; j.recentsPkg = pkg; h.postDelayed({ safe { runCloses(j) } }, 450) } }
             return
         }
-        if (isRecents && takeOverRecents() && HomeMode.isOn(this) && HomeMode.isDefault(this)) {
+        if (isRecents && takeOverRecents() && HomeMode.isOn(this) && HomeMode.isDefault(this) && !talkBackOn()) {
             val now = SystemClock.uptimeMillis()
             if (now - lastSwitcher > 800) {
                 lastSwitcher = now

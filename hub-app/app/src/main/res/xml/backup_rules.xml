@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android's backups keep your NEXUS layout and settings, but never the pictures of your apps or the diagnostic logs -->
+<full-backup-content>
+    <exclude domain="file" path="snaps/" />
+    <exclude domain="file" path="lock_trace.txt" />
+    <exclude domain="file" path="problem_report.txt" />
+    <exclude domain="file" path="last_crash.txt" />
+</full-backup-content>

@@ -1277,6 +1277,192 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     @SuppressLint("ClickableViewAccessibility")
+    // ------------------------------------------------------------------ TalkBack
+    // The home screen is drawn by NEXUS itself, so it describes its tiles and buttons to TalkBack (Android's
+    // screen reader): each one can be found by touch or by swiping, is read out, opens with a double tap, and
+    // a tile's options open with a double tap and hold. The list can be scrolled with TalkBack's scroll gestures.
+
+    private val A11Y_ADD = 100_000
+    private val A11Y_RECENT = 100_001
+    private val A11Y_ALL = 100_002
+    private val A11Y_GEAR = 100_003
+    private val A11Y_NONE = Int.MIN_VALUE
+    private var a11yFocused = A11Y_NONE
+    private var a11yHovered = A11Y_NONE
+    private val a11yLoc = IntArray(2)
+    private val a11yR = android.graphics.Rect()
+
+    private fun a11yOn(): Boolean = context.getSystemService(android.view.accessibility.AccessibilityManager::class.java)?.isEnabled == true
+
+    private fun a11yIds(): List<Int> {
+        val out = ArrayList<Int>()
+        if (booting) return out
+        for (i in games.indices) if (i < rows.size) out.add(i)
+        if (rows.size > games.size) out.add(A11Y_ADD)
+        out.add(A11Y_RECENT); out.add(A11Y_ALL); out.add(A11Y_GEAR)
+        return out
+    }
+
+    private fun a11yBounds(id: Int): RectF? = when (id) {
+        A11Y_ADD -> rows.getOrNull(games.size)
+        A11Y_RECENT -> recentRect
+        A11Y_ALL -> allAppsRect
+        A11Y_GEAR -> gearRect
+        else -> rows.getOrNull(id)
+    }?.takeIf { !it.isEmpty }
+
+    /** Tiles are only on screen inside the list area (the buttons are always on screen). */
+    private fun a11yShown(id: Int, r: RectF) = id > A11Y_ADD || (r.bottom > listTop && r.top < listBottom)
+
+    private fun a11yLabel(id: Int): String = when (id) {
+        A11Y_ADD -> "Add an app to NEXUS"
+        A11Y_RECENT -> "Recent apps"
+        A11Y_ALL -> "All apps"
+        A11Y_GEAR -> "NEXUS settings"
+        else -> games.getOrNull(id)?.let { g ->
+            val cd = countdown
+            when {
+                !g.installed -> "${g.name}, not installed"
+                g.pkg == CountdownLink.PKG && cd != null -> {
+                    val left = cd.target - System.currentTimeMillis()
+                    if (left <= 0) "${cd.name}: time's up" else "${cd.name}: " + countdownText(left) + " left"
+                }
+                else -> g.name
+            }
+        } ?: ""
+    }
+
+    private fun a11yClick(id: Int): Boolean {
+        when (id) {
+            A11Y_ADD -> { sfx.tick(); onAdd() }
+            A11Y_RECENT -> { sfx.tick(); onRecent() }
+            A11Y_ALL -> { sfx.tick(); onDrawer() }
+            A11Y_GEAR -> { sfx.tick(); onSettings() }
+            else -> { val g = games.getOrNull(id) ?: return false; sfx.confirm(); onPick(g) }
+        }
+        return true
+    }
+
+    private fun a11yAt(x: Float, y: Float): Int {
+        for (id in a11yIds()) { val r = a11yBounds(id) ?: continue; if (r.contains(x, y) && a11yShown(id, r) && (id > A11Y_ADD || y in listTop..listBottom)) return id }
+        return A11Y_NONE
+    }
+
+    private fun sendA11y(id: Int, type: Int) {
+        if (!a11yOn()) return
+        @Suppress("DEPRECATION") val ev = android.view.accessibility.AccessibilityEvent.obtain(type)
+        ev.packageName = context.packageName
+        ev.className = android.widget.Button::class.java.name
+        ev.setSource(this, id)
+        ev.contentDescription = a11yLabel(id)
+        parent?.requestSendAccessibilityEvent(this, ev)
+    }
+
+    private val a11yProvider = object : android.view.accessibility.AccessibilityNodeProvider() {
+        override fun createAccessibilityNodeInfo(id: Int): android.view.accessibility.AccessibilityNodeInfo? {
+            if (id == View.NO_ID) {
+                @Suppress("DEPRECATION") val info = android.view.accessibility.AccessibilityNodeInfo.obtain(this@HubView)
+                onInitializeAccessibilityNodeInfo(info)
+                info.contentDescription = "NEXUS home screen"
+                for (v in a11yIds()) info.addChild(this@HubView, v)
+                if (maxScroll > 0f && !booting) {
+                    info.isScrollable = true
+                    info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD)
+                    info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD)
+                }
+                return info
+            }
+            val r = a11yBounds(id) ?: return null
+            @Suppress("DEPRECATION") val info = android.view.accessibility.AccessibilityNodeInfo.obtain(this@HubView, id)
+            info.packageName = context.packageName
+            info.className = android.widget.Button::class.java.name
+            info.setParent(this@HubView)
+            info.contentDescription = a11yLabel(id)
+            r.roundOut(a11yR)
+            @Suppress("DEPRECATION") info.setBoundsInParent(a11yR)
+            getLocationOnScreen(a11yLoc)
+            a11yR.offset(a11yLoc[0], a11yLoc[1])
+            info.setBoundsInScreen(a11yR)
+            info.isVisibleToUser = a11yShown(id, r)
+            info.isEnabled = true; info.isFocusable = true; info.isClickable = true
+            info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
+            if (id in games.indices) {
+                info.isLongClickable = true
+                info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction(
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_LONG_CLICK, "Options"))
+            }
+            if (a11yFocused == id) {
+                info.isAccessibilityFocused = true
+                info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS)
+            } else info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
+            return info
+        }
+
+        override fun performAction(id: Int, action: Int, args: android.os.Bundle?): Boolean {
+            if (id == View.NO_ID) {
+                val page = (listBottom - listTop) * 0.8f
+                return when (action) {
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> {
+                        if (scroll >= maxScroll) false else { scrollVel = 0f; scroll = min(maxScroll, scroll + page); invalidate()
+                            sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_VIEW_SCROLLED); true }
+                    }
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> {
+                        if (scroll <= 0f) false else { scrollVel = 0f; scroll = max(0f, scroll - page); invalidate()
+                            sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_VIEW_SCROLLED); true }
+                    }
+                    else -> performAccessibilityAction(action, args)
+                }
+            }
+            return when (action) {
+                android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK -> a11yClick(id)
+                android.view.accessibility.AccessibilityNodeInfo.ACTION_LONG_CLICK -> {
+                    val g = games.getOrNull(id) ?: return false
+                    sfx.tick(); onRemove(g); true
+                }
+                android.view.accessibility.AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS -> {
+                    if (a11yFocused != id) {
+                        val old = a11yFocused
+                        a11yFocused = id
+                        if (old != A11Y_NONE) sendA11y(old, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
+                        sendA11y(id, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED)
+                    }
+                    true
+                }
+                android.view.accessibility.AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS -> {
+                    if (a11yFocused == id) { a11yFocused = A11Y_NONE; sendA11y(id, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED) }
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    override fun getAccessibilityNodeProvider(): android.view.accessibility.AccessibilityNodeProvider = a11yProvider
+
+    /** TalkBack's touch exploration: say what's under the finger. */
+    override fun dispatchHoverEvent(e: MotionEvent): Boolean {
+        val am = context.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+        if (am == null || !am.isEnabled || !am.isTouchExplorationEnabled) return super.dispatchHoverEvent(e)
+        when (e.actionMasked) {
+            MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> {
+                val id = a11yAt(e.x, e.y)
+                if (id != a11yHovered) {
+                    val old = a11yHovered
+                    a11yHovered = id
+                    if (id != A11Y_NONE) sendA11y(id, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_HOVER_ENTER)
+                    if (old != A11Y_NONE) sendA11y(old, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_HOVER_EXIT)
+                }
+                return id != A11Y_NONE
+            }
+            MotionEvent.ACTION_HOVER_EXIT -> {
+                if (a11yHovered != A11Y_NONE) sendA11y(a11yHovered, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_HOVER_EXIT)
+                a11yHovered = A11Y_NONE
+                return true
+            }
+        }
+        return super.dispatchHoverEvent(e)
+    }
+
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (tracker == null) tracker = android.view.VelocityTracker.obtain()
         tracker?.addMovement(e)
