@@ -96,11 +96,15 @@ class CoverView(c: Context) : FrameLayout(c) {
         }
     }
     private val card = Card(c)
+    /** While NEXUS closes apps fully: the cube with their icons, peeling off and falling away. */
+    private val closeCube = CloseCubeView(c)
 
     init {
         addView(back, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         addView(card, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(closeCube, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         card.visibility = GONE
+        closeCube.visibility = GONE
         // Rounded corners that end up matching the cards in Recent Apps once shrunk
         card.outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(v: View, o: Outline) { o.setRoundRect(0, 0, v.width, v.height, 16 * d / CARD_SCALE) }
@@ -110,7 +114,7 @@ class CoverView(c: Context) : FrameLayout(c) {
 
     /** Gets the Recent Apps opening ready. [s] is the last picture of the app you were in (null: just the backdrop). */
     fun showRecents(s: Bitmap?) {
-        recents = true; start = 0L; label = null
+        recents = true; start = 0L; label = null; closeCube.stop()
         resetCard()
         card.shot = s
         card.visibility = if (s != null) VISIBLE else GONE
@@ -127,17 +131,25 @@ class CoverView(c: Context) : FrameLayout(c) {
     }
 
     /** Back to plain black (ready for the screen turning off). */
-    /** The NEXUS backdrop with a few words on it (while NEXUS closes apps in the phone's recent apps). */
-    fun showClosing(words: String) {
-        recents = true; start = 0L; label = words
+    /** The NEXUS backdrop with the closing cube: [apps] are the apps being closed (their icons go on the cube). */
+    fun showClosing(apps: List<Pair<String, android.graphics.drawable.Drawable?>>) {
+        recents = true; start = 0L; label = null
         resetCard()
         card.shot = null; card.visibility = GONE
+        closeCube.start(apps)
         back.invalidate()
     }
+    /** True while the closing cube is showing. */
+    val closing get() = closeCube.visibility == VISIBLE
+    /** [pkg] was closed (null: the next one): its icon peels off the cube and falls away. */
+    fun peel(pkg: String?) = closeCube.peel(pkg)
+    fun peelAll() = closeCube.peelAll()
+    /** When the last falling icon will have left the screen (uptime ms; 0 if none). */
+    fun fallsEnd(): Long = closeCube.fallsEnd()
 
     fun showBlack() {
         if (!recents && card.visibility == GONE) return
-        recents = false; start = 0L; label = null
+        recents = false; start = 0L; label = null; closeCube.stop()
         resetCard()
         card.shot = null; card.visibility = GONE
         back.invalidate()

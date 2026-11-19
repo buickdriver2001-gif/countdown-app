@@ -388,7 +388,7 @@ class NexusAccessibility : AccessibilityService() {
         val v = cover; val lp = coverLp
         if (v == null || lp == null) { closeJob = null; return }
         coverToken++; fadeToken++; h.removeCallbacks(safety)
-        v.showClosing(if (j.all || j.pkgs.size > 1) "CLOSING APPS" else "CLOSING " + label(j.pkgs.first()).uppercase())
+        v.showClosing(j.pkgs.map { it to AppCache.get(this, it)?.icon })
         lp.flags = lp.flags and android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
         lp.alpha = 1f
         v.animate().cancel(); v.alpha = 1f; v.alpha = 0f
@@ -422,7 +422,7 @@ class NexusAccessibility : AccessibilityService() {
             // Clear all if the button can be pressed; then Close on any cards still there, one by one
             val clear = findByWords(root, setOf("clear all"))
             val pressed = clear != null && clear.isEnabled && clear.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            if (pressed) LockTrace.log(this, "  pressed Clear all")
+            if (pressed) { LockTrace.log(this, "  pressed Clear all"); cover?.peelAll() }
             h.postDelayed({ safe { closeEveryCard(j, 0) } }, if (pressed) 700L else 0L)
             return
         }
@@ -438,6 +438,7 @@ class NexusAccessibility : AccessibilityService() {
             h.postDelayed({ safe { goHomeAfterClose(j, if (round == 0) "nothing left to close" else "closed $round") } }, 300)
             return
         }
+        cover?.peel(null)
         h.postDelayed({ safe { closeEveryCard(j, round + 1) } }, 380)
     }
 
@@ -478,12 +479,14 @@ class NexusAccessibility : AccessibilityService() {
         val card = root?.let { findCard(it, name) }
         if (card != null && card.first.performAction(card.second)) { j.closed++; LockTrace.log(this, "  closed $name") }
         else { j.missed++; LockTrace.log(this, "  $name wasn't in the phone's recent apps (already closed?)") }
+        cover?.peel(pkg) // either way it's no longer open: its icon falls off the cube
         h.postDelayed({ safe { closeNext(j, left) } }, 400) // the card's close animation
     }
 
     private fun goHomeAfterClose(j: CloseJob, why: String) {
         if (closeJob !== j) return
         LockTrace.log(this, "  $why: back to NEXUS")
+        cover?.peelAll()
         j.stage = 3
         try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (_: Throwable) {}
         h.postDelayed({ safe { if (closeJob === j) endClose(j, null, goHome = false) } }, 1500)
@@ -500,7 +503,11 @@ class NexusAccessibility : AccessibilityService() {
             lp.flags = lp.flags or android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
             try { getSystemService(android.view.WindowManager::class.java)?.updateViewLayout(v, lp) } catch (_: Throwable) {}
         }
-        if (problem != "the screen turned off") fadeCover()
+        if (problem == "the screen turned off") return
+        // Let the last icons finish falling, then the cover fades away (never more than a moment's wait)
+        cover?.peelAll()
+        val wait = ((cover?.fallsEnd() ?: 0L) - SystemClock.uptimeMillis()).coerceIn(0L, 1100L)
+        h.postDelayed({ safe { if (closeJob == null && cover?.closing == true) fadeCover() } }, wait)
     }
 
     private fun label(pkg: String): String = AppCache.get(this, pkg)?.label
