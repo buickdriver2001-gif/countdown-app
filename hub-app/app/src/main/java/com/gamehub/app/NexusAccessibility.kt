@@ -406,7 +406,7 @@ class NexusAccessibility : AccessibilityService() {
         // The cover comes up (fading in), and takes touches meanwhile so nothing underneath gets tapped by accident
         ensureCover(force = true)
         val v = cover; val lp = coverLp
-        if (v == null || lp == null) { closeJob = null; return }
+        if (v == null || lp == null) { closeJob = null; return false }
         coverToken++; fadeToken++; h.removeCallbacks(safety)
         v.showClosing(j.pkgs.map { it to AppCache.get(this, it)?.icon })
         lp.flags = lp.flags and android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
