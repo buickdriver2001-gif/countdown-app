@@ -415,7 +415,7 @@ class NexusAccessibility : AccessibilityService() {
         try { getSystemService(android.view.WindowManager::class.java)?.updateViewLayout(v, lp) } catch (_: Throwable) {}
         v.animate().alpha(1f).setDuration(140).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
         // If the home screen was already in front (so no sign of it arriving), carry on anyway
-        h.postDelayed({ safe { if (closeJob === j && j.stage == 0) proceedToRecents(j) } }, 900)
+        h.postDelayed({ safe { if (closeJob === j && j.stage == 0) proceedToRecents(j) } }, 500)
         // Whatever happens, it never takes more than a few seconds
         h.postDelayed({ safe { if (closeJob === j) endClose(j, "took too long", goHome = j.stage == 2) } }, 7500)
         return true
@@ -425,7 +425,7 @@ class NexusAccessibility : AccessibilityService() {
     private fun proceedToRecents(j: CloseJob) {
         if (closeJob !== j || j.stage != 0) return
         j.stage = 1
-        h.postDelayed({ safe { if (closeJob === j && !askPhoneRecents()) endClose(j, "couldn't open the phone's recent apps", goHome = false) } }, 260)
+        h.postDelayed({ safe { if (closeJob === j && !askPhoneRecents()) endClose(j, "couldn't open the phone's recent apps", goHome = false) } }, 60)
     }
 
     /** In the phone's recent apps: Clear all, or Close on each app's card in turn. */
@@ -440,7 +440,7 @@ class NexusAccessibility : AccessibilityService() {
         if (closeJob !== j) return
         val root = recentsRoot(j)
         if (root == null) {
-            if (++j.tries < 10) { h.postDelayed({ safe { runCloses(j) } }, 200); return }
+            if (++j.tries < 16) { h.postDelayed({ safe { runCloses(j) } }, 120); return }
             // Most likely the helper needs switching off and on once, to get the access it now needs
             App.noteProblem(this, "closing apps fully", IllegalStateException("Android didn't let the helper look at the phone's recent apps. In NEXUS settings > Recent apps, turn the helper off and on again."))
             goHomeAfterClose(j, "couldn't look at the phone's recent apps (helper may need turning off and on)")
@@ -452,7 +452,7 @@ class NexusAccessibility : AccessibilityService() {
             val clear = findByWords(root, setOf("clear all"))
             val pressed = clear != null && clear.isEnabled && clear.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             if (pressed) { LockTrace.log(this, "  pressed Clear all"); cover?.peelAll() }
-            h.postDelayed({ safe { closeEveryCard(j, 0) } }, if (pressed) 700L else 0L)
+            h.postDelayed({ safe { closeEveryCard(j, 0) } }, if (pressed) 320L else 0L)
             return
         }
         closeNext(j, ArrayDeque(j.pkgs))
@@ -464,11 +464,11 @@ class NexusAccessibility : AccessibilityService() {
         val root = recentsRoot(j)
         val card = if (round < 40 && root != null) findAnyCard(root) else null
         if (card == null || !card.first.performAction(card.second)) {
-            h.postDelayed({ safe { goHomeAfterClose(j, if (round == 0) "nothing left to close" else "closed $round") } }, 300)
+            h.postDelayed({ safe { goHomeAfterClose(j, if (round == 0) "nothing left to close" else "closed $round") } }, 100)
             return
         }
         cover?.peel(null)
-        h.postDelayed({ safe { closeEveryCard(j, round + 1) } }, 380)
+        h.postDelayed({ safe { closeEveryCard(j, round + 1) } }, 200)
     }
 
     /** The names on the app cards that have a Close button (for the log, to see what NEXUS found). */
@@ -500,7 +500,7 @@ class NexusAccessibility : AccessibilityService() {
         if (closeJob !== j) return
         val pkg = left.removeFirstOrNull()
         if (pkg == null) {
-            h.postDelayed({ safe { goHomeAfterClose(j, "closed ${j.closed}" + (if (j.missed > 0) ", ${j.missed} not found" else "")) } }, 350)
+            h.postDelayed({ safe { goHomeAfterClose(j, "closed ${j.closed}" + (if (j.missed > 0) ", ${j.missed} not found" else "")) } }, 120)
             return
         }
         val name = label(pkg)
@@ -509,7 +509,7 @@ class NexusAccessibility : AccessibilityService() {
         if (card != null && card.first.performAction(card.second)) { j.closed++; LockTrace.log(this, "  closed $name") }
         else { j.missed++; LockTrace.log(this, "  $name wasn't in the phone's recent apps (already closed?)") }
         cover?.peel(pkg) // either way it's no longer open: its icon falls off the cube
-        h.postDelayed({ safe { closeNext(j, left) } }, 400) // the card's close animation
+        h.postDelayed({ safe { closeNext(j, left) } }, 200) // the card's close animation
     }
 
     private fun goHomeAfterClose(j: CloseJob, why: String) {
@@ -526,7 +526,7 @@ class NexusAccessibility : AccessibilityService() {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION))
             } catch (_: Throwable) { try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (_: Throwable) {} }
         } else try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (_: Throwable) {}
-        h.postDelayed({ safe { if (closeJob === j) endClose(j, null, goHome = false) } }, 1500)
+        h.postDelayed({ safe { if (closeJob === j) endClose(j, null, goHome = false) } }, 900)
     }
 
     /** Done (or given up): the cover stops taking touches and fades away. */
@@ -543,7 +543,7 @@ class NexusAccessibility : AccessibilityService() {
         if (problem == "the screen turned off") return
         // Let the last icons finish falling, then the cover fades away (never more than a moment's wait)
         cover?.peelAll()
-        val wait = ((cover?.fallsEnd() ?: 0L) - SystemClock.uptimeMillis()).coerceIn(0L, 700L)
+        val wait = ((cover?.fallsEnd() ?: 0L) - SystemClock.uptimeMillis()).coerceIn(0L, 300L)
         h.postDelayed({ safe { if (closeJob == null && cover?.closing == true) fadeCover() } }, wait)
     }
 
@@ -653,7 +653,7 @@ class NexusAccessibility : AccessibilityService() {
             if (!phoneRecentsOpen) LockTrace.log(this, "phone's own recent apps open (asked for)")
             phoneRecentsOpen = true; phoneRecentsAskedUntil = 0L
             // NEXUS opened it to close apps: let it settle, then press Close on their cards
-            closeJob?.let { j -> if (j.stage == 1) { j.stage = 2; j.recentsPkg = pkg; h.postDelayed({ safe { runCloses(j) } }, 450) } }
+            closeJob?.let { j -> if (j.stage == 1) { j.stage = 2; j.recentsPkg = pkg; h.postDelayed({ safe { runCloses(j) } }, 220) } }
             return
         }
         if (isRecents && takeOverRecents() && HomeMode.isOn(this) && HomeMode.isDefault(this) && !talkBackOn()) {
@@ -724,11 +724,11 @@ class NexusAccessibility : AccessibilityService() {
                     // Under the cube: arrived at the NEXUS home screen (step 0: now open the phone's recent apps),
                     // or back at the end (step 3: let the cube finish and fade)
                     if (j.stage == 0) proceedToRecents(j)
-                    else if (j.stage == 3 && !j.backToSwitcher) h.postDelayed({ safe { endClose(j, null, goHome = false) } }, 280)
+                    else if (j.stage == 3 && !j.backToSwitcher) h.postDelayed({ safe { endClose(j, null, goHome = false) } }, 100)
                     return
                 }
                 if (pkg == packageName && cls == SwitcherActivity::class.java.name && j.stage == 3 && j.backToSwitcher) {
-                    h.postDelayed({ safe { endClose(j, null, goHome = false) } }, 300)
+                    h.postDelayed({ safe { endClose(j, null, goHome = false) } }, 120)
                     return
                 }
             }

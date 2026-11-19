@@ -118,7 +118,7 @@ class CloseCubeView(c: Context) : View(c) {
     fun fallsEnd(): Long {
         if (!running) return 0L
         val waiting = queuedPeels.size + (if (pieces.isEmpty()) 0 else 1)
-        return SystemClock.uptimeMillis() + if (waiting == 0) 0L else 800L + 110L * queuedPeels.size
+        return SystemClock.uptimeMillis() + if (waiting == 0) 0L else 520L + 60L * queuedPeels.size
     }
 
     private fun turn(x: Float, y: Float, z: Float, ang: Float) {
@@ -176,7 +176,7 @@ class CloseCubeView(c: Context) : View(c) {
         val my = (start[1] + start[3] + start[5] + start[7]) / 4f
         val side = (rnd.nextFloat() - 0.5f)
         pieces.add(Piece(bmp, start, mx, my, s * 1.15f,
-            vx = side * 260 * d, vy = -(150 + rnd.nextFloat() * 90) * d, spin = (if (side < 0) -1 else 1) * (140 + rnd.nextFloat() * 160)))
+            vx = side * 300 * d, vy = -(110 + rnd.nextFloat() * 70) * d, spin = (if (side < 0) -1 else 1) * (180 + rnd.nextFloat() * 180)))
     }
 
     override fun onDraw(c: Canvas) {
@@ -185,16 +185,16 @@ class CloseCubeView(c: Context) : View(c) {
         val dt = if (lastNs == 0L) 0f else min(0.05f, (now - lastNs) / 1e9f)
         lastNs = now; t += dt
         val w = width.toFloat(); val h = height.toFloat()
-        val intro = min(1f, t / 0.28f).let { 1f - (1f - it) * (1f - it) }
+        val intro = min(1f, t / 0.18f).let { 1f - (1f - it) * (1f - it) }
         cubeAng += dt * 1.5f
         val cx = w / 2; val cy = h * 0.42f
         val s = min(w, h) * 0.19f * (0.8f + 0.2f * intro)
 
         // The next icon peels off (a little apart from the one before, so each one is seen)
         val ms = SystemClock.uptimeMillis()
-        if (queuedPeels.isNotEmpty() && ms >= nextPeelAt && t > 0.25f) {
+        if (queuedPeels.isNotEmpty() && ms >= nextPeelAt && t > 0.12f) {
             startPeel(queuedPeels.removeAt(0), cx, cy, s)
-            nextPeelAt = ms + 110
+            nextPeelAt = ms + 60
         }
 
         // Glow and the cube
@@ -227,7 +227,7 @@ class CloseCubeView(c: Context) : View(c) {
         while (k < edges.size) { c.drawLine(px[edges[k]], py[edges[k]], px[edges[k + 1]], py[edges[k + 1]], line); k += 2 }
 
         // Falling icons: they come off the face, settle flat, tumble and drop past the bottom
-        val g = 2600 * d
+        val g = 4200 * d
         val it = pieces.iterator()
         while (it.hasNext()) {
             val p = it.next()
@@ -242,7 +242,7 @@ class CloseCubeView(c: Context) : View(c) {
                 val ox = corners[q][0] * half; val oy = -corners[q][1] * half
                 flat[q * 2] = p.cx + ox * ca - oy * sa; flat[q * 2 + 1] = p.cy + ox * sa + oy * ca
             }
-            val m = min(1f, p.age / 0.18f).let { 1f - (1f - it) * (1f - it) }
+            val m = min(1f, p.age / 0.12f).let { 1f - (1f - it) * (1f - it) }
             for (q in 0 until 8) {
                 // The starting corners travel with the piece, then blend into the flat tile
                 val startMoved = p.start[q] + (if (q % 2 == 0) p.cx - (p.start[0] + p.start[2] + p.start[4] + p.start[6]) / 4f
