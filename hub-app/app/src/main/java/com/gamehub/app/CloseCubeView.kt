@@ -79,8 +79,11 @@ class CloseCubeView(c: Context) : View(c) {
     private fun iconFace(icon: Drawable?): Bitmap {
         val b = glassFace().copy(Bitmap.Config.ARGB_8888, true)
         if (icon != null) try {
-            icon.setBounds(faceSize / 5, faceSize / 5, faceSize * 4 / 5, faceSize * 4 / 5)
-            icon.draw(Canvas(b))
+            // Its own copy of the icon, fully opaque (the shared one may have been faded elsewhere)
+            val ic = icon.constantState?.newDrawable(resources)?.mutate() ?: icon
+            ic.alpha = 255
+            ic.setBounds(faceSize / 5, faceSize / 5, faceSize * 4 / 5, faceSize * 4 / 5)
+            ic.draw(Canvas(b))
         } catch (_: Exception) {}
         return b
     }

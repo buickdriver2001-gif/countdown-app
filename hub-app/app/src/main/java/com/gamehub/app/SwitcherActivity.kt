@@ -56,7 +56,19 @@ class SwitcherActivity : Activity() {
         }
         if (android.os.Build.VERSION.SDK_INT >= 30) window.setDecorFitsSystemWindows(false)
         view = SwitcherView(this, sfx)
-        setContentView(view)
+        val root = android.widget.FrameLayout(this)
+        root.addView(view)
+        val order = NavBar.order(this)
+        if (order != "off") {
+            val nav = NavBar(this,
+                onBack = { @Suppress("DEPRECATION") onBackPressed() },
+                onHome = { sfx.tick(); goNexus() },
+                onRecent = { view.openCentered() })
+            root.addView(nav, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                (NavBar.HEIGHT_DP * resources.displayMetrics.density).toInt(), android.view.Gravity.BOTTOM))
+            view.navInset = NavBar.HEIGHT_DP * resources.displayMetrics.density
+        }
+        setContentView(root)
         if (android.os.Build.VERSION.SDK_INT >= 30) window.decorView.post {
             try {
                 window.insetsController?.hide(android.view.WindowInsets.Type.systemBars())
@@ -187,6 +199,16 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
     private var cards = ArrayList<Card>()
 
     private var pos = 0f          // carousel position (card index, fractional)
+    /** Room at the bottom for the Back / Home / Recent buttons. */
+    var navInset = 0f
+
+    /** The Recent button here: opens the app in the middle (the one you're looking at). */
+    fun openCentered() {
+        val l = live()
+        if (l.isEmpty() || opening != null) return
+        sfx.confirm()
+        openWithZoom(l[pos.roundToInt().coerceIn(0, l.size - 1)].pkg)
+    }
     private var vel = 0f
     private var dragging = false
     private var t = 0f
@@ -385,17 +407,16 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
             c.drawText(ago(cc.used), w / 2, cy + ch / 2 + 62 * d, text)
         }
 
-        // Bottom: Clear all / NEXUS
-        clearRect.set(w / 2 - 150 * d, h - 70 * d, w / 2 - 10 * d, h - 30 * d)
-        homeRect.set(w / 2 + 10 * d, h - 70 * d, w / 2 + 150 * d, h - 30 * d)
+        // Bottom: Clear all (Home is in the buttons along the bottom)
+        clearRect.set(w / 2 - 80 * d, h - 70 * d - navInset, w / 2 + 80 * d, h - 30 * d - navInset)
+        homeRect.setEmpty()
         pill(c, clearRect, "CLEAR ALL", live.isNotEmpty())
-        pill(c, homeRect, "NEXUS", true)
         // Above them: the way to fully close other apps (Android only lets its own recent apps screen do that)
         // (Only needed when NEXUS isn't closing swiped-away apps fully by itself)
         if (NexusAccessibility.instance != null && !NexusAccessibility.fullCloseOn(context)) {
             text.textAlign = Paint.Align.CENTER; text.textSize = 12 * d; text.letterSpacing = 0.04f
             text.color = Color.argb(200, 170, 200, 240)
-            val ly = h - 88 * d
+            val ly = h - 88 * d - navInset
             c.drawText(PHONE_LINK, w / 2, ly, text)
             val tw = text.measureText(PHONE_LINK) / 2 + 16 * d
             phoneRect.set(w / 2 - tw, ly - 24 * d, w / 2 + tw, ly + 12 * d)
@@ -495,7 +516,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
             card.icon?.let {
                 val s = rr.width() * 0.34f
                 it.setBounds((rr.centerX() - s / 2).toInt(), (rr.centerY() - s / 2).toInt(), (rr.centerX() + s / 2).toInt(), (rr.centerY() + s / 2).toInt())
-                it.alpha = (255 * fade).toInt(); it.draw(c)
+                it.alpha = (255 * fade).toInt(); it.draw(c); it.alpha = 255
             }
         }
         // Dim side cards; white light pass across the centre card
@@ -521,7 +542,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         card.icon?.let {
             val s = 34 * d * (rr.width() / (width * CoverView.CARD_SCALE))
             it.setBounds((rr.centerX() - s / 2).toInt(), (rr.top - s / 2).toInt(), (rr.centerX() + s / 2).toInt(), (rr.top + s / 2).toInt())
-            it.alpha = (255 * fade).toInt(); it.draw(c)
+            it.alpha = (255 * fade).toInt(); it.draw(c); it.alpha = 255
         }
     }
 

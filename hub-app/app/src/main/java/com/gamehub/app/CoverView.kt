@@ -90,6 +90,9 @@ class CoverView(c: Context) : FrameLayout(c) {
             val cur = bg
             val b = if (cur != null && cur.width == width && cur.height == height) cur else backdrop(width, height, d).also { bg = it }
             canvas.drawBitmap(b, 0f, 0f, null)
+            // Recent Apps opening: its Back / Home / Recent buttons are already in place
+            if (card.visibility == VISIBLE || label == null && closeCube.visibility != VISIBLE)
+                NavBar.drawPicture(canvas, width.toFloat(), height.toFloat(), NavBar.order(context), d)
             label?.let { labelPaint.textSize = 15 * d; canvas.drawText(it, width / 2f, height * 0.47f, labelPaint) }
         }
     }

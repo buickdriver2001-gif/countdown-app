@@ -23,6 +23,39 @@ class NavBar(c: Context, private val onBack: () -> Unit, private val onHome: () 
         fun setOrder(c: Context, o: String) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit().putString("navOrder", o).apply()
         fun name(o: String) = when (o) { "brh" -> "Back · Home · Recent"; "rhb" -> "Recent · Home · Back"; else -> "Off" }
         fun next(o: String) = when (o) { "brh" -> "rhb"; "rhb" -> "off"; else -> "brh" }
+
+        private val sPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val sLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeJoin = Paint.Join.ROUND; strokeCap = Paint.Cap.ROUND }
+        private val sTri = Path()
+
+        /**
+         * Draws the buttons (as a picture) along the bottom of [c], exactly where the real ones sit: used on the
+         * cover while Recent Apps opens, so the buttons stay put instead of disappearing for a moment.
+         */
+        fun drawPicture(c: Canvas, w: Float, h: Float, order: String, d: Float) {
+            if (order == "off") return
+            val bh = HEIGHT_DP * d; val top = h - bh
+            sPaint.color = Color.argb(120, 4, 8, 22); c.drawRect(0f, top, w, h, sPaint)
+            sPaint.color = Color.argb(60, 140, 190, 255); c.drawRect(0f, top, w, top + 1f * d, sPaint)
+            sLine.strokeWidth = 1.8f * d; sLine.color = Color.argb(200, 200, 222, 255)
+            val keys = if (order == "rhb") "rhb" else "bhr"
+            for ((i, k) in keys.withIndex()) {
+                val cx = w * (i * 2 + 1) / 6f; val cy = top + bh / 2
+                glyph(c, k, cx, cy, d, sLine, sTri)
+            }
+        }
+
+        fun glyph(c: Canvas, key: Char, cx: Float, cy: Float, d: Float, line: Paint, tri: Path) {
+            when (key) {
+                'b' -> {
+                    tri.reset()
+                    tri.moveTo(cx + 6 * d, cy - 7 * d); tri.lineTo(cx - 6 * d, cy); tri.lineTo(cx + 6 * d, cy + 7 * d); tri.close()
+                    c.drawPath(tri, line)
+                }
+                'h' -> c.drawCircle(cx, cy, 7.5f * d, line)
+                else -> c.drawRoundRect(cx - 6.5f * d, cy - 6.5f * d, cx + 6.5f * d, cy + 6.5f * d, 2 * d, 2 * d, line)
+            }
+        }
     }
 
     private val d = resources.displayMetrics.density
@@ -76,15 +109,7 @@ class NavBar(c: Context, private val onBack: () -> Unit, private val onHome: () 
             val cx = width / 2f; val cy = height / 2f
             if (isPressed) { glow.color = Color.argb(70, 90, 150, 255); c.drawCircle(cx, cy, 20 * d, glow) }
             line.color = Color.argb(if (isPressed) 255 else 200, 200, 222, 255)
-            when (key) {
-                'b' -> {
-                    tri.reset()
-                    tri.moveTo(cx + 6 * d, cy - 7 * d); tri.lineTo(cx - 6 * d, cy); tri.lineTo(cx + 6 * d, cy + 7 * d); tri.close()
-                    c.drawPath(tri, line)
-                }
-                'h' -> c.drawCircle(cx, cy, 7.5f * d, line)
-                else -> c.drawRoundRect(cx - 6.5f * d, cy - 6.5f * d, cx + 6.5f * d, cy + 6.5f * d, 2 * d, 2 * d, line)
-            }
+            glyph(c, key, cx, cy, d, line, tri)
         }
     }
 }
