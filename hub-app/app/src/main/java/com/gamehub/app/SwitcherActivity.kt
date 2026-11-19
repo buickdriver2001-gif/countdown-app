@@ -98,6 +98,8 @@ class SwitcherActivity : Activity() {
     }
 
     fun goNexus() {
+        // Apps you swiped away here get closed fully once the home screen shows
+        NexusAccessibility.closeWhenHome()
         val i = packageManager.getLaunchIntentForPackage(packageName) ?: return
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         i.putExtra("fromApp", true)

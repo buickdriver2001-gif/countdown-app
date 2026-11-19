@@ -566,6 +566,8 @@ class MainActivity : Activity() {
             // Home pressed: NEXUS mode on = stay in / come back to NEXUS; off = normal home screen
             if (!HomeMode.isOn(this) && HomeMode.goNormalHome(this)) return
             leftForApp = android.os.SystemClock.uptimeMillis() - pausedAt > 700
+            // Home pressed from an app: apps swiped away in Recent Apps earlier get closed fully now
+            if (leftForApp) NexusAccessibility.closeWhenHome()
             goHome(onScreen = !leftForApp)
             return
         }

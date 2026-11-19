@@ -34,11 +34,14 @@ import kotlin.math.sin
 class LockActivity : Activity() {
 
     private lateinit var view: LockView
+    /** The swipe up asked Android to unlock, and it hasn't answered yet. */
+    private var unlockAsked = false
 
     private val unlocked = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
-            // Unlocked another way (fingerprint, face): go straight on
-            if (i.action == Intent.ACTION_USER_PRESENT) afterUnlock()
+            // Unlocked another way (fingerprint, face, or opening a notification): go straight on
+            // (If the swipe up asked for the unlock, it counts as that, whichever arrives first)
+            if (i.action == Intent.ACTION_USER_PRESENT) afterUnlock(byNexus = unlockAsked)
         }
     }
 
@@ -112,17 +115,27 @@ class LockActivity : Activity() {
     /** Swipe up: ask the phone to unlock (its own secure PIN / pattern / fingerprint screen). */
     fun requestUnlock() {
         val km = getSystemService(KeyguardManager::class.java) ?: return finish()
-        if (!km.isKeyguardLocked) { afterUnlock(); return }
+        if (!km.isKeyguardLocked) { afterUnlock(byNexus = true); return }
+        unlockAsked = true
         km.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
-            override fun onDismissSucceeded() { afterUnlock() }
-            override fun onDismissCancelled() { view.reset() }
-            override fun onDismissError() { view.reset() }
+            override fun onDismissSucceeded() { afterUnlock(byNexus = true) }
+            override fun onDismissCancelled() { unlockAsked = false; view.reset() }
+            override fun onDismissError() { unlockAsked = false; view.reset() }
         })
     }
 
-    private fun afterUnlock() {
+    /** [byNexus]: unlocked by swiping up on the NEXUS lock screen (rather than from the notification shade etc.). */
+    private fun afterUnlock(byNexus: Boolean) {
         if (isFinishing) return
-        LockTrace.log(this, "  unlocked")
+        // Unlocked while the lock screen wasn't the window in use (the notification shade was down, or a
+        // notification was tapped): an app is opening, so NEXUS gets out of the way instead of landing on top of it
+        val appOpening = !byNexus && !hasWindowFocus()
+        LockTrace.log(this, "  unlocked" + if (appOpening) " from the notification shade: letting the app open" else "")
+        if (appOpening) {
+            finish()
+            @Suppress("DEPRECATION") overridePendingTransition(0, 0)
+            return
+        }
         // Land in NEXUS when it's the home screen; otherwise just get out of the way
         if (HomeMode.isOn(this) && HomeMode.isDefault(this)) {
             val i = packageManager.getLaunchIntentForPackage(packageName)

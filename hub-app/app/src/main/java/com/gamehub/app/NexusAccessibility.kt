@@ -57,6 +57,13 @@ class NexusAccessibility : AccessibilityService() {
          */
         fun closeFully(pkgs: List<String>, all: Boolean): Boolean = instance?.enqueueClose(pkgs, all) ?: false
 
+        /**
+         * You're heading to the NEXUS home screen from Recent Apps or with the Home button: apps waiting to be
+         * closed fully are closed when it shows. (Not when NEXUS appears after unlocking, or for any other reason,
+         * so it never gets in the way of an app you're opening, e.g. from a notification.)
+         */
+        fun closeWhenHome() { instance?.closeArmedUntil = SystemClock.uptimeMillis() + 4000 }
+
         /** Is closing apps fully switched on (NEXUS settings → Recent apps)? */
         fun fullCloseOn(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("fullClose", true)
 
@@ -357,6 +364,8 @@ class NexusAccessibility : AccessibilityService() {
         var stage = 0; var tries = 0; var closed = 0; var recentsPkg = ""; var missed = 0
     }
     private var closeJob: CloseJob? = null
+    /** Until when arriving at the NEXUS home screen should close the waiting apps (see closeWhenHome). */
+    private var closeArmedUntil = 0L
 
     fun enqueueClose(pkgs: List<String>, all: Boolean): Boolean {
         if (!fullCloseOn(this) || Build.VERSION.SDK_INT < 26) return false
@@ -674,7 +683,8 @@ class NexusAccessibility : AccessibilityService() {
             }
             // The NEXUS home screen with apps waiting to be closed fully: do that now
             if (pkg == packageName && cls == MainActivity::class.java.name && !phoneRecentsViaHome && closeJob == null &&
-                (toClose.isNotEmpty() || closeAllPending)) {
+                (toClose.isNotEmpty() || closeAllPending) && SystemClock.uptimeMillis() < closeArmedUntil) {
+                closeArmedUntil = 0L
                 h.postDelayed({ safe { startClose() } }, 380)
             }
             if (pkg == packageName && cls == MainActivity::class.java.name && phoneRecentsViaHome) {
