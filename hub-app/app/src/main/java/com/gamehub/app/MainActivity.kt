@@ -24,6 +24,7 @@ class MainActivity : Activity() {
     private lateinit var hub: HubView
     private lateinit var drawer: AppDrawer
     private lateinit var tutorial: TutorialView
+    private lateinit var navBar: NavBar
     private val sfx by lazy { Sfx() }
     private var leftForApp = false
     private val prefs by lazy { getSharedPreferences("hub", MODE_PRIVATE) }
@@ -176,6 +177,13 @@ class MainActivity : Activity() {
         val root = android.widget.FrameLayout(this)
         root.addView(hub)
         root.addView(drawer)
+        navBar = NavBar(this,
+            onBack = { sfx.tick(); @Suppress("DEPRECATION") onBackPressed() },
+            onHome = { sfx.tick(); goHome(onScreen = true) },
+            onRecent = { sfx.tick(); openSwitcher() })
+        root.addView(navBar, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+            (NavBar.HEIGHT_DP * resources.displayMetrics.density).toInt(), android.view.Gravity.BOTTOM))
+        applyNavBar()
         tutorial = TutorialView(this, sfx, object : TutorialView.Actions {
             override fun setHome() = openHomeSettings()
             override fun appInfo() = openAppInfo()
@@ -446,8 +454,70 @@ class MainActivity : Activity() {
                 NexusNotifications.setMode(this, when (mode) { "content" -> "private"; "private" -> "off"; else -> "content" })
                 lockSettings()
             })
+            opts.add(NexusUi.Option("Send a test notification") { sendTestNotification() })
         }
         NexusUi.panel(this, "NEXUS lock screen", msg, opts, cancel = "Done")
+    }
+
+    /** Shows (or hides) the Back / Home / Recent buttons in the chosen order, and makes room for them. */
+    private fun applyNavBar() {
+        val o = NavBar.order(this)
+        val on = o != "off"
+        navBar.arrange(o)
+        navBar.visibility = if (on) android.view.View.VISIBLE else android.view.View.GONE
+        val inset = if (on) NavBar.HEIGHT_DP * resources.displayMetrics.density else 0f
+        hub.navInset = inset
+        drawer.setBottomInset(inset.toInt())
+        // Hidden during the start-up show, then they fade in
+        if (on && hub.booting) {
+            navBar.alpha = 0f
+            val check = object : Runnable { override fun run() {
+                if (isDestroyed) return
+                if (hub.booting) window.decorView.postDelayed(this, 250) else navBar.animate().alpha(1f).setDuration(400).start()
+            } }
+            window.decorView.postDelayed(check, 250)
+        } else navBar.alpha = 1f
+    }
+
+    /** A NEXUS notification to try the lock screen and status bar with. It arrives after 5 seconds. */
+    private fun sendTestNotification() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFY)
+            return
+        }
+        val nm = getSystemService(android.app.NotificationManager::class.java) ?: return
+        try {
+            nm.createNotificationChannel(android.app.NotificationChannel(NexusNotifications.TEST_CHANNEL, "NEXUS test notifications",
+                android.app.NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "A test notification, sent from NEXUS settings"
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+            })
+        } catch (_: Exception) {}
+        Toast.makeText(this, "A test notification arrives in 5 seconds. Turn your screen off now to see it on the NEXUS lock screen.", Toast.LENGTH_LONG).show()
+        val app = applicationContext
+        android.os.Handler(mainLooper).postDelayed({
+            try {
+                val open = android.app.PendingIntent.getActivity(app, 7, app.packageManager.getLaunchIntentForPackage(app.packageName),
+                    android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
+                val n = android.app.Notification.Builder(app, NexusNotifications.TEST_CHANNEL)
+                    .setSmallIcon(R.drawable.ic_stat_nexus)
+                    .setContentTitle("NEXUS test notification")
+                    .setContentText("This is how your notifications look on the NEXUS lock screen. Tap it to open NEXUS.")
+                    .setVisibility(android.app.Notification.VISIBILITY_PUBLIC)
+                    .setAutoCancel(true)
+                    .setContentIntent(open)
+                    .build()
+                app.getSystemService(android.app.NotificationManager::class.java)?.notify(4242, n)
+            } catch (_: Exception) {}
+        }, 5000)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_NOTIFY) return
+        if (grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) sendTestNotification()
+        else Toast.makeText(this, "NEXUS needs permission to send notifications for the test", Toast.LENGTH_SHORT).show()
     }
 
     /** Android's Notification access page for NEXUS (where it can be allowed or taken away). */
@@ -505,6 +575,9 @@ class MainActivity : Activity() {
                 else -> "OFF"
             }) { openAppsSettings() },
             NexusUi.Option("NEXUS lock screen:  " + (if (LockActivity.enabled(this)) "ON" else "OFF")) { lockSettings() },
+            NexusUi.Option("Navigation buttons:  " + NavBar.name(NavBar.order(this))) {
+                NavBar.setOrder(this, NavBar.next(NavBar.order(this))); applyNavBar(); homeSettings()
+            },
             NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
             NexusUi.Option("Tutorial") { showTutorial() },
             NexusUi.Option("Report a problem") { reportProblem() },
@@ -647,6 +720,7 @@ class MainActivity : Activity() {
         /** The "helper stopped" note is shown at most once each time NEXUS starts. */
         @Volatile private var helperWarned = false
         private const val REQ_HOME = 41
+        private const val REQ_NOTIFY = 42
     }
 
     private fun open(g: GameEntry) {

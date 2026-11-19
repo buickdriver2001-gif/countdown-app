@@ -45,6 +45,9 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
     private var builtKey = ""
     private var quiet = false
     private val grid = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding((14 * d).toInt(), 0, (14 * d).toInt(), (40 * d).toInt()) }
+
+    /** Room at the bottom for NEXUS's Back / Home / Recent buttons. */
+    fun setBottomInset(px: Int) { grid.setPadding((14 * d).toInt(), 0, (14 * d).toInt(), (40 * d).toInt() + px) }
     private val title = TextView(a)
     private val search = EditText(a)
     var isOpen = false

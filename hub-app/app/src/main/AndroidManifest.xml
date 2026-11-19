@@ -36,6 +36,8 @@
     <uses-permission android:name="com.gamehub.permission.CLOSE_APP" />
     <!-- Swipe down on NEXUS opens the notifications (when the helper isn't on) -->
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
+    <!-- Only for the test notification you can send from NEXUS settings -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- "Uninstall" when holding an app: opens Android's own uninstall confirmation -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 

@@ -615,6 +615,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         }
     }
 
+    /** Room left at the bottom for NEXUS's Back / Home / Recent buttons (0 when they're off). */
+    var navInset = 0f
+        set(v) { field = v; invalidate() }
+
     // Scrolling list state
     private var scroll = 0f
     private var scrollVel = 0f
@@ -666,7 +670,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
         // App tiles on a home-screen grid (scrollable)
         rows.clear()
-        listTop = h * 0.2f; listBottom = h - 76 * d
+        listTop = h * 0.2f; listBottom = h - 76 * d - navInset
         val gap = 10 * d
         val left = 18 * d; val right = w - 18 * d
         val cols = gridCols.coerceIn(2, 6)
@@ -801,8 +805,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         // Bottom bar: RECENT · ALL APPS
         val pw = min(142 * d, (w - 48 * d) / 2f); val gapB = 12 * d
         val bx0 = w / 2 - (pw * 2 + gapB) / 2
-        recentRect.set(bx0, h - 54 * d, bx0 + pw, h - 18 * d)
-        allAppsRect.set(bx0 + pw + gapB, h - 54 * d, bx0 + pw * 2 + gapB, h - 18 * d)
+        recentRect.set(bx0, h - 54 * d - navInset, bx0 + pw, h - 18 * d - navInset)
+        allAppsRect.set(bx0 + pw + gapB, h - 54 * d - navInset, bx0 + pw * 2 + gapB, h - 18 * d - navInset)
         systemRect.setEmpty()
         bottomPill(c, recentRect, "RECENT", 0, a)
         bottomPill(c, allAppsRect, "ALL APPS", 2, a)

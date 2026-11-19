@@ -97,9 +97,24 @@ class SwitcherActivity : Activity() {
         } catch (_: Exception) { false }
     }
 
+    /** A swiped-away app: the closing cube now, then back to Recent Apps (or home if none are left). */
+    fun closeSwipedNow() {
+        if (isFinishing) return
+        if (NexusAccessibility.closeNow(returnToSwitcher = true)) homeUnderCover()
+    }
+
+    /** The NEXUS home screen, underneath the closing cube (no animation: it isn't seen). */
+    private fun homeUnderCover() {
+        val i = packageManager.getLaunchIntentForPackage(packageName) ?: return
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION).putExtra("fromApp", true)
+        try { startActivity(i) } catch (_: Exception) {}
+        finish()
+        @Suppress("DEPRECATION") overridePendingTransition(0, 0)
+    }
+
     fun goNexus() {
-        // Apps you swiped away here get closed fully once the home screen shows
-        NexusAccessibility.closeWhenHome()
+        // Apps you swiped away here get closed fully: the closing cube comes up at once, NEXUS appears after
+        if (NexusAccessibility.closeNow(returnToSwitcher = false)) { homeUnderCover(); return }
         val i = packageManager.getLaunchIntentForPackage(packageName) ?: return
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         i.putExtra("fromApp", true)
@@ -568,6 +583,8 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
                                 card.flyV = max(1600f * d, -vy)
                                 sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
                                 if (!a.closeApp(card.pkg)) a.explainOnce()
+                                // Closed fully right away (the closing cube), then back here
+                                else if (card.pkg !in NexusAccessibility.OWN_APPS) postDelayed({ a.closeSwipedNow() }, 180)
                                 pos = pos.coerceAtMost((live().size - 1).coerceAtLeast(0).toFloat())
                             }
                         }

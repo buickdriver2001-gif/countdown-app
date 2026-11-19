@@ -62,7 +62,14 @@ class NexusAccessibility : AccessibilityService() {
          * closed fully are closed when it shows. (Not when NEXUS appears after unlocking, or for any other reason,
          * so it never gets in the way of an app you're opening, e.g. from a notification.)
          */
-        fun closeWhenHome() { instance?.closeArmedUntil = SystemClock.uptimeMillis() + 4000 }
+        fun closeWhenHome() { instance?.beginClose(returnToSwitcher = false) }
+
+        /**
+         * Close the waiting apps right now: the closing cube comes up at once (nothing of NEXUS shows first);
+         * afterwards it's back to NEXUS Recent Apps ([returnToSwitcher], if apps are left there) or the NEXUS
+         * home screen. Returns true if it started (the caller then heads to the NEXUS home screen underneath).
+         */
+        fun closeNow(returnToSwitcher: Boolean): Boolean = instance?.beginClose(returnToSwitcher) ?: false
 
         /** Is closing apps fully switched on (NEXUS settings → Recent apps)? */
         fun fullCloseOn(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("fullClose", true)
@@ -371,13 +378,13 @@ class NexusAccessibility : AccessibilityService() {
     /** Apps waiting to be closed fully. */
     private val toClose = LinkedHashSet<String>()
     private var closeAllPending = false
-    private class CloseJob(val pkgs: List<String>, val all: Boolean) {
+    private class CloseJob(val pkgs: List<String>, val all: Boolean, val toSwitcher: Boolean) {
         /** 1 opening the phone's recent apps, 2 closing, 3 going home. */
         var stage = 0; var tries = 0; var closed = 0; var recentsPkg = ""; var missed = 0
+        /** Where it's going back to: true NEXUS Recent Apps, false the home screen. */
+        var backToSwitcher = false
     }
     private var closeJob: CloseJob? = null
-    /** Until when arriving at the NEXUS home screen should close the waiting apps (see closeWhenHome). */
-    private var closeArmedUntil = 0L
 
     fun enqueueClose(pkgs: List<String>, all: Boolean): Boolean {
         if (!fullCloseOn(this) || Build.VERSION.SDK_INT < 26) return false
@@ -386,14 +393,15 @@ class NexusAccessibility : AccessibilityService() {
         return true
     }
 
-    private fun startClose() {
-        if (closeJob != null || (toClose.isEmpty() && !closeAllPending)) return
+    /** Step 0: the cube comes up at once (the caller is heading to the NEXUS home screen underneath it). */
+    fun beginClose(returnToSwitcher: Boolean): Boolean {
+        if (closeJob != null || (toClose.isEmpty() && !closeAllPending)) return false
         val pm = getSystemService(PowerManager::class.java)
         val km = getSystemService(KeyguardManager::class.java)
-        if (pm?.isInteractive != true || km?.isKeyguardLocked == true) return
-        val j = CloseJob(toClose.toList(), closeAllPending)
+        if (pm?.isInteractive != true || km?.isKeyguardLocked == true) return false
+        val j = CloseJob(toClose.toList(), closeAllPending, returnToSwitcher)
         toClose.clear(); closeAllPending = false
-        closeJob = j; j.stage = 1
+        closeJob = j; j.stage = 0
         LockTrace.log(this, "closing apps fully: " + if (j.all) "all" else j.pkgs.joinToString())
         // The cover comes up (fading in), and takes touches meanwhile so nothing underneath gets tapped by accident
         ensureCover(force = true)
@@ -405,10 +413,19 @@ class NexusAccessibility : AccessibilityService() {
         lp.alpha = 1f
         v.animate().cancel(); v.alpha = 1f; v.alpha = 0f
         try { getSystemService(android.view.WindowManager::class.java)?.updateViewLayout(v, lp) } catch (_: Throwable) {}
-        v.animate().alpha(1f).setDuration(200).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
-        h.postDelayed({ safe { if (closeJob === j && !askPhoneRecents()) endClose(j, "couldn't open the phone's recent apps", goHome = false) } }, 240)
+        v.animate().alpha(1f).setDuration(140).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+        // If the home screen was already in front (so no sign of it arriving), carry on anyway
+        h.postDelayed({ safe { if (closeJob === j && j.stage == 0) proceedToRecents(j) } }, 900)
         // Whatever happens, it never takes more than a few seconds
-        h.postDelayed({ safe { if (closeJob === j) endClose(j, "took too long", goHome = j.stage == 2) } }, 7000)
+        h.postDelayed({ safe { if (closeJob === j) endClose(j, "took too long", goHome = j.stage == 2) } }, 7500)
+        return true
+    }
+
+    /** Step 1: from the NEXUS home screen (under the cube), open the phone's own recent apps. */
+    private fun proceedToRecents(j: CloseJob) {
+        if (closeJob !== j || j.stage != 0) return
+        j.stage = 1
+        h.postDelayed({ safe { if (closeJob === j && !askPhoneRecents()) endClose(j, "couldn't open the phone's recent apps", goHome = false) } }, 260)
     }
 
     /** In the phone's recent apps: Clear all, or Close on each app's card in turn. */
@@ -497,10 +514,18 @@ class NexusAccessibility : AccessibilityService() {
 
     private fun goHomeAfterClose(j: CloseJob, why: String) {
         if (closeJob !== j) return
-        LockTrace.log(this, "  $why: back to NEXUS")
         cover?.peelAll()
         j.stage = 3
-        try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (_: Throwable) {}
+        val back = j.toSwitcher && Recents.list(this).isNotEmpty()
+        j.backToSwitcher = back
+        LockTrace.log(this, "  $why: back to NEXUS" + if (back) " Recent Apps" else "")
+        if (back) {
+            // Straight back into NEXUS Recent Apps (still under the cube)
+            try {
+                startActivity(Intent(this, SwitcherActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION))
+            } catch (_: Throwable) { try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (_: Throwable) {} }
+        } else try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (_: Throwable) {}
         h.postDelayed({ safe { if (closeJob === j) endClose(j, null, goHome = false) } }, 1500)
     }
 
@@ -518,7 +543,7 @@ class NexusAccessibility : AccessibilityService() {
         if (problem == "the screen turned off") return
         // Let the last icons finish falling, then the cover fades away (never more than a moment's wait)
         cover?.peelAll()
-        val wait = ((cover?.fallsEnd() ?: 0L) - SystemClock.uptimeMillis()).coerceIn(0L, 1100L)
+        val wait = ((cover?.fallsEnd() ?: 0L) - SystemClock.uptimeMillis()).coerceIn(0L, 700L)
         h.postDelayed({ safe { if (closeJob == null && cover?.closing == true) fadeCover() } }, wait)
     }
 
@@ -695,16 +720,17 @@ class NexusAccessibility : AccessibilityService() {
             // (not when the screen just went off and came back, and not via the square button's Recent Apps)
             // Back home at the end of closing apps fully: lower the cover, nothing else to do
             closeJob?.let { j ->
-                if (pkg == packageName && cls == MainActivity::class.java.name && j.stage == 3) {
-                    h.postDelayed({ safe { endClose(j, null, goHome = false) } }, 280)
+                if (pkg == packageName && cls == MainActivity::class.java.name) {
+                    // Under the cube: arrived at the NEXUS home screen (step 0: now open the phone's recent apps),
+                    // or back at the end (step 3: let the cube finish and fade)
+                    if (j.stage == 0) proceedToRecents(j)
+                    else if (j.stage == 3 && !j.backToSwitcher) h.postDelayed({ safe { endClose(j, null, goHome = false) } }, 280)
                     return
                 }
-            }
-            // The NEXUS home screen with apps waiting to be closed fully: do that now
-            if (pkg == packageName && cls == MainActivity::class.java.name && !phoneRecentsViaHome && closeJob == null &&
-                (toClose.isNotEmpty() || closeAllPending) && SystemClock.uptimeMillis() < closeArmedUntil) {
-                closeArmedUntil = 0L
-                h.postDelayed({ safe { startClose() } }, 380)
+                if (pkg == packageName && cls == SwitcherActivity::class.java.name && j.stage == 3 && j.backToSwitcher) {
+                    h.postDelayed({ safe { endClose(j, null, goHome = false) } }, 300)
+                    return
+                }
             }
             if (pkg == packageName && cls == MainActivity::class.java.name && phoneRecentsViaHome) {
                 // Only passing through the home screen on the way to the phone's own recent apps: nothing

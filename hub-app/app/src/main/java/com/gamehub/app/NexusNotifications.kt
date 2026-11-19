@@ -26,6 +26,9 @@ class NexusNotifications : NotificationListenerService() {
                val count: Int, val time: Long, val intent: PendingIntent?, val autoCancel: Boolean)
 
     companion object {
+        /** NEXUS's own test notification (Gear → NEXUS lock screen → Send a test notification). */
+        const val TEST_CHANNEL = "nexus_test"
+
         /** What the lock screen shows right now (newest first). */
         @Volatile var items: List<Item> = emptyList()
             private set
@@ -77,7 +80,7 @@ class NexusNotifications : NotificationListenerService() {
             // Status bar icons (home screen, phone unlocked): every app with a notification you'd be alerted to
             homeApps = all.filter { sbn ->
                 val n = sbn.notification
-                sbn.packageName != packageName && n != null &&
+                (sbn.packageName != packageName || n?.channelId == TEST_CHANNEL) && n != null &&
                     n.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_FOREGROUND_SERVICE) == 0 &&
                     (ranking == null || !ranking.getRanking(sbn.key, r) || r.importance >= NotificationManager.IMPORTANCE_DEFAULT)
             }.sortedByDescending { it.postTime }.map { it.packageName }.distinct()
@@ -90,7 +93,7 @@ class NexusNotifications : NotificationListenerService() {
             val byApp = LinkedHashMap<String, Acc>()
             for (sbn in all) {
                 val n = sbn.notification ?: continue
-                if (sbn.packageName == packageName) continue
+                if (sbn.packageName == packageName && n.channelId != TEST_CHANNEL) continue
                 if (n.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_FOREGROUND_SERVICE) != 0) continue
                 if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0 && sbn.groupKey in withChildren) continue
                 var vis = n.visibility
