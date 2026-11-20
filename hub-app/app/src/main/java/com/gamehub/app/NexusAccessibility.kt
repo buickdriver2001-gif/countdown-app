@@ -670,7 +670,10 @@ class NexusAccessibility : AccessibilityService() {
         if (e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = e.packageName?.toString() ?: return
         val cls = e.className?.toString() ?: ""
-        if (pkg != "com.android.systemui" && pkg != "android" && "inputmethod" !in pkg && "keyboard" !in pkg) frontPkg = pkg
+        // NEXUS's own pop-ups and overlays (its buttons, its cover) aren't a screen you've gone to: only its
+        // screens (activities) count, so showing the buttons never looks like you've left the app you're in
+        if (pkg == packageName && !cls.startsWith("$packageName.")) { queueButtons(); return }
+        if (pkg != "com.android.systemui" && pkg != "android" && "inputmethod" !in pkg && "keyboard" !in pkg) { frontPkg = pkg; frontCls = cls }
         queueButtons()
         // Another app put up a screen (alarm, timer, camera, call...): the wake-up cover must never hide it
         if (pkg != packageName && pkg != "com.android.systemui" && pkg != "android" && pkg !in homePkgs &&
@@ -811,6 +814,7 @@ class NexusAccessibility : AccessibilityService() {
     private val buttonsRun = Runnable { buttonsQueued = false; safe { updateButtons() } }
     /** The app whose screen is in front (NEXUS and the phone's own launcher included). */
     private var frontPkg: String? = null
+    private var frontCls = ""
     /** The phone's own button bar's window, once it's been checked to be the phone's (system) one. */
     private var navWindowId = -1
     private val barRect = android.graphics.Rect()
@@ -870,8 +874,10 @@ class NexusAccessibility : AccessibilityService() {
         if (closeJob != null || (coverLp?.alpha ?: 0f) > 0.5f) { queueButtons(200); return "NEXUS cover showing" }
         if (!threeButtonNav(this)) return "gesture navigation"
         if (now < buttonsPausedUntil) { if (buttonsPausedUntil != Long.MAX_VALUE) queueButtons(buttonsPausedUntil - now + 50); return "paused" }
+        // (Only its launcher or recent-apps screens: Settings, for one, also counts as a home app on many phones)
         val f = frontPkg
-        if (f != null && f != packageName && f in homePkgs) return "the phone's own launcher or recent apps is showing"
+        if (f != null && f != packageName && f in homePkgs && f != "com.android.settings" &&
+            LAUNCHER_WORDS.any { frontCls.contains(it, ignoreCase = true) }) return "the phone's own launcher or recent apps is showing"
         return null
     }
 
@@ -988,6 +994,8 @@ class NexusAccessibility : AccessibilityService() {
         if (takeOverRecents() && HomeMode.isOn(this) && HomeMode.isDefault(this) && !talkBackOn()) openNexusRecents("Recent button")
         else performGlobalAction(GLOBAL_ACTION_RECENTS)
     }
+
+    private val LAUNCHER_WORDS = listOf("launcher", "recents", "quickstep")
 
     /** Each kind of note once per helper start, so the log stays short. */
     private fun logButtons(what: String) { if (buttonsLogged.add(what)) LockTrace.log(this, "NEXUS buttons: $what") }
