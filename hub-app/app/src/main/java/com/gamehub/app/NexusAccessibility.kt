@@ -20,6 +20,7 @@ import java.io.FileOutputStream
  * NEXUS's helper service (turned on by the user in Accessibility settings). It:
  *  - keeps a small screenshot of the last screen of each app you use (stored only inside NEXUS)
  *  - notices when the phone's recent-apps screen opens (the square button) and shows NEXUS Recent Apps instead
+ *  - if switched on, shows NEXUS's Back / Home / Recent buttons in place of the phone's own while you use apps
  */
 class NexusAccessibility : AccessibilityService() {
 
@@ -71,6 +72,16 @@ class NexusAccessibility : AccessibilityService() {
          */
         fun closeNow(returnToSwitcher: Boolean): Boolean = instance?.beginClose(returnToSwitcher) ?: false
 
+        /** NEXUS's buttons in place of the phone's own while you use other apps (NEXUS settings). Off unless switched on. */
+        fun appButtonsOn(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("appButtons", false)
+        fun setAppButtons(c: Context, on: Boolean) {
+            c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit().putBoolean("appButtons", on).apply()
+            instance?.refreshAppButtons()
+        }
+        /** Is the phone set to 3-button navigation (not gestures)? */
+        fun threeButtonNav(c: Context): Boolean =
+            try { android.provider.Settings.Secure.getInt(c.contentResolver, "navigation_mode", 0) == 0 } catch (_: Exception) { true }
+
         /** Is closing apps fully switched on (NEXUS settings → Recent apps)? */
         fun fullCloseOn(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("fullClose", true)
 
@@ -99,6 +110,7 @@ class NexusAccessibility : AccessibilityService() {
     }
 
     private fun handleScreen(c: Context, i: Intent) {
+        if (i.action == Intent.ACTION_SCREEN_OFF) hideButtons("screen off") else queueButtons(0)
         if (i.action == Intent.ACTION_SCREEN_OFF) { leftByScreenOff = true; persistShot() }
         closeJob?.let { endClose(it, "the screen turned off", goHome = false) }
         val kmT = getSystemService(KeyguardManager::class.java)
@@ -332,6 +344,7 @@ class NexusAccessibility : AccessibilityService() {
         safe { getSharedPreferences("hub", MODE_PRIVATE).edit().remove("usecount").apply() }
         h.postDelayed(tick, 2000)
         safe { ensureCover() }
+        safe { setupAppButtons() }
         // Have names and icons ready for Recent Apps
         safe { AppCache.warm(this, Recents.list(this).map { it.first }) }
     }
@@ -340,6 +353,7 @@ class NexusAccessibility : AccessibilityService() {
         LockTrace.log(this, "helper stopped")
         try { unregisterReceiver(screenOn) } catch (_: Exception) {}
         dropCover()
+        dropButtons()
         instance = null
         running = false
         h.removeCallbacksAndMessages(null)
@@ -650,9 +664,14 @@ class NexusAccessibility : AccessibilityService() {
         else pkg != "com.android.systemui" && pkg != "android" && pkg !in homePkgs && "inputmethod" !in pkg && "keyboard" !in pkg
 
     private fun handleEvent(e: AccessibilityEvent?) {
-        if (e == null || e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        if (e == null) return
+        // Windows changed (e.g. the phone's own button bar showed or hid): NEXUS's buttons follow it
+        if (e.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) { queueButtons(); return }
+        if (e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = e.packageName?.toString() ?: return
         val cls = e.className?.toString() ?: ""
+        if (pkg != "com.android.systemui" && pkg != "android" && "inputmethod" !in pkg && "keyboard" !in pkg) frontPkg = pkg
+        queueButtons()
         // Another app put up a screen (alarm, timer, camera, call...): the wake-up cover must never hide it
         if (pkg != packageName && pkg != "com.android.systemui" && pkg != "android" && pkg !in homePkgs &&
             "inputmethod" !in pkg && "keyboard" !in pkg) {
@@ -676,33 +695,7 @@ class NexusAccessibility : AccessibilityService() {
             return
         }
         if (isRecents && takeOverRecents() && HomeMode.isOn(this) && HomeMode.isDefault(this) && !talkBackOn()) {
-            val now = SystemClock.uptimeMillis()
-            if (now - lastSwitcher > 800) {
-                lastSwitcher = now
-                // Cover the phone's own screen straight away. If you were in an app, the cover starts with that
-                // app's last picture filling the screen and shrinks it into its card over the NEXUS backdrop;
-                // NEXUS Recent Apps opens underneath with that card in the same spot, and the cover fades away.
-                // Never longer than a moment, and it never takes touches.
-                val from = current
-                val shot = if (from != null && from == Recents.list(this).firstOrNull()?.first) shotFor(from) else null
-                // That app is no longer on screen: don't let a scheduled picture catch this transition instead
-                current = null
-                ensureCover(force = true)
-                val v = cover
-                if (v != null) {
-                    v.showRecents(shot)
-                    // Switch the cover on once that first picture is drawn (so it never shows a stale frame)
-                    val token = ++coverToken
-                    v.postOnAnimation { v.postOnAnimation { if (token == coverToken) { addCover(); v.beginZoom() } } }
-                }
-                LockTrace.log(this, "square button: opening NEXUS Recent Apps")
-                armSafety(1100, "square button: cover lifted by the 1.1s fallback (Recent Apps was slow to appear)")
-                try {
-                    startActivity(Intent(this, SwitcherActivity::class.java)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                        .putExtra("fromSquare", true).putExtra("zoom", shot != null), SwitcherActivity.noIconSplash(this))
-                } catch (_: Exception) { removeCover() }
-            }
+            openNexusRecents("square button")
             return
         }
         if (isRealApp(pkg)) {
@@ -769,6 +762,239 @@ class NexusAccessibility : AccessibilityService() {
                 }
             }
         }
+    }
+
+    /**
+     * NEXUS Recent Apps over the app in front ([by]: the phone's square button, or NEXUS's own Recent button).
+     * The cover goes up straight away: if you were in an app, it starts with that app's last picture filling the
+     * screen and shrinks it into its card over the NEXUS backdrop; NEXUS Recent Apps opens underneath with that
+     * card in the same spot, and the cover fades away. Never longer than a moment, and it never takes touches.
+     */
+    private fun openNexusRecents(by: String) {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastSwitcher <= 800) return
+        lastSwitcher = now
+        val from = current
+        val shot = if (from != null && from == Recents.list(this).firstOrNull()?.first) shotFor(from) else null
+        // That app is no longer on screen: don't let a scheduled picture catch this transition instead
+        current = null
+        ensureCover(force = true)
+        val v = cover
+        if (v != null) {
+            v.showRecents(shot)
+            // Switch the cover on once that first picture is drawn (so it never shows a stale frame)
+            val token = ++coverToken
+            v.postOnAnimation { v.postOnAnimation { if (token == coverToken) { addCover(); v.beginZoom() } } }
+        }
+        LockTrace.log(this, "$by: opening NEXUS Recent Apps")
+        armSafety(1100, "$by: cover lifted by the 1.1s fallback (Recent Apps was slow to appear)")
+        try {
+            startActivity(Intent(this, SwitcherActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                .putExtra("fromSquare", true).putExtra("zoom", shot != null), SwitcherActivity.noIconSplash(this))
+        } catch (_: Exception) { removeCover() }
+    }
+
+    // ------------------------------------------------------------------ NEXUS buttons in your apps
+    // NEXUS settings → NEXUS buttons in all apps. NEXUS's Back / Home / Recent buttons sit exactly over the
+    // phone's own button bar while you use other apps, so the buttons look and work the same everywhere.
+    // They follow the phone's own bar: when it hides (full-screen videos and games), they hide too. They never
+    // show on the lock screen, with TalkBack, with gesture navigation, in landscape (where the phone's bar moves
+    // to the side), over the phone's own launcher, or over NEXUS's screens (which have their own).
+    // They only press Back, Home and Recent: they never read, type or tap anything in your apps.
+
+    private var appBar: NavBar? = null
+    private var appBarLp: android.view.WindowManager.LayoutParams? = null
+    private var appBarShown = false
+    private var buttonsOn = false
+    private var buttonsQueued = false
+    private val buttonsRun = Runnable { buttonsQueued = false; safe { updateButtons() } }
+    /** The app whose screen is in front (NEXUS and the phone's own launcher included). */
+    private var frontPkg: String? = null
+    /** The phone's own button bar's window, once it's been checked to be the phone's (system) one. */
+    private var navWindowId = -1
+    private val barRect = android.graphics.Rect()
+    private val toggleTimes = ArrayDeque<Long>()
+    private var buttonsPausedUntil = 0L
+    private var buttonsPauses = 0
+    private val buttonsLogged = HashSet<String>()
+    private var homeCheckedAt = 0L
+    private var homeOk = false
+
+    /** Picks up a change of setting (NEXUS settings → NEXUS buttons in all apps, or Navigation buttons). */
+    fun refreshAppButtons() { h.post { safe { setupAppButtons() } } }
+
+    private fun setupAppButtons() {
+        buttonsOn = appButtonsOn(this)
+        homeCheckedAt = 0L
+        // Window changes (the phone's bar showing or hiding) are only listened to while this is switched on
+        try {
+            val info = serviceInfo
+            if (info != null) {
+                val want = if (buttonsOn) info.eventTypes or AccessibilityEvent.TYPE_WINDOWS_CHANGED
+                           else info.eventTypes and AccessibilityEvent.TYPE_WINDOWS_CHANGED.inv()
+                if (want != info.eventTypes) { info.eventTypes = want; serviceInfo = info }
+            }
+        } catch (_: Exception) {}
+        if (buttonsOn) { appBar?.arrange(NavBar.order(this)); queueButtons(0) } else dropButtons()
+    }
+
+    /** Checks again shortly (many window changes in a row are handled together). */
+    private fun queueButtons(delay: Long = 30L) {
+        if (!buttonsOn || buttonsQueued) return
+        buttonsQueued = true
+        h.postDelayed(buttonsRun, delay)
+    }
+
+    private fun updateButtons() {
+        val why = buttonsBlocked() ?: run {
+            val bar = phoneBar()
+            if (bar != null) { showButtons(bar.first, bar.second); return }
+            "the phone's own buttons aren't on screen"
+        }
+        logButtons("hidden: $why")
+        hideButtons(why)
+    }
+
+    /** Why NEXUS's buttons shouldn't show right now (null = nothing stops them). */
+    private fun buttonsBlocked(): String? {
+        if (!buttonsOn) return "switched off"
+        if (NavBar.order(this) == "off") return "navigation buttons switched off"
+        val now = SystemClock.uptimeMillis()
+        if (now - homeCheckedAt > 3000) { homeOk = HomeMode.isOn(this) && HomeMode.isDefault(this); homeCheckedAt = now }
+        if (!homeOk) return "NEXUS isn't the home screen"
+        if (talkBackOn()) return "TalkBack is on"
+        if (getSystemService(PowerManager::class.java)?.isInteractive != true) return "screen off"
+        if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return "phone locked"
+        // NEXUS's cover (Recent Apps opening, closing apps) draws the buttons itself: look again once it's gone
+        if (closeJob != null || (coverLp?.alpha ?: 0f) > 0.5f) { queueButtons(200); return "NEXUS cover showing" }
+        if (!threeButtonNav(this)) return "gesture navigation"
+        if (now < buttonsPausedUntil) { if (buttonsPausedUntil != Long.MAX_VALUE) queueButtons(buttonsPausedUntil - now + 50); return "paused" }
+        val f = frontPkg
+        if (f != null && f != packageName && f in homePkgs) return "the phone's own launcher or recent apps is showing"
+        return null
+    }
+
+    /** The phone's own button bar, if it's on screen along the bottom: where it is, and whether the keyboard is open. */
+    private fun phoneBar(): Pair<android.graphics.Rect, Boolean>? {
+        val ws = try { windows } catch (_: Exception) { null } ?: return null
+        val size = screenSize() ?: return null
+        val d = resources.displayMetrics.density
+        var bar: android.graphics.Rect? = null
+        var ime = false
+        for (w in ws) {
+            when (w.type) {
+                android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD -> ime = true
+                android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM -> if (bar == null) {
+                    w.getBoundsInScreen(barRect)
+                    // Along the whole bottom edge, the height of a button bar
+                    if (barRect.bottom >= size.y - 2 && barRect.left <= 2 && barRect.right >= size.x - 2 &&
+                        barRect.height() >= (36 * d).toInt() && barRect.height() <= (80 * d).toInt()) {
+                        // ...and really the phone's own (system) bar, not some other app's strip along the bottom
+                        if (w.id == navWindowId || fromSystemUi(w)) { navWindowId = w.id; bar = android.graphics.Rect(barRect) }
+                        else logButtons("a bar-shaped window that isn't the phone's own was left alone")
+                    }
+                }
+            }
+        }
+        return bar?.let { it to ime }
+    }
+
+    private fun fromSystemUi(w: android.view.accessibility.AccessibilityWindowInfo): Boolean =
+        try { w.root?.packageName?.toString() == "com.android.systemui" } catch (_: Exception) { false }
+
+    private fun screenSize(): android.graphics.Point? = try {
+        val p = android.graphics.Point()
+        if (Build.VERSION.SDK_INT >= 30) {
+            val b = getSystemService(android.view.WindowManager::class.java)!!.maximumWindowMetrics.bounds
+            p.set(b.width(), b.height())
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(android.hardware.display.DisplayManager::class.java)!!.getDisplay(Display.DEFAULT_DISPLAY).getRealSize(p)
+        }
+        p
+    } catch (_: Exception) { null }
+
+    private fun showButtons(r: android.graphics.Rect, ime: Boolean) {
+        val wm = getSystemService(android.view.WindowManager::class.java) ?: return
+        NavBar.saveHeight(this, r.height())
+        val v0 = appBar; val lp0 = appBarLp
+        if (v0 == null || lp0 == null) {
+            val v = NavBar(this,
+                onBack = { safe { performGlobalAction(GLOBAL_ACTION_BACK) } },
+                onHome = { safe { performGlobalAction(GLOBAL_ACTION_HOME) } },
+                onRecent = { safe { recentButton() } })
+            v.solid = true; v.ime = ime
+            val lp = android.view.WindowManager.LayoutParams(r.width(), r.height(),
+                android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                android.graphics.PixelFormat.OPAQUE)
+            lp.gravity = android.view.Gravity.TOP or android.view.Gravity.LEFT
+            lp.x = r.left; lp.y = r.top
+            if (Build.VERSION.SDK_INT >= 28) lp.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            if (Build.VERSION.SDK_INT >= 30) lp.fitInsetsTypes = 0
+            lp.title = "NEXUS buttons"
+            try { wm.addView(v, lp) } catch (t: Throwable) { logButtons("couldn't be shown: " + t.javaClass.simpleName); return }
+            appBar = v; appBarLp = lp; appBarShown = true; noteToggle()
+            logButtons("shown over the phone's own buttons (" + r.width() + "x" + r.height() + ")")
+            return
+        }
+        v0.arrange(NavBar.order(this)); v0.ime = ime
+        val moved = lp0.x != r.left || lp0.y != r.top || lp0.width != r.width() || lp0.height != r.height()
+        if (appBarShown && !moved) return
+        lp0.x = r.left; lp0.y = r.top; lp0.width = r.width(); lp0.height = r.height()
+        lp0.flags = lp0.flags and android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        if (!appBarShown) { appBarShown = true; noteToggle() }
+        v0.visibility = android.view.View.VISIBLE
+        try { wm.updateViewLayout(v0, lp0) } catch (_: Throwable) {}
+    }
+
+    /** Out of the way: invisible and letting every touch through to the phone's own buttons. */
+    private fun hideButtons(@Suppress("UNUSED_PARAMETER") why: String) {
+        val v = appBar ?: return
+        val lp = appBarLp ?: return
+        if (!appBarShown) return
+        appBarShown = false; noteToggle()
+        v.visibility = android.view.View.GONE
+        lp.flags = lp.flags or android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        try { getSystemService(android.view.WindowManager::class.java)?.updateViewLayout(v, lp) } catch (_: Throwable) {}
+    }
+
+    private fun dropButtons() {
+        val v = appBar ?: return
+        appBar = null; appBarLp = null; appBarShown = false
+        try { getSystemService(android.view.WindowManager::class.java)?.removeView(v) } catch (_: Throwable) {}
+    }
+
+    /** Safety: if the buttons ever keep flicking on and off, they step aside for a while (the phone's own show). */
+    private fun noteToggle() {
+        val now = SystemClock.uptimeMillis()
+        toggleTimes.addLast(now)
+        while (toggleTimes.isNotEmpty() && now - toggleTimes.first() > 4000) toggleTimes.removeFirst()
+        if (toggleTimes.size > 12) {
+            toggleTimes.clear()
+            // The first time for 15 seconds; if it happens again, until the helper next starts
+            buttonsPauses++
+            buttonsPausedUntil = if (buttonsPauses >= 2) Long.MAX_VALUE else now + 15000
+            LockTrace.log(this, "NEXUS buttons: kept switching on and off, so they stepped aside " +
+                (if (buttonsPauses >= 2) "until the helper restarts" else "for 15s") + " (the phone's own buttons show meanwhile)")
+            h.post { safe { hideButtons("paused") } }
+        }
+    }
+
+    /** NEXUS's Recent button over an app: NEXUS Recent Apps (or the phone's own, if that's what's set). */
+    private fun recentButton() {
+        if (takeOverRecents() && HomeMode.isOn(this) && HomeMode.isDefault(this) && !talkBackOn()) openNexusRecents("Recent button")
+        else performGlobalAction(GLOBAL_ACTION_RECENTS)
+    }
+
+    /** Each kind of note once per helper start, so the log stays short. */
+    private fun logButtons(what: String) { if (buttonsLogged.add(what)) LockTrace.log(this, "NEXUS buttons: $what") }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        safe { queueButtons(60) }
     }
 
     /** One of our own apps about to be closed (cancelled if you go straight back into it). */

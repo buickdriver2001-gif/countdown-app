@@ -52,20 +52,24 @@ class LockActivity : Activity() {
         LockTrace.log(this, "  lock screen created")
         if (android.os.Build.VERSION.SDK_INT >= 27) setShowWhenLocked(true)
         else @Suppress("DEPRECATION") window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
+        // Full screen from the very first frame: the lock screen always fills the whole screen (camera cut-out
+        // included) and the phone's status bar and buttons are hidden before it's ever drawn. So nothing shows
+        // and then disappears, and nothing moves (it used to start smaller, under the bars, then jump down
+        // when they went away).
+        if (android.os.Build.VERSION.SDK_INT >= 28) window.attributes = window.attributes.apply {
+            layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 30) window.setDecorFitsSystemWindows(false)
         view = LockView(this)
         setContentView(view)
-        if (android.os.Build.VERSION.SDK_INT >= 30) window.decorView.post {
-            try {
-                window.insetsController?.hide(android.view.WindowInsets.Type.systemBars())
-                window.insetsController?.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            } catch (_: Exception) {}
-        }
+        hideBars()
         val f = IntentFilter(Intent.ACTION_USER_PRESENT)
         if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(unlocked, f, Context.RECEIVER_NOT_EXPORTED) else registerReceiver(unlocked, f)
     }
 
     override fun onResume() {
         super.onResume()
+        hideBars()
         LockTrace.log(this, "  lock screen in front: phoneLocked=" + getSystemService(KeyguardManager::class.java)?.isKeyguardLocked +
             " screenOn=" + getSystemService(android.os.PowerManager::class.java)?.isInteractive)
         // While the screen is off the phone may take a moment to lock: stay ready rather than closing early
@@ -84,7 +88,25 @@ class LockActivity : Activity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         LockTrace.log(this, "  lock screen focus=" + hasFocus)
-        if (hasFocus) stillNeeded()
+        if (hasFocus) { hideBars(); stillNeeded() }
+    }
+
+    /** No status bar and no phone buttons on the lock screen (a swipe from the edge still peeks at them). */
+    private fun hideBars() {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                window.insetsController?.let {
+                    it.hide(android.view.WindowInsets.Type.systemBars())
+                    it.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                    android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN or
+                    android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                    android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            }
+        } catch (_: Exception) {}
     }
 
     /**

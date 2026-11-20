@@ -187,7 +187,7 @@ class MainActivity : Activity() {
             onHome = { sfx.tick(); goHome(onScreen = true) },
             onRecent = { sfx.tick(); openSwitcher() })
         root.addView(navBar, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-            (NavBar.HEIGHT_DP * resources.displayMetrics.density).toInt(), android.view.Gravity.BOTTOM))
+            NavBar.heightPx(this), android.view.Gravity.BOTTOM))
         applyNavBar()
         tutorial = TutorialView(this, sfx, object : TutorialView.Actions {
             override fun setHome() = openHomeSettings()
@@ -204,7 +204,7 @@ class MainActivity : Activity() {
         try { getSystemService(android.content.pm.LauncherApps::class.java)?.registerCallback(appsChanged, android.os.Handler(mainLooper)) } catch (_: Exception) {}
         // Full screen: no status bar, no navigation buttons (swipe from an edge to peek at them)
         if (android.os.Build.VERSION.SDK_INT >= 28) window.attributes.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-        window.decorView.post { hideBars() }
+        hideBars()
         val fromApp = intent?.getBooleanExtra("fromApp", false) == true
         val newBoot = firstStartSincePhoneOn()
         if (fromApp) { hub.skipIntro(); leftForApp = true }
@@ -470,7 +470,10 @@ class MainActivity : Activity() {
         val on = o != "off"
         navBar.arrange(o)
         navBar.visibility = if (on) android.view.View.VISIBLE else android.view.View.GONE
-        val inset = if (on) NavBar.HEIGHT_DP * resources.displayMetrics.density else 0f
+        // Same height as the phone's own button bar, so the buttons sit in the same place here and in your apps
+        val px = NavBar.heightPx(this)
+        if (navBar.layoutParams.height != px) navBar.layoutParams = navBar.layoutParams.apply { height = px }
+        val inset = if (on) px.toFloat() else 0f
         hub.navInset = inset
         drawer.setBottomInset(inset.toInt())
         // Hidden during the start-up show, then they fade in
@@ -581,18 +584,38 @@ class MainActivity : Activity() {
             }) { openAppsSettings() },
             NexusUi.Option("NEXUS lock screen:  " + (if (LockActivity.enabled(this)) "ON" else "OFF")) { lockSettings() },
             NexusUi.Option("Navigation buttons:  " + NavBar.name(NavBar.order(this))) {
-                NavBar.setOrder(this, NavBar.next(NavBar.order(this))); applyNavBar(); homeSettings()
+                NavBar.setOrder(this, NavBar.next(NavBar.order(this))); applyNavBar()
+                NexusAccessibility.instance?.refreshAppButtons(); homeSettings()
             },
+            NexusUi.Option("NEXUS buttons in all apps:  " + (if (NexusAccessibility.appButtonsOn(this)) "ON" else "OFF")) { toggleAppButtons() },
             NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
             NexusUi.Option("Tutorial") { showTutorial() },
             NexusUi.Option("Report a problem") { reportProblem() },
             NexusUi.Option("How it works") {
                 NexusUi.panel(this, "How it works",
-                    "• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on. Pressing Home on NEXUS closes anything open and goes back to the top.\n• Close NEXUS (here) and Home goes to your normal home screen.\n• Open NEXUS from its icon to make it your home again.\n• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n• Hold an app to see its shortcuts (like New incognito tab), App info and Uninstall. Hold and drag to move it.\n• Swipe down on the list to see your notifications.\n• Tap RECENT (or press the square button, once the helper is on) for your recent apps. Swipe an app up to close it. Android only lets the phone's own recent apps screen fully close apps, so when you get back to the NEXUS home screen, NEXUS briefly opens it behind a CLOSING APPS screen and presses Close for you (switch this off under Recent apps).\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.",
+                    "• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on. Pressing Home on NEXUS closes anything open and goes back to the top.\n• Close NEXUS (here) and Home goes to your normal home screen.\n• Open NEXUS from its icon to make it your home again.\n• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n• Hold an app to see its shortcuts (like New incognito tab), App info and Uninstall. Hold and drag to move it.\n• Swipe down on the list to see your notifications.\n• NEXUS buttons in all apps (here in settings): NEXUS's Back, Home and Recent buttons take the place of the phone's own while you use your apps. They step aside for full-screen videos and games, the lock screen and TalkBack, and work with the phone's 3-button navigation.\n• Tap RECENT (or press the square button, once the helper is on) for your recent apps. Swipe an app up to close it. Android only lets the phone's own recent apps screen fully close apps, so when you get back to the NEXUS home screen, NEXUS briefly opens it behind a CLOSING APPS screen and presses Close for you (switch this off under Recent apps).\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.",
                     emptyList(), cancel = "OK")
             },
             NexusUi.Option("Close NEXUS", danger = true) { askClose() }
         ), cancel = "Done")
+    }
+
+    /** NEXUS buttons in all apps: on or off. It needs the helper, and the phone's 3-button navigation. */
+    private fun toggleAppButtons() {
+        if (NexusAccessibility.appButtonsOn(this)) { NexusAccessibility.setAppButtons(this, false); homeSettings(); return }
+        if (!Recents.serviceOn(this) || !helperRunning()) {
+            NexusUi.panel(this, "NEXUS buttons in all apps",
+                "This uses NEXUS's helper (the one behind Recent Apps). Turn the helper on first, then switch this on here.",
+                listOf(NexusUi.Option("Turn on helper", primary = true) { openAccessibility() }), cancel = "Not now")
+            return
+        }
+        if (NavBar.order(this) == "off") { NavBar.setOrder(this, "brh"); applyNavBar() }
+        NexusAccessibility.setAppButtons(this, true)
+        Toast.makeText(this,
+            if (NexusAccessibility.threeButtonNav(this)) "NEXUS's buttons now take the place of the phone's in your apps"
+            else "Your phone uses gesture navigation: NEXUS's buttons appear in your apps once it's set to 3-button navigation (in the phone's Settings, search \"navigation\")",
+            Toast.LENGTH_LONG).show()
+        homeSettings()
     }
 
     private fun hideBars() {
@@ -694,6 +717,8 @@ class MainActivity : Activity() {
         loadCountdown()
         leftForApp = false
         hideBars()
+        // The helper may have measured the phone's own button bar since: match it
+        if (::navBar.isInitialized && navBar.visibility == android.view.View.VISIBLE && navBar.layoutParams.height != NavBar.heightPx(this)) applyNavBar()
         // If Android has stopped the helper, the NEXUS lock screen and Recent Apps can't work: say so, once
         window.decorView.removeCallbacks(checkHelper)
         window.decorView.postDelayed(checkHelper, 2500)
@@ -718,6 +743,18 @@ class MainActivity : Activity() {
                 "Android has stopped NEXUS's helper, so the NEXUS lock screen and Recent Apps can't show until it's back on.\n\n" +
                     "Tap Fix it, choose NEXUS Recent Apps, switch it off and back on, and tap Allow.",
                 listOf(NexusUi.Option("Fix it", primary = true) { openAccessibility() }), cancel = "Not now")
+        } else if (!prefs.getBoolean("appButtonsOffered", false) && !NexusAccessibility.appButtonsOn(this) && helperRunning() &&
+            HomeMode.isDefault(this) && NexusAccessibility.threeButtonNav(this) && NavBar.order(this) != "off" &&
+            !hub.booting && tutorial.visibility != android.view.View.VISIBLE) {
+            // New: offered once (it's up to you; it can be changed any time in NEXUS settings)
+            prefs.edit().putBoolean("appButtonsOffered", true).apply()
+            NexusUi.panel(this, "NEXUS buttons in your apps",
+                "NEXUS's Back, Home and Recent buttons can take the place of the phone's own while you use any app, so they look the same everywhere.\n\n" +
+                    "They step aside for full-screen videos and games, the lock screen and TalkBack. You can change this any time in NEXUS settings.",
+                listOf(NexusUi.Option("Turn on", primary = true) {
+                    NexusAccessibility.setAppButtons(this, true)
+                    Toast.makeText(this, "NEXUS's buttons now take the place of the phone's in your apps", Toast.LENGTH_SHORT).show()
+                }), cancel = "Not now")
         }
     }
 

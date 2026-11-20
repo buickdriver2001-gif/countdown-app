@@ -92,7 +92,7 @@ class CoverView(c: Context) : FrameLayout(c) {
             canvas.drawBitmap(b, 0f, 0f, null)
             // Recent Apps opening: its Back / Home / Recent buttons are already in place
             if (card.visibility == VISIBLE || label == null && closeCube.visibility != VISIBLE)
-                NavBar.drawPicture(canvas, width.toFloat(), height.toFloat(), NavBar.order(context), d)
+                NavBar.drawPicture(canvas, width.toFloat(), height.toFloat(), NavBar.order(context), d, NavBar.heightPx(context).toFloat())
             label?.let { labelPaint.textSize = 15 * d; canvas.drawText(it, width / 2f, height * 0.47f, labelPaint) }
         }
     }

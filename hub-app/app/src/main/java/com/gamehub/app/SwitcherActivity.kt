@@ -65,8 +65,8 @@ class SwitcherActivity : Activity() {
                 onHome = { sfx.tick(); goNexus() },
                 onRecent = { view.openCentered() })
             root.addView(nav, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                (NavBar.HEIGHT_DP * resources.displayMetrics.density).toInt(), android.view.Gravity.BOTTOM))
-            view.navInset = NavBar.HEIGHT_DP * resources.displayMetrics.density
+                NavBar.heightPx(this), android.view.Gravity.BOTTOM))
+            view.navInset = NavBar.heightPx(this).toFloat()
         }
         setContentView(root)
         if (android.os.Build.VERSION.SDK_INT >= 30) window.decorView.post {

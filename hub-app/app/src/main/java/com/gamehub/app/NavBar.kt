@@ -13,6 +13,8 @@ import android.widget.LinearLayout
 /**
  * Back, Home and Recent apps buttons along the bottom of NEXUS (NEXUS hides the phone's own bar for its
  * full-screen look). The order can be swapped like on most phones: NEXUS settings → Navigation buttons.
+ * The same buttons can also take the place of the phone's own while you use other apps
+ * (NEXUS settings → NEXUS buttons in all apps; shown by the helper, see NexusAccessibility).
  */
 class NavBar(c: Context, private val onBack: () -> Unit, private val onHome: () -> Unit, private val onRecent: () -> Unit) : LinearLayout(c) {
 
@@ -24,6 +26,20 @@ class NavBar(c: Context, private val onBack: () -> Unit, private val onHome: () 
         fun name(o: String) = when (o) { "brh" -> "Back · Home · Recent"; "rhb" -> "Recent · Home · Back"; else -> "Off" }
         fun next(o: String) = when (o) { "brh" -> "rhb"; "rhb" -> "off"; else -> "brh" }
 
+        /**
+         * How tall the buttons are: exactly the phone's own button bar once the helper has measured it (so they
+         * sit in the same place in NEXUS and in your apps), otherwise the standard 46dp.
+         */
+        fun heightPx(c: Context): Int {
+            val d = c.resources.displayMetrics.density
+            val saved = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getInt("navPx", 0)
+            return if (saved >= (36 * d).toInt() && saved <= (80 * d).toInt()) saved else (HEIGHT_DP * d).toInt()
+        }
+        fun saveHeight(c: Context, px: Int) {
+            val p = c.getSharedPreferences("hub", Context.MODE_PRIVATE)
+            if (p.getInt("navPx", 0) != px) p.edit().putInt("navPx", px).apply()
+        }
+
         private val sPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val sLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeJoin = Paint.Join.ROUND; strokeCap = Paint.Cap.ROUND }
         private val sTri = Path()
@@ -32,9 +48,9 @@ class NavBar(c: Context, private val onBack: () -> Unit, private val onHome: () 
          * Draws the buttons (as a picture) along the bottom of [c], exactly where the real ones sit: used on the
          * cover while Recent Apps opens, so the buttons stay put instead of disappearing for a moment.
          */
-        fun drawPicture(c: Canvas, w: Float, h: Float, order: String, d: Float) {
+        fun drawPicture(c: Canvas, w: Float, h: Float, order: String, d: Float, bh: Float = HEIGHT_DP * d) {
             if (order == "off") return
-            val bh = HEIGHT_DP * d; val top = h - bh
+            val top = h - bh
             sPaint.color = Color.argb(120, 4, 8, 22); c.drawRect(0f, top, w, h, sPaint)
             sPaint.color = Color.argb(60, 140, 190, 255); c.drawRect(0f, top, w, top + 1f * d, sPaint)
             sLine.strokeWidth = 1.8f * d; sLine.color = Color.argb(200, 200, 222, 255)
@@ -52,6 +68,12 @@ class NavBar(c: Context, private val onBack: () -> Unit, private val onHome: () 
                     tri.moveTo(cx + 6 * d, cy - 7 * d); tri.lineTo(cx - 6 * d, cy); tri.lineTo(cx + 6 * d, cy + 7 * d); tri.close()
                     c.drawPath(tri, line)
                 }
+                'v' -> {
+                    // Back while the keyboard is open: a down arrow (it closes the keyboard), as on the phone's own bar
+                    tri.reset()
+                    tri.moveTo(cx - 7 * d, cy - 3.5f * d); tri.lineTo(cx, cy + 3.5f * d); tri.lineTo(cx + 7 * d, cy - 3.5f * d)
+                    c.drawPath(tri, line)
+                }
                 'h' -> c.drawCircle(cx, cy, 7.5f * d, line)
                 else -> c.drawRoundRect(cx - 6.5f * d, cy - 6.5f * d, cx + 6.5f * d, cy + 6.5f * d, 2 * d, 2 * d, line)
             }
@@ -61,6 +83,12 @@ class NavBar(c: Context, private val onBack: () -> Unit, private val onHome: () 
     private val d = resources.displayMetrics.density
     private val strip = Paint(Paint.ANTI_ALIAS_FLAG)
     private var current = ""
+    /** Over other apps: a solid bar, so the phone's own buttons underneath don't show through. */
+    var solid = false
+        set(v) { if (field != v) { field = v; invalidate() } }
+    /** The keyboard is open: Back shows as a down arrow. */
+    var ime = false
+        set(v) { if (field != v) { field = v; for (i in 0 until childCount) getChildAt(i).invalidate() } }
 
     init {
         orientation = HORIZONTAL
@@ -82,7 +110,7 @@ class NavBar(c: Context, private val onBack: () -> Unit, private val onHome: () 
 
     override fun onDraw(c: Canvas) {
         // A faint glass strip with a fine glowing line on top, in the NEXUS style
-        strip.color = Color.argb(120, 4, 8, 22)
+        strip.color = if (solid) Color.rgb(5, 9, 24) else Color.argb(120, 4, 8, 22)
         c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), strip)
         strip.color = Color.argb(60, 140, 190, 255)
         c.drawRect(0f, 0f, width.toFloat(), 1f * d, strip)
@@ -97,6 +125,7 @@ class NavBar(c: Context, private val onBack: () -> Unit, private val onHome: () 
         init {
             isClickable = true; isFocusable = true
             contentDescription = when (key) { 'b' -> "Back"; 'h' -> "Home"; else -> "Recent apps" }
+            isSoundEffectsEnabled = false
             setOnClickListener {
                 performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                 when (key) { 'b' -> onBack(); 'h' -> onHome(); else -> onRecent() }
@@ -109,7 +138,7 @@ class NavBar(c: Context, private val onBack: () -> Unit, private val onHome: () 
             val cx = width / 2f; val cy = height / 2f
             if (isPressed) { glow.color = Color.argb(70, 90, 150, 255); c.drawCircle(cx, cy, 20 * d, glow) }
             line.color = Color.argb(if (isPressed) 255 else 200, 200, 222, 255)
-            glyph(c, key, cx, cy, d, line, tri)
+            glyph(c, if (key == 'b' && ime) 'v' else key, cx, cy, d, line, tri)
         }
     }
 }
