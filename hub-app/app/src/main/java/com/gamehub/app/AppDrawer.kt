@@ -127,6 +127,8 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
     }
 
     private var loadedAt = 0L
+    /** The icon that was just tapped (so the app can open out of it). */
+    var lastTapped: View? = null
     /** Each load gets a number, so a slow older load can never overwrite a newer one. */
     private var loadGen = 0
     /** Goes up whenever a fresh list arrives (names or icons may have changed even if the count didn't). */
@@ -348,7 +350,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
                 if (!picked.add(item.pkg)) picked.remove(item.pkg)
                 updateBar(); refreshCell(item.pkg)
                 box.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
-            } else { sfx.confirm(); onOpen(item) }
+            } else { sfx.confirm(); lastTapped = box; onOpen(item) }
         }
         box.setOnLongClickListener {
             sfx.tick()

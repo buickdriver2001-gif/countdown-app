@@ -748,6 +748,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         for (hi in 0..games.size) hitPool[hi].setEmpty()
         c.save()
         c.clipRect(0f, listTop - 8 * d, w, listBottom + 8 * d)
+        if (settle > 0f) {
+            settle = (settle - dt / 0.42f).coerceAtLeast(0f)
+            val k = settle * settle
+            c.scale(1f + 0.06f * k, 1f + 0.06f * k, w / 2, (listTop + listBottom) / 2)
+        }
         for (oi in order.indices) {
             val idx = order[oi]
             val p = pos[oi]
@@ -910,19 +915,46 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private val conn by lazy { context.getSystemService(android.net.ConnectivityManager::class.java) }
     private val tel by lazy { context.getSystemService(android.telephony.TelephonyManager::class.java) }
     private val statusIcon = RectF()
+    private val boltPath = android.graphics.Path()
+
+    /** The battery's level, and whether it's plugged in / charging (counts even if the phone pauses charging at 80%). */
+    private fun readBattery(i: android.content.Intent) {
+        val lvl = i.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1); val sc = i.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100)
+        batLevel = if (lvl >= 0 && sc > 0) lvl * 100 / sc else -1
+        val st = i.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+        val plugged = i.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) != 0
+        batCharging = plugged || st == android.os.BatteryManager.BATTERY_STATUS_CHARGING || st == android.os.BatteryManager.BATTERY_STATUS_FULL
+    }
+
+    /** Plugging in or unplugging shows at once (not on the next check a few seconds later). */
+    private val batteryWatch = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: android.content.Context, i: android.content.Intent) {
+            try { if (i.action == android.content.Intent.ACTION_BATTERY_CHANGED) readBattery(i) else statusAt = 0L } catch (_: Exception) {}
+            invalidate()
+        }
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        try {
+            val f = android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED).apply {
+                addAction(android.content.Intent.ACTION_POWER_CONNECTED); addAction(android.content.Intent.ACTION_POWER_DISCONNECTED)
+            }
+            context.registerReceiver(batteryWatch, f)?.let { readBattery(it) }
+        } catch (_: Exception) {}
+    }
+
+    override fun onDetachedFromWindow() {
+        try { context.unregisterReceiver(batteryWatch) } catch (_: Exception) {}
+        super.onDetachedFromWindow()
+    }
 
     private fun readStatus() {
         val now = android.os.SystemClock.uptimeMillis()
         if (now - statusAt < 3000L && statusAt != 0L) return
         statusAt = now
         try {
-            val i = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
-            if (i != null) {
-                val lvl = i.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1); val sc = i.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100)
-                batLevel = if (lvl >= 0 && sc > 0) lvl * 100 / sc else -1
-                val st = i.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
-                batCharging = st == android.os.BatteryManager.BATTERY_STATUS_CHARGING || st == android.os.BatteryManager.BATTERY_STATUS_FULL
-            }
+            context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))?.let { readBattery(it) }
         } catch (_: Exception) {}
         try {
             val caps = conn?.let { cm -> cm.activeNetwork?.let { cm.getNetworkCapabilities(it) } }
@@ -971,6 +1003,16 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             }
             val inner = (bw - 2 * d - 3 * d) * batLevel / 100f
             c.drawRect(x - bw + 1.5f * d, top + 1.5f * d, x - bw + 1.5f * d + inner, top + bh - 1.5f * d, fill)
+            if (batCharging) {
+                // Charging: a lightning bolt in the battery
+                val bx = x - bw / 2 - 1 * d; val by = top + bh / 2
+                boltPath.reset()
+                boltPath.moveTo(bx + 1.2f * d, by - 5.4f * d); boltPath.lineTo(bx - 2.6f * d, by + 0.6f * d); boltPath.lineTo(bx - 0.2f * d, by + 0.6f * d)
+                boltPath.lineTo(bx - 1.2f * d, by + 5.4f * d); boltPath.lineTo(bx + 2.6f * d, by - 0.6f * d); boltPath.lineTo(bx + 0.2f * d, by - 0.6f * d); boltPath.close()
+                fill.color = Color.argb((255 * a).toInt(), 255, 255, 255)
+                line.color = Color.argb((230 * a).toInt(), 4, 10, 26); line.strokeWidth = 1.2f * d
+                c.drawPath(boltPath, line); c.drawPath(boltPath, fill)
+            }
             x -= bw + 9 * d
         }
         // Signal: Wi-Fi fan, or mobile bars; dimmed with a slash when there's no connection
@@ -1687,7 +1729,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                             sfx.confirm()
                             performHapticFeedback(if (android.os.Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.CONFIRM else android.view.HapticFeedbackConstants.VIRTUAL_KEY)
                             if (r == games.size) onAdd()
-                            else { pending = games[r]; launchFlash = LAUNCH_LEN }
+                            else { pending = games[r]; launchFlash = LAUNCH_LEN; rows.getOrNull(r)?.let { launchRect.set(it) } }
                         }
                         performClick()
                     } else if (r < 0) selected = -1
@@ -1711,8 +1753,13 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     /** Called when the screen comes back (e.g. after closing a game). */
     fun resumed(fromApp: Boolean) {
         lastNs = 0L; launchFlash = 0f; pending = null
-        if (fromApp) enterFade = ENTER_LEN
+        if (fromApp) { enterFade = ENTER_LEN; settle = 1f }
     }
+
+    /** Coming back from an app: the tiles start a touch larger and settle into place (1 → 0). */
+    private var settle = 0f
+    /** Where the tile that was just opened is (for the app to grow out of it). */
+    val launchRect = RectF()
 
     /** Tile tap → the screen settles into the dark (then the app rises out of it). */
     private val LAUNCH_LEN = 0.34f
