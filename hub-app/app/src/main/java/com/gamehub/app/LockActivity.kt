@@ -61,7 +61,9 @@ class LockActivity : Activity() {
         }
         if (android.os.Build.VERSION.SDK_INT >= 30) window.setDecorFitsSystemWindows(false)
         view = LockView(this)
-        setContentView(view)
+        // A black layer on top, see-through until the lock screen is left alone (then it fades it out)
+        shade = View(this).apply { setBackgroundColor(Color.BLACK); alpha = 0f }
+        setContentView(android.widget.FrameLayout(this).apply { addView(view); addView(shade) })
         hideBars()
         val f = IntentFilter(Intent.ACTION_USER_PRESENT)
         if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(unlocked, f, Context.RECEIVER_NOT_EXPORTED) else registerReceiver(unlocked, f)
@@ -75,6 +77,10 @@ class LockActivity : Activity() {
         // While the screen is off the phone may take a moment to lock: stay ready rather than closing early
         if (!stillNeeded()) return
         showing = true
+        // Left alone, it fades out and the screen turns off (a fresh count each time it comes on)
+        resetShade()
+        lastUse = android.os.SystemClock.uptimeMillis(); seenItems = NexusNotifications.items; sleepFailed = false
+        view.removeCallbacks(idleCheck); view.postDelayed(idleCheck, 250)
         NexusNotifications.refresh()
         view.restart()
         // The screen is on: hand the wake-up cover a picture of this lock screen right away, so it shows
@@ -125,8 +131,14 @@ class LockActivity : Activity() {
         return true
     }
 
+    override fun onPause() {
+        super.onPause()
+        view.removeCallbacks(idleCheck)
+    }
+
     override fun onStop() {
         super.onStop()
+        resetShade()
         showing = false
         LockTrace.log(this, "  lock screen hidden")
     }
@@ -137,6 +149,66 @@ class LockActivity : Activity() {
         try { unregisterReceiver(unlocked) } catch (_: Exception) {}
         super.onDestroy()
     }
+
+    // ---- Left alone: fade out and turn the screen off, like the phone's own lock screen does. (Shown over the
+    // phone's lock screen, the NEXUS lock screen would otherwise stay on for the phone's full screen timeout.)
+    // Only while it's really being looked at: lit, in front, and not in the middle of unlocking or opening a
+    // notification. Any touch or button press, or a new notification, starts the count again.
+
+    private lateinit var shade: View
+    private var lastUse = 0L
+    private var fading = false
+    /** Turning the screen off didn't work (helper not running): don't keep trying until it's touched again. */
+    private var sleepFailed = false
+    private var seenItems: Any? = null
+    private val idleCheck = object : Runnable {
+        override fun run() { try { checkIdle() } catch (_: Exception) {}; view.postDelayed(this, 250) }
+    }
+
+    private fun checkIdle() {
+        val now = android.os.SystemClock.uptimeMillis()
+        val items = NexusNotifications.items
+        if (items !== seenItems) { seenItems = items; lastUse = now; if (fading) unfade() }
+        val timeout = offAfterSec(this) * 1000L
+        if (timeout <= 0 || sleepFailed || !watching()) { lastUse = now; if (fading) unfade(); return }
+        if (!fading && now - lastUse >= timeout - FADE_MS) {
+            fading = true
+            shade.animate().cancel()
+            shade.animate().alpha(1f).setDuration(FADE_MS).setInterpolator(android.view.animation.AccelerateDecelerateInterpolator())
+                .withEndAction { if (fading) sleepNow() }.start()
+        }
+    }
+
+    /** Is the lock screen lit, in front and simply being looked at? */
+    private fun watching(): Boolean =
+        showing && !isFinishing && !unlockAsked && pendingOpen == null && hasWindowFocus() &&
+            getSystemService(android.os.PowerManager::class.java)?.isInteractive == true &&
+            window.decorView.display?.state == android.view.Display.STATE_ON
+
+    private fun sleepNow() {
+        if (!watching()) { unfade(); return }
+        if (NexusAccessibility.instance?.sleepScreen() == true) {
+            LockTrace.log(this, "  left alone for ${offAfterSec(this)}s: faded out and turned the screen off")
+        } else {
+            LockTrace.log(this, "  left alone, but the screen couldn't be turned off (the helper isn't running): it stays on")
+            sleepFailed = true; unfade()
+        }
+    }
+
+    private fun unfade() {
+        fading = false
+        shade.animate().cancel()
+        shade.animate().alpha(0f).setDuration(160).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+    }
+
+    private fun resetShade() {
+        if (!::shade.isInitialized) return
+        fading = false; shade.animate().cancel(); shade.alpha = 0f
+    }
+
+    private fun noteUse() { lastUse = android.os.SystemClock.uptimeMillis(); sleepFailed = false; if (fading) unfade() }
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean { noteUse(); return super.dispatchTouchEvent(ev) }
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean { noteUse(); return super.dispatchKeyEvent(event) }
 
     /** Back does nothing here: this is a lock screen. */
     @Deprecated("Deprecated in Java")
@@ -227,6 +299,12 @@ class LockActivity : Activity() {
 
         /** How long the lock screen takes to fade up once it's on screen (seconds). */
         const val INTRO_LEN = 0.42f
+
+        /** The fade at the end, before the screen turns off (milliseconds). */
+        const val FADE_MS = 800L
+
+        /** Seconds left alone before it fades out and the screen turns off (0 = the phone's own screen timeout). */
+        fun offAfterSec(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getInt("lockOffSec", 8)
 
         /** Whether the NEXUS lock screen is switched on (off unless the user turns it on). */
         fun enabled(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("lockScreen", false)

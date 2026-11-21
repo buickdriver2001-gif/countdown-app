@@ -437,7 +437,8 @@ class MainActivity : Activity() {
         val helper = Recents.serviceOn(this)
         val msg = "When your screen turns on, NEXUS shows its own lock screen (clock, date, battery) on top of your phone's. " +
             "Swipe up and your phone's normal PIN, pattern or fingerprint unlock appears, so your phone stays just as secure. " +
-            "It never covers calls or alarms, and the camera is still on the phone's lock screen underneath.\n\n" +
+            "It never covers calls or alarms, and the camera is still on the phone's lock screen underneath. " +
+            "Left alone, it fades out and the screen turns off (after 8 seconds unless you change it below).\n\n" +
             "Notifications: NEXUS can show them on its lock screen too (tap one, unlock, and it opens). It follows the same " +
             "privacy rules as your phone's lock screen: apps set to stay off the lock screen never appear, and with " +
             "\"Hide sensitive content\" private notifications only show the app's name. Nothing is stored or sent anywhere." +
@@ -448,6 +449,12 @@ class MainActivity : Activity() {
             prefs.edit().putBoolean("lockScreen", !on).apply()
             NexusAccessibility.instance?.refreshCover()
             Toast.makeText(this, if (!on) "NEXUS lock screen on. Turn your screen off and on to see it." else "NEXUS lock screen off", Toast.LENGTH_SHORT).show()
+        })
+        // Left alone, it fades out and the screen turns off
+        val off = LockActivity.offAfterSec(this)
+        opts.add(NexusUi.Option("Screen turns off after:  " + (if (off > 0) "$off seconds" else "phone's screen timeout")) {
+            prefs.edit().putInt("lockOffSec", when (off) { 8 -> 15; 15 -> 30; 30 -> 0; else -> 8 }).apply()
+            lockSettings()
         })
         // Notifications on the NEXUS lock screen
         if (!NexusNotifications.granted(this)) {

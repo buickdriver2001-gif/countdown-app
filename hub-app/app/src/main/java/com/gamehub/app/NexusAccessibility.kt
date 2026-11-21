@@ -288,6 +288,17 @@ class NexusAccessibility : AccessibilityService() {
         return true
     }
 
+    /**
+     * Turns the screen off, as the power button does: only for the NEXUS lock screen when it's been left alone,
+     * so only while the phone is locked and the NEXUS lock screen is showing (never while you're using the phone).
+     * Android 9 and later.
+     */
+    fun sleepScreen(): Boolean {
+        if (Build.VERSION.SDK_INT < 28) return false
+        if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked != true || !LockActivity.showing) return false
+        return try { performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN) } catch (_: Exception) { false }
+    }
+
     /** Called by the NEXUS lock screen once it is lit and in front (the phone's own lock screen is no longer drawn). */
     fun lockReady() {
         val ms = SystemClock.uptimeMillis() - screenOnAt
