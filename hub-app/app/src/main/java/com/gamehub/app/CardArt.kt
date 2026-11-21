@@ -69,7 +69,12 @@ object CardArt {
             // The icon's colours: drawn tiny, then stretched over the whole card, which blends them smoothly
             val tiny = Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888)
             ic.setBounds(0, 0, 4, 4); ic.draw(Canvas(tiny))
-            c.drawBitmap(tiny, null, Rect(-w / 4, -h / 8, w + w / 4, h + h / 8), Paint(Paint.FILTER_BITMAP_FLAG).apply { alpha = 150 })
+            // (Darkened a little, so light icons such as white ones still give a deep card)
+            val wash = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+                alpha = 150
+                colorFilter = android.graphics.ColorMatrixColorFilter(android.graphics.ColorMatrix().apply { setScale(0.6f, 0.6f, 0.6f, 1f) })
+            }
+            c.drawBitmap(tiny, null, Rect(-w / 4, -h / 8, w + w / 4, h + h / 8), wash)
             tiny.recycle()
             accent = mainColour(ic)
         }
