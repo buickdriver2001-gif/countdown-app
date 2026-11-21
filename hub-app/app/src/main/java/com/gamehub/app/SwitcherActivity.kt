@@ -109,13 +109,7 @@ class SwitcherActivity : Activity() {
         } catch (_: Exception) { false }
     }
 
-    /** A swiped-away app: the closing cube now, then back to Recent Apps (or home if none are left). */
-    fun closeSwipedNow() {
-        if (isFinishing) return
-        if (NexusAccessibility.closeNow(returnToSwitcher = true)) homeUnderCover()
-    }
-
-    /** The NEXUS home screen, underneath the closing cube (no animation: it isn't seen). */
+    /** The NEXUS home screen, underneath the cover while apps close (no animation: it isn't seen). */
     private fun homeUnderCover() {
         val i = packageManager.getLaunchIntentForPackage(packageName) ?: return
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION).putExtra("fromApp", true)
@@ -125,7 +119,8 @@ class SwitcherActivity : Activity() {
     }
 
     fun goNexus() {
-        // Apps you swiped away here get closed fully: the closing cube comes up at once, NEXUS appears after
+        // Apps you swiped away here get closed fully on the way: the cover shows the home screen straight away
+        // (or the closing cube after Clear all) while they close underneath
         if (NexusAccessibility.closeNow(returnToSwitcher = false)) { homeUnderCover(); return }
         val i = packageManager.getLaunchIntentForPackage(packageName) ?: return
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
@@ -603,10 +598,12 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
                                 card.flying = true
                                 card.flyV = max(1600f * d, -vy)
                                 sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
-                                if (!a.closeApp(card.pkg)) a.explainOnce()
-                                // Closed fully right away (the closing cube), then back here
-                                else if (card.pkg !in NexusAccessibility.OWN_APPS) postDelayed({ a.closeSwipedNow() }, 180)
+                                // Nothing else happens here: the card just goes. Apps other than NEXUS's own are closed
+                                // fully on the way out of Recent Apps (quietly, as the home screen comes up)
+                                val explained = !a.closeApp(card.pkg) && a.explainOnce()
                                 pos = pos.coerceAtMost((live().size - 1).coerceAtLeast(0).toFloat())
+                                // The last one gone: home, once it's flown off (as the phone's own recent apps does)
+                                if (live().isEmpty() && !explained) postDelayed({ if (!a.isFinishing) a.goNexus() }, 320)
                             }
                         }
                     }

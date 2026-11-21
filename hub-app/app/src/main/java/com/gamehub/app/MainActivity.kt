@@ -197,6 +197,7 @@ class MainActivity : Activity() {
         }).apply { visibility = android.view.View.GONE }
         root.addView(tutorial)
         setContentView(root)
+        home = java.lang.ref.WeakReference(this)
         dropOldDescriptions()
         addCountdownTileOnce()
         drawer.load()
@@ -641,7 +642,18 @@ class MainActivity : Activity() {
         if (hasFocus) hideBars()
     }
 
+    /** A still picture of this screen as it stands (null if it wouldn't match what comes back: All Apps open etc). */
+    private fun stillPicture(): android.graphics.Bitmap? {
+        if (isDestroyed || !::hub.isInitialized || hub.booting || drawer.isOpen || tutorial.visibility == android.view.View.VISIBLE) return null
+        val b = hub.still() ?: return null
+        if (navBar.visibility == android.view.View.VISIBLE && navBar.height > 0)
+            NavBar.drawPicture(android.graphics.Canvas(b), b.width.toFloat(), b.height.toFloat(), NavBar.order(this),
+                resources.displayMetrics.density, navBar.height.toFloat())
+        return b
+    }
+
     override fun onDestroy() {
+        if (home?.get() === this) home = null
         try { getSystemService(android.content.pm.LauncherApps::class.java)?.unregisterCallback(appsChanged) } catch (_: Exception) {}
         window.decorView.removeCallbacks(reloadApps)
         super.onDestroy()
@@ -720,7 +732,8 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        if (::hub.isInitialized) { refresh(); hub.resumed(leftForApp) }
+        // (No fade-in while NEXUS closes apps under its cover: the cover is already showing this screen)
+        if (::hub.isInitialized) { refresh(); hub.resumed(leftForApp && !NexusAccessibility.busyClosing) }
         loadCountdown()
         leftForApp = false
         hideBars()
@@ -766,6 +779,10 @@ class MainActivity : Activity() {
     }
 
     companion object {
+        private var home: java.lang.ref.WeakReference<MainActivity>? = null
+        /** A still picture of the NEXUS home screen as it stands (null if not available), for the cover. */
+        fun homeStill(): android.graphics.Bitmap? = try { home?.get()?.stillPicture() } catch (_: Throwable) { null }
+
         /** The "helper stopped" note is shown at most once each time NEXUS starts. */
         @Volatile private var helperWarned = false
         private const val REQ_HOME = 41

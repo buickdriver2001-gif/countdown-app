@@ -67,6 +67,13 @@ class CoverView(c: Context) : FrameLayout(c) {
     private var pictureAt = 0L
     private val picturePaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
+    /**
+     * Closing apps quietly (ones you swiped away): a still picture of the NEXUS home screen you're going to,
+     * so nothing seems to happen while they close underneath. (Without a picture: the plain backdrop.)
+     */
+    private var quietClose = false
+    private var still: Bitmap? = null
+
     /** Words shown on the backdrop (while NEXUS closes apps), or null. */
     private var label: String? = null
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -86,6 +93,8 @@ class CoverView(c: Context) : FrameLayout(c) {
                 if (k < 1f) postInvalidateOnAnimation()
                 return
             }
+            val st = still
+            if (st != null) { canvas.drawColor(Color.BLACK); canvas.drawBitmap(st, 0f, 0f, null); return }
             if (!recents) { canvas.drawColor(Color.BLACK); return }
             val cur = bg
             val b = if (cur != null && cur.width == width && cur.height == height) cur else backdrop(width, height, d).also { bg = it }
@@ -137,7 +146,7 @@ class CoverView(c: Context) : FrameLayout(c) {
     }
 
     fun showRecents(s: Bitmap?) {
-        recents = true; start = 0L; label = null; closeCube.stop(); picture = null
+        recents = true; start = 0L; label = null; closeCube.stop(); picture = null; quietClose = false; still = null
         resetCard()
         card.shot = s
         card.visibility = if (s != null) VISIBLE else GONE
@@ -156,22 +165,31 @@ class CoverView(c: Context) : FrameLayout(c) {
     /** Back to plain black (ready for the screen turning off). */
     /** The NEXUS backdrop with the closing cube: [apps] are the apps being closed (their icons go on the cube). */
     fun showClosing(apps: List<Pair<String, android.graphics.drawable.Drawable?>>) {
-        recents = true; start = 0L; label = null
+        recents = true; start = 0L; label = null; quietClose = false; still = null
         resetCard()
         card.shot = null; card.visibility = GONE
         closeCube.start(apps)
         back.invalidate()
     }
-    /** True while the closing cube is showing. */
-    val closing get() = closeCube.visibility == VISIBLE
+    /** Closing apps quietly: [b] is a still picture of the NEXUS home screen (null: the plain backdrop). */
+    fun showStill(b: Bitmap?) {
+        recents = true; start = 0L; label = null; picture = null; closeCube.stop()
+        resetCard(); card.shot = null; card.visibility = GONE
+        quietClose = true; still = b
+        back.invalidate()
+    }
+
+    /** True while NEXUS is closing apps on the cover (the cube, or the quiet still picture). */
+    val closing get() = closeCube.visibility == VISIBLE || quietClose
     /** [pkg] was closed (null: the next one): its icon peels off the cube and falls away. */
-    fun peel(pkg: String?) = closeCube.peel(pkg)
-    fun peelAll() = closeCube.peelAll()
+    fun peel(pkg: String?) { if (closeCube.visibility == VISIBLE) closeCube.peel(pkg) }
+    fun peelAll() { if (closeCube.visibility == VISIBLE) closeCube.peelAll() }
     /** When the last falling icon will have left the screen (uptime ms; 0 if none). */
-    fun fallsEnd(): Long = closeCube.fallsEnd()
+    fun fallsEnd(): Long = if (closeCube.visibility == VISIBLE) closeCube.fallsEnd() else 0L
 
     fun showBlack() {
         if (picture != null) { picture = null; back.invalidate() }
+        if (quietClose || still != null) { quietClose = false; still = null; back.invalidate() }
         if (!recents && card.visibility == GONE) return
         recents = false; start = 0L; label = null; closeCube.stop()
         resetCard()

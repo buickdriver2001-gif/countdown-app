@@ -1751,6 +1751,19 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     fun toTop() { selected = -1; if (scroll > 0.5f) homing = true }
 
     /** Called when the screen comes back (e.g. after closing a game). */
+    /** A still picture of the home screen as it stands (no launch glow or fade), for the cover while apps close. */
+    fun still(): android.graphics.Bitmap? {
+        if (width <= 0 || height <= 0 || booting) return null
+        launchFlash = 0f; pending = null; enterFade = 0f; settle = 0f
+        return try {
+            val b = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+            lastNs = System.nanoTime() // no time passes for the picture
+            draw(Canvas(b))
+            lastNs = 0L
+            b
+        } catch (_: Throwable) { null }
+    }
+
     fun resumed(fromApp: Boolean) {
         lastNs = 0L; launchFlash = 0f; pending = null
         if (fromApp) { enterFade = ENTER_LEN; settle = 1f }

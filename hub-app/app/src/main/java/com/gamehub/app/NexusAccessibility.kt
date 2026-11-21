@@ -71,6 +71,8 @@ class NexusAccessibility : AccessibilityService() {
          * home screen. Returns true if it started (the caller then heads to the NEXUS home screen underneath).
          */
         fun closeNow(returnToSwitcher: Boolean): Boolean = instance?.beginClose(returnToSwitcher) ?: false
+        /** NEXUS is closing apps under its cover right now (the home screen skips its fade-in meanwhile). */
+        val busyClosing: Boolean get() = instance?.closeJob != null
 
         /** NEXUS's buttons in place of the phone's own while you use other apps (NEXUS settings). Off unless switched on. */
         fun appButtonsOn(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("appButtons", false)
@@ -432,13 +434,16 @@ class NexusAccessibility : AccessibilityService() {
         val j = CloseJob(toClose.toList(), closeAllPending, returnToSwitcher)
         toClose.clear(); closeAllPending = false
         closeJob = j; j.stage = 0
-        LockTrace.log(this, "closing apps fully: " + if (j.all) "all" else j.pkgs.joinToString())
+        LockTrace.log(this, "closing apps fully" + (if (j.all) ": all" else " (quietly): " + j.pkgs.joinToString()))
         // The cover comes up (fading in), and takes touches meanwhile so nothing underneath gets tapped by accident
         ensureCover(force = true)
         val v = cover; val lp = coverLp
         if (v == null || lp == null) { closeJob = null; return false }
         coverToken++; fadeToken++; h.removeCallbacks(safety)
-        v.showClosing(j.pkgs.map { it to AppCache.get(this, it)?.icon })
+        // Clear all: the closing cube. Apps swiped away one by one: no animation at all, just a still picture
+        // of the NEXUS home screen you're heading to, while they close underneath
+        if (j.all) v.showClosing(j.pkgs.map { it to AppCache.get(this, it)?.icon })
+        else v.showStill(MainActivity.homeStill())
         lp.flags = lp.flags and android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
         lp.alpha = 1f
         v.animate().cancel(); v.alpha = 1f; v.alpha = 0f
