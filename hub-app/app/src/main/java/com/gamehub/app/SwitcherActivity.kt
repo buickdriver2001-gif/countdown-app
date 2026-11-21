@@ -6,7 +6,6 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -27,7 +26,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/** NEXUS Recent Apps: swipe through cards of recent apps (their last screen), tap to jump back in. */
+/** NEXUS Recent Apps: swipe through cards of recent apps (each with art made from its icon), tap to jump back in. */
 class SwitcherActivity : Activity() {
     companion object {
         /** Start options with a plain colour splash (no app icon) and no opening animation. */
@@ -233,7 +232,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         return CoverView.backdrop(width, height, d).also { bg = it }
     }
 
-    /** Builds the cards (names and icons are cached, so this is quick), then decodes pictures in the background. */
+    /** Builds the cards (names and icons are cached, so this is quick), then makes their art in the background. */
     fun load() {
         val list = ArrayList<Card>()
         for ((pkg, used) in Recents.list(a)) {
@@ -243,16 +242,12 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         cards = list
         pos = 0f; vel = 0f; targetIdx = 0; enter = if (a.zoomHandover) 1f else 0f
         opening = null; opened = false
-        // The first card's picture straight away (it's the one in the middle, and the one the cover hands over to)
-        list.firstOrNull()?.let { cd ->
-            cd.shot = NexusAccessibility.instance?.memShot(cd.pkg) ?: run {
-                val f = NexusAccessibility.snapFile(a, cd.pkg)
-                if (f.exists()) try { BitmapFactory.decodeFile(f.absolutePath) } catch (_: Exception) { null } else null
-            }
-            cd.shotFade = 1f
-        }
+        // The first card's art straight away (it's the one in the middle, and the one the cover hands over to)
+        val dm = resources.displayMetrics
+        val aspect = if (width > 0 && height > 0) height.toFloat() / width else dm.heightPixels.toFloat() / dm.widthPixels.coerceAtLeast(1)
+        list.firstOrNull()?.let { cd -> cd.shot = CardArt.get(cd.pkg, cd.icon, aspect); cd.shotFade = 1f }
         invalidate()
-        // Then, in the background: drop any app that was uninstalled since, and decode the other pictures
+        // Then, in the background: drop any app that was uninstalled since, and make the other cards' art
         val pm = a.packageManager
         Thread {
             for (cd in list) {
@@ -265,9 +260,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
                     continue
                 }
                 if (cd.shot != null) continue
-                val f = NexusAccessibility.snapFile(a, cd.pkg)
-                if (!f.exists()) continue
-                val b = try { BitmapFactory.decodeFile(f.absolutePath) } catch (_: Exception) { null } ?: continue
+                val b = CardArt.get(cd.pkg, cd.icon, aspect)
                 post { cd.shot = b; cd.shotFade = 0f }
             }
         }.start()
@@ -456,20 +449,12 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         c.save(); c.clipPath(clip)
         fill.color = Color.rgb(10, 16, 34); c.drawRect(openRect, fill)
         val shot = card.shot
-        if (shot != null) {
-            val scale = openRect.width() / shot.width
-            val src = android.graphics.Rect(0, 0, shot.width, min(shot.height, (openRect.height() / scale).toInt()))
-            bmpPaint.alpha = 255
-            c.drawBitmap(shot, src, RectF(openRect.left, openRect.top, openRect.right, openRect.top + src.height() * scale), bmpPaint)
-        } else card.icon?.let {
-            val s = min(openRect.width(), openRect.height()) * 0.3f
-            it.setBounds((openRect.centerX() - s / 2).toInt(), (openRect.centerY() - s / 2).toInt(), (openRect.centerX() + s / 2).toInt(), (openRect.centerY() + s / 2).toInt())
-            it.alpha = 255; it.draw(c)
-        }
+        if (shot != null) { bmpPaint.alpha = 255; c.drawBitmap(shot, null, openRect, bmpPaint) }
+        card.icon?.let { CardArt.drawIcon(c, it, openRect.centerX(), openRect.top + openRect.height() * CardArt.ICON_Y, openRect.width() * CardArt.ICON_SIZE) }
         c.restore()
         if (k >= OPEN_START && !opened) {
             opened = true
-            // With its last picture filling the screen the app just comes alive; without one it rises in.
+            // With its card filling the screen the app just fades in over it; without one it rises in.
             // If it can't be opened (e.g. it was just uninstalled), put the cards back.
             if (!a.openApp(card.pkg, revealed = shot != null)) { opening = null; opened = false }
         }
@@ -496,24 +481,15 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         clip.reset(); clip.addRoundRect(rr, rad, rad, Path.Direction.CW)
         c.save(); c.clipPath(clip)
         fill.color = Color.rgb(10, 16, 34); c.drawRect(rr, fill)
-        val shot = card.shot
-        if (shot != null) {
-            // The app's last screen, filling the card from the top
-            val scale = rr.width() / shot.width
-            srcR.set(0, 0, shot.width, min(shot.height, (rr.height() / scale).toInt()))
-            val src = srcR
-            val dst = dstR.apply { set(rr.left, rr.top, rr.right, rr.top + src.height() * scale) }
+        val art = card.shot
+        if (art != null) {
+            // The card's art, made from the app's icon (its colours and a glow)
             card.shotFade = min(1f, card.shotFade + 0.12f)
             bmpPaint.alpha = (255 * fade * card.shotFade).toInt()
-            c.drawBitmap(shot, src, dst, bmpPaint)
-        } else {
-            // No screenshot (secure app, or not seen yet): big icon on glass
-            card.icon?.let {
-                val s = rr.width() * 0.34f
-                it.setBounds((rr.centerX() - s / 2).toInt(), (rr.centerY() - s / 2).toInt(), (rr.centerX() + s / 2).toInt(), (rr.centerY() + s / 2).toInt())
-                it.alpha = (255 * fade).toInt(); it.draw(c); it.alpha = 255
-            }
+            c.drawBitmap(art, null, rr, bmpPaint)
         }
+        // The app's icon, big and sharp
+        card.icon?.let { CardArt.drawIcon(c, it, rr.centerX(), rr.top + rr.height() * CardArt.ICON_Y, rr.width() * CardArt.ICON_SIZE, (255 * fade).toInt()) }
         // Dim side cards; white light pass across the centre card
         if (fade < 1f) { fill.color = Color.argb(((1f - fade) * 170).toInt(), 2, 4, 14); c.drawRect(rr, fill) }
         if (centre) {
@@ -533,12 +509,6 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         line.strokeWidth = (if (centre) 1.8f else 1f) * d
         line.color = Color.argb(((if (centre) 210 else 90) * fade).toInt(), 150, 195, 255)
         c.drawRoundRect(rr, rad, rad, line)
-        // App icon badge on the top edge
-        card.icon?.let {
-            val s = 34 * d * (rr.width() / (width * CoverView.CARD_SCALE))
-            it.setBounds((rr.centerX() - s / 2).toInt(), (rr.top - s / 2).toInt(), (rr.centerX() + s / 2).toInt(), (rr.top + s / 2).toInt())
-            it.alpha = (255 * fade).toInt(); it.draw(c); it.alpha = 255
-        }
     }
 
     // ------------------------------------------------------------------ touch

@@ -14,7 +14,6 @@ import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import java.io.File
-import java.io.FileOutputStream
 
 /**
  * NEXUS's helper service (turned on by the user in Accessibility settings). It:
@@ -113,7 +112,7 @@ class NexusAccessibility : AccessibilityService() {
 
     private fun handleScreen(c: Context, i: Intent) {
         if (i.action == Intent.ACTION_SCREEN_OFF) hideButtons("screen off") else queueButtons(0)
-        if (i.action == Intent.ACTION_SCREEN_OFF) { leftByScreenOff = true; persistShot() }
+        if (i.action == Intent.ACTION_SCREEN_OFF) leftByScreenOff = true
         closeJob?.let { endClose(it, "the screen turned off", goHome = false) }
         val kmT = getSystemService(KeyguardManager::class.java)
         LockTrace.log(this, "screen " + (if (i.action == Intent.ACTION_SCREEN_OFF) "OFF" else "ON") +
@@ -315,19 +314,6 @@ class NexusAccessibility : AccessibilityService() {
         armSafety(maxOf(30L, end - SystemClock.uptimeMillis() + 30L), "square button: Recent Apps ready, cover lifted on time")
     }
 
-    /** The last picture of each app as it was taken, kept in memory for the square-button opening. */
-    @Volatile private var lastShot: Pair<String, Bitmap>? = null
-
-    /** The in-memory picture of [pkg], if it's the latest one taken. */
-    fun memShot(pkg: String): Bitmap? = lastShot?.let { if (it.first == pkg) it.second else null }
-
-    private fun shotFor(pkg: String): Bitmap? {
-        lastShot?.let { if (it.first == pkg) return it.second }
-        val f = snapFile(this, pkg)
-        if (!f.exists()) return null
-        return try { android.graphics.BitmapFactory.decodeFile(f.absolutePath) } catch (_: Throwable) { null }
-    }
-
     /** Another app's screen appeared after the screen went off (alarm, timer, camera, call...). */
     @Volatile private var otherAppSinceOff = false
 
@@ -355,9 +341,10 @@ class NexusAccessibility : AccessibilityService() {
         safe { refreshHomes() }
         // Usage counts were kept by an earlier version for the lock screen cube; it no longer needs them
         safe { getSharedPreferences("hub", MODE_PRIVATE).edit().remove("usecount").apply() }
-        h.postDelayed(tick, 2000)
         safe { ensureCover() }
         safe { setupAppButtons() }
+        // NEXUS no longer takes pictures of your screen: remove any it saved before
+        Thread { try { snapDir(this).listFiles()?.forEach { it.delete() } } catch (_: Throwable) {} }.start()
         // Have names and icons ready for Recent Apps
         safe { AppCache.warm(this, Recents.list(this).map { it.first }) }
     }
@@ -370,8 +357,6 @@ class NexusAccessibility : AccessibilityService() {
         instance = null
         running = false
         h.removeCallbacksAndMessages(null)
-        persistShot()
-        shotThread.quitSafely()
         super.onDestroy()
     }
 
@@ -733,7 +718,6 @@ class NexusAccessibility : AccessibilityService() {
             if (pkg != current) currentCls = screen else if (screen != null) currentCls = screen
             toClose.remove(pkg) // opened again before it was closed: leave it open
             if (pkg != current) {
-                persistShot()
                 current = pkg
                 val token = ++openToken
                 h.postDelayed({
@@ -741,13 +725,11 @@ class NexusAccessibility : AccessibilityService() {
                         if (token == openToken && current == pkg && pm?.isInteractive == true && km?.isKeyguardLocked != true) {
                             Recents.touch(this, pkg)
                             AppCache.warm(this, listOf(pkg))
-                            snap()
                         }
                     }
                 }, 1500)
             }
         } else if (pkg in homePkgs || pkg == packageName) {
-            if (current != null) persistShot()
             current = null; currentCls = null; openToken++
             // Back on the NEXUS home screen straight from one of our own apps: that app closes completely
             // (not when the screen just went off and came back, and not via the square button's Recent Apps)
@@ -796,7 +778,8 @@ class NexusAccessibility : AccessibilityService() {
         if (now - lastSwitcher <= 800) return
         lastSwitcher = now
         val from = current
-        val shot = if (from != null && from == Recents.list(this).firstOrNull()?.first) shotFor(from) else null
+        // The app's card (made from its icon) starts full screen and shrinks into place
+        val shot = if (from != null && from == Recents.list(this).firstOrNull()?.first) cardPicture(from) else null
         // That app is no longer on screen: don't let a scheduled picture catch this transition instead
         current = null
         ensureCover(force = true)
@@ -1070,38 +1053,6 @@ class NexusAccessibility : AccessibilityService() {
      * Kept in memory; it's only saved to storage when you leave the app (or at most every 30 seconds), so the
      * phone isn't writing a file every few seconds. Slower in Battery Saver.
      */
-    private val tick = object : Runnable {
-        override fun run() {
-            safe { snap() }
-            val saver = getSystemService(PowerManager::class.java)?.isPowerSaveMode == true
-            h.postDelayed(this, if (saver) 8000L else 3000L)
-        }
-    }
-
-    /** Pictures are made and saved here, one at a time (not a new thread each time). */
-    private val shotThread = android.os.HandlerThread("nexus-pictures").apply { start() }
-    private val shotH = Handler(shotThread.looper)
-    /** The newest picture that hasn't been saved to storage yet. */
-    @Volatile private var unsaved: Pair<String, Bitmap>? = null
-    /** When each app's picture was last saved. */
-    private val savedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
-
-    /** Saves the newest picture now (you've left that app, or the screen turned off). */
-    private fun persistShot() {
-        val u = unsaved ?: return
-        unsaved = null
-        shotH.post { saveShot(u) }
-    }
-
-    private fun saveShot(s: Pair<String, Bitmap>) {
-        try {
-            val tmp = File(snapDir(this), "${s.first}.tmp")
-            FileOutputStream(tmp).use { s.second.compress(Bitmap.CompressFormat.JPEG, 78, it) }
-            tmp.renameTo(snapFile(this, s.first))
-            savedAt[s.first] = SystemClock.uptimeMillis()
-        } catch (_: Throwable) {}
-    }
-
     /** Is [pkg] showing only as a little floating picture-in-picture window? */
     private fun inPictureInPicture(pkg: String): Boolean = try {
         windows.any {
@@ -1111,55 +1062,14 @@ class NexusAccessibility : AccessibilityService() {
     } catch (_: Throwable) { false }
 
     /**
-     * Is [pkg]'s own full screen what's showing? Not when it has shrunk into a floating picture-in-picture window
-     * (YouTube does that when you leave a video), and not when NEXUS or another app is in front of it. So an
-     * app's picture is always of that app, never of Recent Apps or the home screen around a little video.
+     * The Recent Apps card for [pkg] as one picture (made from its icon), full screen: the cover starts with it
+     * and shrinks it into its card as NEXUS Recent Apps opens.
      */
-    private fun showingFullScreen(pkg: String): Boolean {
-        val ws = try { windows } catch (_: Throwable) { null } ?: return true // can't tell: as before
-        val apps = ws.filter { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }.sortedByDescending { it.layer }
-        for (w in apps) {
-            val p = try { w.root?.packageName?.toString() } catch (_: Throwable) { null }
-            if (w.isInPictureInPictureMode) { if (p == pkg) return false; continue }
-            return p == null || p == pkg
-        }
-        return true
-    }
-
-    private fun snap() {
-        val pkg = current ?: return
-        if (Build.VERSION.SDK_INT < 30) return
-        val pm = getSystemService(PowerManager::class.java)
-        val km = getSystemService(KeyguardManager::class.java)
-        if (pm?.isInteractive != true || km?.isKeyguardLocked == true) return
-        if (!showingFullScreen(pkg)) return
-        try {
-            takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
-                override fun onSuccess(r: ScreenshotResult) {
-                    val buf = r.hardwareBuffer
-                    // Still that app, full screen, now the picture's taken? (If it just changed, skip this one)
-                    if (current != pkg || !showingFullScreen(pkg)) { try { buf.close() } catch (_: Throwable) {}; return }
-                    shotH.post {
-                        try {
-                            val hw = Bitmap.wrapHardwareBuffer(buf, r.colorSpace)
-                            if (hw != null && current == pkg) {
-                                val soft = hw.copy(Bitmap.Config.ARGB_8888, false)
-                                val w = 400; val hh = (soft.height * (w.toFloat() / soft.width)).toInt()
-                                val small = Bitmap.createScaledBitmap(soft, w, hh, true)
-                                soft.recycle()
-                                val shot = pkg to small
-                                lastShot = shot // kept for the square-button opening (not recycled)
-                                // In memory for now; saved when you leave the app, or if it's been 30 seconds
-                                if (SystemClock.uptimeMillis() - (savedAt[pkg] ?: 0L) > 30_000L) { unsaved = null; saveShot(shot) }
-                                else unsaved = shot
-                            }
-                        } catch (_: Throwable) {
-                        } finally { buf.close() }
-                    }
-                }
-                override fun onFailure(code: Int) {}
-            })
-        } catch (_: Throwable) {}
+    private fun cardPicture(pkg: String): Bitmap? {
+        val size = screenSize() ?: return null
+        if (size.x <= 0 || size.y <= 0) return null
+        val w = 540; val h = (w.toFloat() * size.y / size.x).toInt()
+        return CardArt.withIcon(pkg, AppCache.get(this, pkg)?.icon, w, h)
     }
 }
 

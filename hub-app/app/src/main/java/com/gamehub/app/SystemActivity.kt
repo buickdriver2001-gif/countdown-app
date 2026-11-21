@@ -77,7 +77,7 @@ class SystemActivity : Activity() {
         col.addView(card("LAST FEW MINUTES", graph, (120 * d).toInt()))
 
         col.addView(section("BATTERY", listOf("Level", "Status", "Temperature", "Voltage", "Current", "Health", "Type")))
-        col.addView(section("MEMORY & STORAGE", listOf("Memory used", "Memory free", "Storage used", "Storage free", "NEXUS pictures")))
+        col.addView(section("MEMORY & STORAGE", listOf("Memory used", "Memory free", "Storage used", "Storage free")))
         cores = CoresView(this)
         col.addView(section("PROCESSOR", listOf("Chip", "Cores", "Architecture")).also { (it as LinearLayout).addView(cores, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (70 * d).toInt())) })
         col.addView(section("DISPLAY", listOf("Resolution", "Density", "Refresh rate")))
@@ -184,8 +184,7 @@ class SystemActivity : Activity() {
             "Screen test" to { screenTest() },
             "Touch test" to { touchTest() },
             "Vibration test" to { vibrationTest() },
-            "Speaker test" to { speakerTest() },
-            "Clear NEXUS pictures" to { clearPictures() }
+            "Speaker test" to { speakerTest() }
         ))
         // Keep a handle on the flashlight button so its label can change
         torchBtn = findFirstButton(v, "Flashlight: OFF")
@@ -292,8 +291,6 @@ class SystemActivity : Activity() {
             storePct = (total - free).toFloat() / total
             set("Storage used", "${gb(total - free)} of ${gb(total)}")
             set("Storage free", gb(free))
-            val snaps = NexusAccessibility.snapDir(this).listFiles()?.sumOf { it.length() } ?: 0L
-            set("NEXUS pictures", gb(snaps))
         } catch (_: Exception) {}
         // Network
         try {
@@ -406,14 +403,6 @@ class SystemActivity : Activity() {
         }.start()
     }
 
-    private fun clearPictures() {
-        NexusUi.panel(this, "Clear NEXUS pictures?", "Removes the saved last-screen pictures used by Recent Apps. They come back as you use your apps.",
-            listOf(NexusUi.Option("Clear", danger = true) {
-                NexusAccessibility.snapDir(this).listFiles()?.forEach { it.delete() }
-                Toast.makeText(this, "Pictures cleared", Toast.LENGTH_SHORT).show()
-                readLive()
-            }))
-    }
 }
 
 /** Four ring gauges: battery, memory, storage, temperature. */

@@ -1071,7 +1071,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         Thread {
             for (p in pkgs) {
                 val f = NexusAccessibility.snapFile(context, p)
-                if (!f.exists()) continue
+                if (!f.exists()) { post { liveShots.remove(p); liveStamp.remove(p) }; continue }
                 val stamp = f.lastModified()
                 if (known[p] == stamp) continue
                 val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 }
