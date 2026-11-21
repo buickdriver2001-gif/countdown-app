@@ -724,6 +724,8 @@ class NexusAccessibility : AccessibilityService() {
             val pm = getSystemService(PowerManager::class.java)
             val km = getSystemService(KeyguardManager::class.java)
             if (pm?.isInteractive != true || km?.isKeyguardLocked == true || !isAppScreen(pkg, cls)) return
+            // Shrunk into a little floating video window (YouTube does that when you leave a video): you've left it
+            if (inPictureInPicture(pkg)) return
             lastApp = pkg; leftByScreenOff = false
             if (pkg == pendingClose) pendingClose = null // went straight back into it: keep it
             // Which screen of the app is showing (only real screens: some apps report a view's name instead)
@@ -1100,16 +1102,43 @@ class NexusAccessibility : AccessibilityService() {
         } catch (_: Throwable) {}
     }
 
+    /** Is [pkg] showing only as a little floating picture-in-picture window? */
+    private fun inPictureInPicture(pkg: String): Boolean = try {
+        windows.any {
+            it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION && it.isInPictureInPictureMode &&
+                it.root?.packageName?.toString() == pkg
+        }
+    } catch (_: Throwable) { false }
+
+    /**
+     * Is [pkg]'s own full screen what's showing? Not when it has shrunk into a floating picture-in-picture window
+     * (YouTube does that when you leave a video), and not when NEXUS or another app is in front of it. So an
+     * app's picture is always of that app, never of Recent Apps or the home screen around a little video.
+     */
+    private fun showingFullScreen(pkg: String): Boolean {
+        val ws = try { windows } catch (_: Throwable) { null } ?: return true // can't tell: as before
+        val apps = ws.filter { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }.sortedByDescending { it.layer }
+        for (w in apps) {
+            val p = try { w.root?.packageName?.toString() } catch (_: Throwable) { null }
+            if (w.isInPictureInPictureMode) { if (p == pkg) return false; continue }
+            return p == null || p == pkg
+        }
+        return true
+    }
+
     private fun snap() {
         val pkg = current ?: return
         if (Build.VERSION.SDK_INT < 30) return
         val pm = getSystemService(PowerManager::class.java)
         val km = getSystemService(KeyguardManager::class.java)
         if (pm?.isInteractive != true || km?.isKeyguardLocked == true) return
+        if (!showingFullScreen(pkg)) return
         try {
             takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
                 override fun onSuccess(r: ScreenshotResult) {
                     val buf = r.hardwareBuffer
+                    // Still that app, full screen, now the picture's taken? (If it just changed, skip this one)
+                    if (current != pkg || !showingFullScreen(pkg)) { try { buf.close() } catch (_: Throwable) {}; return }
                     shotH.post {
                         try {
                             val hw = Bitmap.wrapHardwareBuffer(buf, r.colorSpace)

@@ -457,6 +457,12 @@ class MainActivity : Activity() {
             prefs.edit().putInt("lockOffSec", when (off) { 8 -> 15; 15 -> 30; 30 -> 0; else -> 8 }).apply()
             lockSettings()
         })
+        // Where unlocking takes you
+        val toHome = LockActivity.unlockToHome(this)
+        opts.add(NexusUi.Option("After unlocking:  " + (if (toHome) "NEXUS home screen" else "back to where you were")) {
+            prefs.edit().putBoolean("unlockToHome", !toHome).apply()
+            lockSettings()
+        })
         // Notifications on the NEXUS lock screen
         if (!NexusNotifications.granted(this)) {
             opts.add(NexusUi.Option("Show notifications here: allow access") { openNotificationAccess() })

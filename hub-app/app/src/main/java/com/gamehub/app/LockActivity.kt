@@ -275,14 +275,17 @@ class LockActivity : Activity() {
             @Suppress("DEPRECATION") overridePendingTransition(0, 0)
             return
         }
-        // Land in NEXUS when it's the home screen; otherwise just get out of the way
-        if (HomeMode.isOn(this) && HomeMode.isDefault(this)) {
+        // Back to where you were, as on the phone's own lock screen: the lock screen just steps away, showing
+        // the app you were using (or the NEXUS home screen, if that's where you were). Or, if set that way,
+        // always the NEXUS home screen.
+        if (unlockToHome(this) && HomeMode.isOn(this) && HomeMode.isDefault(this)) {
             val i = packageManager.getLaunchIntentForPackage(packageName)
             if (i != null) {
                 i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("fromApp", true)
                 startActivity(i, Transitions.rise(this))
             }
         }
+        LockTrace.log(this, "  unlocked: " + if (unlockToHome(this)) "to the NEXUS home screen" else "back to where you were")
         finish()
         @Suppress("DEPRECATION") overridePendingTransition(0, R.anim.nexus_exit)
     }
@@ -302,6 +305,9 @@ class LockActivity : Activity() {
 
         /** The fade at the end, before the screen turns off (milliseconds). */
         const val FADE_MS = 800L
+
+        /** After unlocking: always the NEXUS home screen (true), or back to where you were (false, the default). */
+        fun unlockToHome(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("unlockToHome", false)
 
         /** Seconds left alone before it fades out and the screen turns off (0 = the phone's own screen timeout). */
         fun offAfterSec(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getInt("lockOffSec", 8)
