@@ -1,0 +1,29 @@
+name: Build Torque Street APK
+on:
+  push:
+    paths:
+      - 'racer-app/**'
+      - '.github/workflows/racer.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: racer-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x gradlew && ./gradlew assembleRelease
+      - run: cp app/build/outputs/apk/release/app-release.apk TorqueStreet.apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: racer-build-${{ github.run_number }}
+          name: Torque Street build ${{ github.run_number }}
+          files: racer-app/TorqueStreet.apk
