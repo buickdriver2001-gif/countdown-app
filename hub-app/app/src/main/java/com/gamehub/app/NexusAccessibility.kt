@@ -85,7 +85,7 @@ class NexusAccessibility : AccessibilityService() {
         const val FADE_BACK = 4
         const val FADE_NEXT = 5
         /** Never longer than this before the fade lifts, however long an app takes to open. */
-        const val VEIL_MAX = 1100L
+        const val VEIL_MAX = 900L
         /** NEXUS is closing apps under its cover right now (the home screen skips its fade-in meanwhile). */
         val busyClosing: Boolean get() = instance?.closeJob != null
 
@@ -127,6 +127,7 @@ class NexusAccessibility : AccessibilityService() {
     }
 
     private fun handleScreen(c: Context, i: Intent) {
+        if (i.action == Intent.ACTION_USER_PRESENT) { h.postDelayed({ safe { recheckFront() } }, 600); return }
         if (i.action == Intent.ACTION_SCREEN_OFF) { hideButtons("screen off"); veilKind = 0; h.removeCallbacks(veilRun) } else queueButtons(0)
         if (i.action == Intent.ACTION_SCREEN_OFF) leftByScreenOff = true
         closeJob?.let { endClose(it, "the screen turned off", goHome = false) }
@@ -352,7 +353,7 @@ class NexusAccessibility : AccessibilityService() {
         LockTrace.log(this, "helper started")
         safe { loadQueue() }
         // The screen on/off listener first: the NEXUS lock screen depends on it
-        val f = android.content.IntentFilter(Intent.ACTION_SCREEN_ON).apply { addAction(Intent.ACTION_SCREEN_OFF) }
+        val f = android.content.IntentFilter(Intent.ACTION_SCREEN_ON).apply { addAction(Intent.ACTION_SCREEN_OFF); addAction(Intent.ACTION_USER_PRESENT) }
         try {
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenOn, f, Context.RECEIVER_NOT_EXPORTED) else registerReceiver(screenOn, f)
         } catch (t: Exception) { App.noteProblem(this, "starting the helper", t) }
@@ -411,7 +412,7 @@ class NexusAccessibility : AccessibilityService() {
     /** Apps waiting to be closed fully. */
     private val toClose = LinkedHashSet<String>()
     private var closeAllPending = false
-    private class CloseJob(val pkgs: List<String>, val all: Boolean, val toSwitcher: Boolean) {
+    private class CloseJob(val pkgs: List<String>, val all: Boolean, val toSwitcher: Boolean, val clearRest: Boolean = false) {
         /** 1 opening the phone's recent apps, 2 closing, 3 going home. */
         var stage = 0; var tries = 0; var closed = 0; var recentsPkg = ""; var missed = 0
         /** Where it's going back to: true NEXUS Recent Apps, false the home screen. */
@@ -451,11 +452,14 @@ class NexusAccessibility : AccessibilityService() {
         val pm = getSystemService(PowerManager::class.java)
         val km = getSystemService(KeyguardManager::class.java)
         if (pm?.isInteractive != true || km?.isKeyguardLocked == true) return false
-        val j = CloseJob(toClose.toList(), closeAllPending, returnToSwitcher)
+        // If no other apps are left in NEXUS Recent Apps, nothing should be left open in the phone either: its
+        // whole list is cleared too (quietly), which also closes any app NEXUS never got to see
+        val clearRest = !closeAllPending && Recents.list(this).none { it.first !in OWN_APPS && it.first != packageName && it.first !in toClose }
+        val j = CloseJob(toClose.toList(), closeAllPending, returnToSwitcher, clearRest)
         toClose.clear(); closeAllPending = false; saveQueue()
         veilKind = 0; h.removeCallbacks(veilRun) // the closing cover takes over from any fade
         closeJob = j; j.stage = 0
-        LockTrace.log(this, "closing apps fully" + (if (j.all) ": all" else " (quietly): " + j.pkgs.joinToString()))
+        LockTrace.log(this, "closing apps fully" + (if (j.all) ": all" else " (quietly): " + j.pkgs.joinToString() + if (j.clearRest) " and anything else left open" else ""))
         // The cover comes up (fading in), and takes touches meanwhile so nothing underneath gets tapped by accident
         ensureCover(force = true)
         val v = cover; val lp = coverLp
@@ -503,7 +507,7 @@ class NexusAccessibility : AccessibilityService() {
             return
         }
         LockTrace.log(this, "  phone's recent apps: " + cardNames(root).let { if (it.isEmpty()) "no app cards found" else "cards " + it.joinToString() })
-        if (j.all) {
+        if (j.all || j.clearRest) {
             // Clear all if the button can be pressed; then Close on any cards still there, one by one
             val clear = findByWords(root, setOf("clear all"))
             val pressed = clear != null && clear.isEnabled && clear.performAction(AccessibilityNodeInfo.ACTION_CLICK)
@@ -750,6 +754,12 @@ class NexusAccessibility : AccessibilityService() {
         if (pkg == packageName && !cls.startsWith("$packageName.")) { queueButtons(); return }
         if (pkg != "com.android.systemui" && pkg != "android" && "inputmethod" !in pkg && "keyboard" !in pkg) { frontPkg = pkg; frontCls = cls }
         queueButtons()
+        // Under NEXUS's fade: the new screen has announced itself (the home screen, or the app being opened)
+        if (veilKind != 0 && veilSeenAt == 0L && pkg != "com.android.systemui" && "inputmethod" !in pkg && "keyboard" !in pkg &&
+            ((veilKind == FADE_HOME && cls == MainActivity::class.java.name) ||
+                (veilKind != FADE_HOME && veilKind != FADE_RECENTS && pkg != packageName))) {
+            veilSeenAt = SystemClock.uptimeMillis(); h.removeCallbacks(veilRun); h.postDelayed(veilRun, VEIL_HOLD)
+        }
         // Another app put up a screen (alarm, timer, camera, call...): the wake-up cover must never hide it
         if (pkg != packageName && pkg != "com.android.systemui" && pkg != "android" && pkg !in homePkgs &&
             "inputmethod" !in pkg && "keyboard" !in pkg) {
@@ -939,6 +949,8 @@ class NexusAccessibility : AccessibilityService() {
         veilKind = 0
         h.removeCallbacks(veilRun)
         fadeCover()
+        // The app now in front counts as opened (in case it never announced itself)
+        h.postDelayed({ safe { recheckFront() } }, 300)
     }
 
     // ------------------------------------------------------------------ NEXUS buttons in your apps
@@ -1209,6 +1221,22 @@ class NexusAccessibility : AccessibilityService() {
      * Kept in memory; it's only saved to storage when you leave the app (or at most every 30 seconds), so the
      * phone isn't writing a file every few seconds. Slower in Battery Saver.
      */
+    /**
+     * Whatever app is in front now counts as opened. Catches apps that came up while the phone was still locked
+     * (opened from a notification, say), which Android doesn't announce again once you unlock.
+     */
+    private fun recheckFront() {
+        if (getSystemService(PowerManager::class.java)?.isInteractive != true) return
+        if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return
+        val top = try { windows.filter { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }.maxByOrNull { it.layer } } catch (_: Throwable) { null } ?: return
+        val pkg = try { top.root?.packageName?.toString() } catch (_: Throwable) { null } ?: return
+        if (pkg == current || !isRealApp(pkg) || inPictureInPicture(pkg)) return
+        lastApp = pkg; current = pkg; currentCls = null; leftByScreenOff = false
+        if (toClose.remove(pkg)) saveQueue()
+        val token = ++openToken
+        h.postDelayed({ safe { if (token == openToken && current == pkg) { Recents.touch(this, pkg); AppCache.warm(this, listOf(pkg)) } } }, 1500)
+    }
+
     /** Is [pkg] showing only as a little floating picture-in-picture window? */
     private fun inPictureInPicture(pkg: String): Boolean = try {
         windows.any {
