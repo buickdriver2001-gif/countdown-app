@@ -284,7 +284,7 @@ class LockActivity : Activity() {
             val i = packageManager.getLaunchIntentForPackage(packageName)
             if (i != null) {
                 i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP).putExtra("fromApp", true)
-                startActivity(i, Transitions.rise(this))
+                startActivity(i, Transitions.app(window.decorView))
             }
         }
         LockTrace.log(this, "  unlocked: " + if (unlockToHome(this)) "to the NEXUS home screen" else "back to where you were")

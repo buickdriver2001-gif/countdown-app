@@ -55,7 +55,7 @@ object AppActions {
             .take(4)
             .map { s ->
                 NexusUi.Option("›  " + s.shortLabel.toString().trim()) {
-                    try { la.startShortcut(s, null, Transitions.rise(a)) }
+                    try { la.startShortcut(s, null, Transitions.app(a.window.decorView)) }
                     catch (_: Exception) { Toast.makeText(a, "That shortcut isn't available right now", Toast.LENGTH_SHORT).show() }
                 }
             }

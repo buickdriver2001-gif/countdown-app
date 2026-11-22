@@ -104,7 +104,8 @@ class SwitcherActivity : Activity() {
     fun openApp(pkg: String, revealed: Boolean = false): Boolean {
         val i = packageManager.getLaunchIntentForPackage(pkg) ?: return false
         return try {
-            startActivity(i, if (revealed) Transitions.reveal(this) else Transitions.rise(this))
+            val v = window.decorView
+            startActivity(i, if (revealed) Transitions.reveal(v) else Transitions.app(v))
             finish()
             true
         } catch (_: Exception) { false }
@@ -126,7 +127,8 @@ class SwitcherActivity : Activity() {
         val i = packageManager.getLaunchIntentForPackage(packageName) ?: return
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         i.putExtra("fromApp", true)
-        startActivity(i, Transitions.rise(this))
+        // (Recent Apps is its own task, so the home screen gets an opening Android honours between tasks)
+        startActivity(i, Transitions.app(window.decorView))
         finish()
     }
 

@@ -52,7 +52,7 @@ object HomeMode {
         return try {
             val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).setComponent(cn)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-            a.startActivity(i, Transitions.rise(a))
+            a.startActivity(i, Transitions.app(a.window.decorView))
             true
         } catch (_: Exception) { false }
     }

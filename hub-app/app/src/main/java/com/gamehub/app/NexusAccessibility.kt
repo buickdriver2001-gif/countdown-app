@@ -778,8 +778,10 @@ class NexusAccessibility : AccessibilityService() {
         if (now - lastSwitcher <= 800) return
         lastSwitcher = now
         val from = current
-        // The app's card (made from its icon) starts full screen and shrinks into place
-        val shot = if (from != null && from == Recents.list(this).firstOrNull()?.first) cardPicture(from) else null
+        // From NEXUS's own Recent button (the app still fills the screen): the app's card starts full screen and
+        // shrinks into place. After the phone's own square button the phone has already started shrinking the app
+        // into its own recents screen, so NEXUS Recent Apps simply fades in (no card growing back first).
+        val shot = if (by == "Recent button" && from != null && from == Recents.list(this).firstOrNull()?.first) cardPicture(from) else null
         // That app is no longer on screen: don't let a scheduled picture catch this transition instead
         current = null
         ensureCover(force = true)

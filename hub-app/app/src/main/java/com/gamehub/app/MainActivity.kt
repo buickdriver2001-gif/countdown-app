@@ -153,7 +153,7 @@ class MainActivity : Activity() {
         // The app opens out of the icon that was tapped in All Apps
         val v = drawer.lastTapped
         val opts = if (v != null && v.isAttachedToWindow) Transitions.grow(v, android.graphics.RectF(0f, 0f, v.width.toFloat(), v.height.toFloat()))
-                   else Transitions.rise(this)
+                   else Transitions.app(window.decorView)
         drawer.lastTapped = null
         if (AppActions.open(this, item.pkg, item.component, opts)) leftForApp = true
     }
@@ -302,7 +302,7 @@ class MainActivity : Activity() {
     }
 
     private fun openSwitcher() {
-        startActivity(Intent(this, SwitcherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), Transitions.rise(this, solidSplash = true))
+        startActivity(Intent(this, SwitcherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), Transitions.app(window.decorView, solidSplash = true))
     }
 
     /** NEXUS's own App info page (where "Allow restricted settings" lives, under ⋮). */
@@ -801,7 +801,7 @@ class MainActivity : Activity() {
         if (packageManager.getLaunchIntentForPackage(g.pkg) != null) {
             // Cross-fade into the app
             // The app opens out of the tile that was tapped
-            val opts = if (!hub.launchRect.isEmpty) Transitions.grow(hub, hub.launchRect) else Transitions.rise(this)
+            val opts = if (!hub.launchRect.isEmpty) Transitions.grow(hub, hub.launchRect) else Transitions.app(hub)
             hub.launchRect.setEmpty()
             if (AppActions.open(this, g.pkg, null, opts)) leftForApp = true
             return
