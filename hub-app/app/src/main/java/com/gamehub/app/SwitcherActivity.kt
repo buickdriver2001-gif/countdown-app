@@ -293,7 +293,8 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
     private fun drawFrame(c: Canvas) {
         val now = System.nanoTime()
         val dt = if (lastNs == 0L) 0f else min(0.05f, (now - lastNs) / 1e9f)
-        lastNs = now; t += dt; enter = min(1f, enter + dt * 3.5f)
+        lastNs = now; t += dt
+        if (!NexusAccessibility.coverBusy || enter > 0f) enter = min(1f, enter + dt * 3.5f)
         val w = width.toFloat(); val h = height.toFloat()
         // Drawn and in front: let the helper fade its cover away. When the cover was shrinking the app
         // into its card, that card is already here in the same spot; otherwise the cards fade in now.

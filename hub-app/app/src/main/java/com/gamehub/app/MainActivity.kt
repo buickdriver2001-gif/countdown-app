@@ -307,7 +307,8 @@ class MainActivity : Activity() {
 
     private fun openSwitcher() {
         NexusAccessibility.instance?.fadeFor(NexusAccessibility.FADE_RECENTS, null, 90L)
-        startActivity(Intent(this, SwitcherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), Transitions.app(window.decorView, solidSplash = true))
+        // (Under NEXUS's fade, with no slide of the phone's own: the cards glide in as the fade lifts)
+        startActivity(Intent(this, SwitcherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION), Transitions.app(window.decorView, solidSplash = true))
     }
 
     /** NEXUS's own App info page (where "Allow restricted settings" lives, under ⋮). */

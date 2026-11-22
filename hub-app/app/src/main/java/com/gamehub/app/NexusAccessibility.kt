@@ -338,7 +338,7 @@ class NexusAccessibility : AccessibilityService() {
     fun switcherReady() {
         // Recent Apps is drawn and in front: the fade lifts shortly (once the phone's slide underneath is all but done)
         if (veilKind == FADE_RECENTS && veilSeenAt == 0L) {
-            veilSeenAt = SystemClock.uptimeMillis(); h.removeCallbacks(veilRun); h.postDelayed(veilRun, VEIL_HOLD)
+            veilSeenAt = SystemClock.uptimeMillis(); h.removeCallbacks(veilRun); h.postDelayed(veilRun, 50L)
         }
     }
 
@@ -898,7 +898,7 @@ class NexusAccessibility : AccessibilityService() {
         lastSwitcher = now
         current = null
         // (After the phone's own square button the phone has already begun its own animation: a quicker fade)
-        val faded = fadeFor(FADE_RECENTS, null, if (by == "Recent button") 90L else 60L)
+        val faded = fadeFor(FADE_RECENTS, null, if (by == "Recent button") 110L else 70L)
         LockTrace.log(this, "$by: opening NEXUS Recent Apps")
         try {
             startActivity(Intent(this, SwitcherActivity::class.java)
@@ -935,7 +935,7 @@ class NexusAccessibility : AccessibilityService() {
         ensureCover(force = true)
         val v = cover ?: return false
         coverToken++
-        if (picture != null) v.showStill(picture) else v.showVeil()
+        if (picture != null) v.showStill(picture) else if (kind == FADE_RECENTS) v.showRecents(null) else v.showVeil()
         setCover(true)
         if (fadeInMs > 0) {
             v.alpha = 0f
@@ -960,10 +960,12 @@ class NexusAccessibility : AccessibilityService() {
         if (veilSeenAt == 0L) { val w = topAppWindow(); if (w != Int.MIN_VALUE && w != veilFromWin) veilSeenAt = now }
         // If nothing changes (e.g. Back inside an app), it lifts almost at once
         val limit = when (veilKind) { FADE_BACK -> 200L; FADE_HOME -> 450L; FADE_RECENTS -> 800L; else -> VEIL_MAX }
+        // (Recent Apps opens without the phone's slide, so its fade can lift almost at once)
+        val hold = if (veilKind == FADE_RECENTS) 50L else VEIL_HOLD
         when {
-            veilSeenAt != 0L && now - veilSeenAt >= VEIL_HOLD -> liftVeil()
+            veilSeenAt != 0L && now - veilSeenAt >= hold -> liftVeil()
             veilSeenAt == 0L && now - veilAt >= limit -> liftVeil()
-            veilSeenAt != 0L -> h.postDelayed(veilRun, VEIL_HOLD - (now - veilSeenAt))
+            veilSeenAt != 0L -> h.postDelayed(veilRun, hold - (now - veilSeenAt))
             else -> h.postDelayed(veilRun, 40L)
         }
     }
