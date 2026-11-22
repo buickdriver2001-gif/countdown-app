@@ -592,11 +592,7 @@ class LockView(private val a: LockActivity) : View(a) {
         val fade = (1f - dragY / (h * 0.35f)).coerceIn(0f, 1f) * intro
 
         updateClock()
-        // NEXUS wordmark at the very top
         text.typeface = light
-        text.textSize = 12 * d; text.letterSpacing = 0.6f
-        text.color = Color.argb((110 * fade).toInt(), 170, 200, 255)
-        c.drawText("NEXUS", w / 2 + 4 * d, 56 * d + lift * 0.2f, text)
 
         // Clock, date and battery: top third, clear of everything else
         val clockY = h * 0.24f + lift * 0.5f

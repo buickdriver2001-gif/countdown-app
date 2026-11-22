@@ -34,6 +34,8 @@ class GameEntry(val name: String, val pkg: String, val accent: Int, val icon: In
     internal var rowsW = -1f; internal var rowsStep = -1f; internal var rowsSub: String? = null; internal var rowsBase = -1; internal var rows = 1
     internal var planW = -1f; internal var planH = -1f; internal var planBase = -1f; internal var planSub: String? = null
     internal var plan: TileText.Plan? = null
+    // PS2 menu: the name as shown on its line (shortened with … only if it's too long), worked out once
+    internal var listName: String? = null; internal var listNameW = -1f
 }
 
 /**
@@ -280,7 +282,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             text.letterSpacing = 0.9f - 0.55f * k
             text.setShadowLayer(18 * d, 0f, 0f, Color.argb(a, 80, 150, 255))
             text.color = Color.argb(a, 240, 246, 255)
-            c.drawText("NEXUS", cx0, cy0 + 12 * d, text)
+            // (No name shown: just the light)
             text.setShadowLayer(0f, 0f, 0f, 0)
             text.letterSpacing = 0.15f
         }
@@ -630,28 +632,23 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private var maxScroll = 0f
     private var listTop = 0f
     private var listBottom = 0f
+    /**
+     * Home screen style: the PS2-style menu (one app per line, big soft glowing words, the one in the middle
+     * shining brightest) or tiles on a grid. NEXUS settings → Home screen style.
+     */
+    var ps2Menu = true
+    /** PS2 menu: room above the first line and below the last, so each can sit in the middle. */
+    private var listPad = 0f
+
+    /** The style was switched: back to the top, laid out afresh. */
+    fun styleChanged() { scroll = 0f; scrollVel = 0f; selected = -1; packSig = -1; homing = false; invalidate() }
     private val dateFmt = SimpleDateFormat("EEE d MMM", Locale.getDefault())
 
     private fun drawMenu(c: Canvas, intro: Float, dt: Float) {
         val w = width.toFloat(); val h = height.toFloat()
         val a = ((intro - 0.4f) / 0.6f).coerceIn(0f, 1f)
         if (a <= 0f) return
-        // Title with a thin glowing rule beneath it
-        text.textAlign = Paint.Align.CENTER
-        text.textSize = 32 * d
-        text.letterSpacing = 0.45f
-        text.setShadowLayer(14 * d, 0f, 0f, Color.argb((255 * a).toInt(), 70, 140, 255))
-        text.color = Color.argb((255 * a).toInt(), 235, 242, 255)
-        c.drawText("NEXUS", w / 2 + 6 * d, h * 0.12f, text)
-        text.setShadowLayer(0f, 0f, 0f, 0)
-        val ruleY = h * 0.12f + 16 * d
-        c.save(); c.translate(w / 2, 0f); c.scale(w * 0.25f, 1f)
-        fill.color = Color.WHITE; fill.alpha = (200 * a).toInt(); fill.shader = ruleShader
-        c.drawRect(-1f, ruleY, 1f, ruleY + 1.2f * d, fill); fill.shader = null
-        c.restore()
-        // A spark travelling along the rule
-        val sx = w * 0.25f + (w * 0.5f) * ((t * 0.35f) % 1f)
-        fill.color = Color.argb((220 * a).toInt(), 220, 235, 255); c.drawCircle(sx, ruleY + 0.6f * d, 1.8f * d, fill)
+        // (No title: the apps start right under the status row)
         // Status corners: date left, clock right, thin brackets
         text.letterSpacing = 0.12f; text.textSize = 11.5f * d
         text.color = Color.argb((170 * a).toInt(), 190, 210, 245)
@@ -668,16 +665,18 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         line.strokeWidth = 1f * d; line.color = Color.argb((70 * a).toInt(), 140, 190, 255)
 
 
-        // App tiles on a home-screen grid (scrollable)
+        // App tiles on a home-screen grid, or the PS2-style menu (one app per line) - both scroll
         rows.clear()
-        listTop = h * 0.2f; listBottom = h - 76 * d - navInset
-        val gap = 10 * d
+        listTop = max(h * 0.12f, 88 * d); listBottom = h - 76 * d - navInset
+        val list = ps2Menu
+        val gap = if (list) 4 * d else 10 * d
         val left = 18 * d; val right = w - 18 * d
-        val cols = gridCols.coerceIn(2, 6)
+        val cols = if (list) 1 else gridCols.coerceIn(2, 6)
         layoutCols = cols
         cellW = (right - left - gap * (cols - 1)) / cols
-        cellH = ((listBottom - listTop - gap * (gridRows - 1)) / gridRows).coerceIn(cellW * 0.7f, cellW * 1.3f)
+        cellH = if (list) 56 * d else ((listBottom - listTop - gap * (gridRows - 1)) / gridRows).coerceIn(cellW * 0.7f, cellW * 1.3f)
         val stepX = cellW + gap; val stepY = cellH + gap
+        listPad = if (list) max(0f, (listBottom - listTop) / 2 - cellH / 2) else 0f
         // Pack tiles in order (first free spot that fits, like a phone home screen); the add tile goes last
         var target = -1
         val order: ArrayList<Int>
@@ -687,7 +686,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             // Where would the dragged tile land? Look at the layout without it and find the tile under the finger
             val rest = games.indices.filter { it != moveIndex }
             val restPos = pack(rest, cols)
-            val fx = lastX; val fy = moveY + scroll - listTop
+            val fx = lastX; val fy = moveY + scroll - listTop - listPad
             var hit = rest.size
             for ((k, idx) in rest.withIndex()) {
                 val p = restPos[k]
@@ -713,7 +712,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         }
         var usedRows = 0
         for (p in pos) usedRows = max(usedRows, p[1] + p[3])
-        val total = usedRows * stepY - gap
+        val total = usedRows * stepY - gap + 2 * listPad
         maxScroll = max(0f, total - (listBottom - listTop))
         // Fling with friction, springing back at the ends
         if (homing && !dragging) {
@@ -739,9 +738,16 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 // Lighter friction than before, so a flick glides on naturally
                 scrollVel *= kotlin.math.exp(-dt * 2.3f)
                 if (kotlin.math.abs(scrollVel) < 5f) scrollVel = 0f
+                // PS2 menu: once it's nearly stopped, it settles with an app in the middle
+                if (list && moveIndex < 0 && kotlin.math.abs(scrollVel) < 240f * d) {
+                    scrollVel = 0f
+                    val target = (kotlin.math.round(scroll / stepY) * stepY).coerceIn(0f, maxScroll)
+                    scroll += (target - scroll) * min(1f, dt * 12f)
+                    if (kotlin.math.abs(target - scroll) < 0.5f) scroll = target
+                }
             }
         }
-        val startY = listTop - scroll
+        val startY = listTop + listPad - scroll
         if (anim.size != games.size) anim = Array(games.size) { RectF(Float.NaN, 0f, 0f, 0f) }
         val k = min(1f, dt * 14f)
         while (hitPool.size < games.size + 1) hitPool.add(RectF())
@@ -761,7 +767,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             tr.set(x0, y0, x0 + p[2] * stepX - gap, y0 + p[3] * stepY - gap)
             if (idx < 0) {
                 hitPool[games.size].set(tr)
-                if (moveIndex < 0) drawAddTile(c, tr, selected == games.size, a)
+                if (moveIndex < 0) { if (list) drawListAdd(c, tr, selected == games.size, a) else drawAddTile(c, tr, selected == games.size, a) }
                 continue
             }
             hitPool[idx].set(tr)
@@ -769,7 +775,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             // Tiles glide to their new spots (while moving apps, and just after dropping)
             if (ar.left.isNaN() || (moveIndex < 0 && !settling)) ar.set(tr)
             else ar.set(ar.left + (tr.left - ar.left) * k, ar.top + (tr.top - ar.top) * k, ar.right + (tr.right - ar.right) * k, ar.bottom + (tr.bottom - ar.bottom) * k)
-            if (idx != moveIndex && ar.bottom > listTop - 10 * d && ar.top < listBottom + 10 * d) drawTile(c, games[idx], ar, idx == selected && moveIndex < 0, a)
+            if (idx != moveIndex && ar.bottom > listTop - 10 * d && ar.top < listBottom + 10 * d) {
+                if (list) drawListItem(c, games[idx], ar, idx == selected && moveIndex < 0, a)
+                else drawTile(c, games[idx], ar, idx == selected && moveIndex < 0, a)
+            }
         }
         for (hi in 0..games.size) rows.add(hitPool[hi])
         if (settling) { settleT -= dt; if (settleT <= 0f) settling = false }
@@ -782,13 +791,16 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             val tw = min(g.tileW, cols) * stepX - gap; val th = rowsFor(g, cols) * stepY - gap
             val r = RectF(lastX - grabFx * tw, moveY - grabFy * th, lastX - grabFx * tw + tw, moveY - grabFy * th + th)
             c.save(); c.scale(1.05f, 1.05f, r.centerX(), r.centerY())
-            glow(c, r.centerX(), r.centerY(), max(r.width(), r.height()) * 0.9f, 150)
-            fill.color = Color.argb(210, 6, 12, 30); c.drawRoundRect(r, 8 * d, 8 * d, fill)
-            drawTile(c, g, r, true, a)
+            if (list) drawListItem(c, g, r, true, a)
+            else {
+                glow(c, r.centerX(), r.centerY(), max(r.width(), r.height()) * 0.9f, 150)
+                fill.color = Color.argb(210, 6, 12, 30); c.drawRoundRect(r, 8 * d, 8 * d, fill)
+                drawTile(c, g, r, true, a)
+            }
             c.restore()
         }
-        // Soft fades where the list scrolls under the edges
-        if (maxScroll > 0f) {
+        // Soft fades where the list scrolls under the edges (the PS2 menu fades its lines by itself)
+        if (maxScroll > 0f && !list) {
             fill.color = Color.WHITE
             c.save(); c.translate(0f, listTop - 6 * d); c.scale(1f, 30 * d)
             fill.shader = topFade; c.drawRect(0f, 0f, w, 1f, fill)
@@ -835,10 +847,17 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
     /** A glass pill with a small glyph and a label (glyph 0 = stacked cards, 1 = gauge, 2 = grid). */
     private fun bottomPill(c: Canvas, r: RectF, label: String, glyph: Int, a: Float) {
-        fill.color = Color.argb((60 * a).toInt(), 40, 80, 200)
-        c.drawRoundRect(r, 18 * d, 18 * d, fill)
-        line.strokeWidth = 1f * d; line.color = Color.argb((120 * a).toInt(), 140, 190, 255)
-        c.drawRoundRect(r, 18 * d, 18 * d, line)
+        if (ps2Menu) {
+            // PS2 style: soft glowing words, no box
+            c.save(); c.scale(2.4f, 0.6f, r.centerX(), r.centerY())
+            glow(c, r.centerX(), r.centerY(), r.height() * 0.9f, (55 * a).toInt())
+            c.restore()
+        } else {
+            fill.color = Color.argb((60 * a).toInt(), 40, 80, 200)
+            c.drawRoundRect(r, 18 * d, 18 * d, fill)
+            line.strokeWidth = 1f * d; line.color = Color.argb((120 * a).toInt(), 140, 190, 255)
+            c.drawRoundRect(r, 18 * d, 18 * d, line)
+        }
         text.textAlign = Paint.Align.LEFT; text.textSize = 11 * d; text.letterSpacing = 0.18f
         val tw = text.measureText(label)
         val gw = 14 * d
@@ -1083,7 +1102,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
     /** Tile positions for an order of apps (-1 = the ADD tile, always 1×1). */
     private fun pack(order: List<Int>, cols: Int): Array<IntArray> =
-        TileLayout.pack(order.map { idx -> if (idx < 0) intArrayOf(1, 1) else intArrayOf(games[idx].tileW, rowsFor(games[idx], cols)) }, cols)
+        TileLayout.pack(order.map { idx -> if (idx < 0 || ps2Menu) intArrayOf(1, 1) else intArrayOf(games[idx].tileW, rowsFor(games[idx], cols)) }, cols)
 
     // ------------------------------------------------------------------ tile text: always shown in full
 
@@ -1101,6 +1120,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
      * (and "Not installed", if shown) need more room than that, so nothing is ever cut off.
      */
     private fun rowsFor(g: GameEntry, cols: Int): Int {
+        if (ps2Menu) return 1
         val gap = 10 * d
         val stepX = cellW + gap; val stepY = cellH + gap
         val w = min(g.tileW, cols) * stepX - gap
@@ -1332,6 +1352,86 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             }
         }
         cdPaint.setShadowLayer(0f, 0f, 0f, 0)
+    }
+
+    // ------------------------------------------------------------------ the PS2-style menu
+
+    /** How close a line is to the middle (1 = right in the middle), and how faded it is towards the edges. */
+    private fun listFocus(r: RectF): Float =
+        (1f - kotlin.math.abs(r.centerY() - (listTop + listBottom) / 2) / (r.height() + 4 * d)).coerceIn(0f, 1f)
+    private fun listFade(r: RectF): Float =
+        (1f - kotlin.math.abs(r.centerY() - (listTop + listBottom) / 2) / ((listBottom - listTop) * 0.62f)).coerceIn(0.12f, 1f)
+
+    /** The name as shown on its line (shortened with … only if it's too long even at its biggest). */
+    private fun listName(g: GameEntry, maxW: Float): String {
+        val cached = g.listName
+        if (cached != null && g.listNameW == maxW) return cached
+        measurePaint.textSize = 24 * d; measurePaint.letterSpacing = 0.14f
+        var s = g.name
+        if (measurePaint.measureText(s) > maxW) {
+            while (s.isNotEmpty() && measurePaint.measureText("$s…") > maxW) s = s.dropLast(1)
+            s = s.trimEnd() + "…"
+        }
+        g.listName = s; g.listNameW = maxW
+        return s
+    }
+
+    /**
+     * One line of the PS2-style menu: the app's name in big soft letters with its icon. The line in the middle
+     * (or the one being pressed) shines: brighter, a little bigger, a glow behind it and thin rules of light.
+     */
+    private fun drawListItem(c: Canvas, g: GameEntry, r: RectF, sel: Boolean, a0: Float) {
+        val k = max(listFocus(r), if (sel) 1f else 0f)
+        val a = a0 * listFade(r)
+        if (k > 0.02f) {
+            c.save(); c.scale(3.2f, 0.55f, r.centerX(), r.centerY())
+            glow(c, r.centerX(), r.centerY(), r.height() * 1.1f, (110 * k * a).toInt())
+            c.restore()
+            val half = r.width() * 0.34f * k
+            c.save(); c.translate(r.centerX(), 0f); c.scale(max(1f, half), 1f)
+            fill.color = Color.WHITE; fill.alpha = (150 * k * a).toInt(); fill.shader = ruleShader
+            c.drawRect(-1f, r.top + 3 * d, 1f, r.top + 4 * d, fill)
+            c.drawRect(-1f, r.bottom - 4 * d, 1f, r.bottom - 3 * d, fill)
+            fill.shader = null
+            c.restore()
+        }
+        val cd = countdown
+        val sub = when {
+            !g.installed -> "NOT INSTALLED"
+            g.pkg == CountdownLink.PKG && cd != null -> countdownText(cd.target - System.currentTimeMillis())
+            else -> ""
+        }
+        val size = (19f + 5f * k) * d
+        val iconS = 24 * d * (0.86f + 0.14f * k)
+        val name = listName(g, r.width() - 24 * d - 12 * d - 24 * d)
+        text.textAlign = Paint.Align.LEFT; text.textSize = size; text.letterSpacing = 0.14f
+        val tw = text.measureText(name)
+        val x0 = r.centerX() - (iconS + 12 * d + tw) / 2
+        val cy = r.centerY() - (if (sub.isNotEmpty()) 6 * d else 0f)
+        tmpRect.set(x0, cy - iconS / 2, x0 + iconS, cy + iconS / 2)
+        drawIcon(c, g, tmpRect, a * (0.35f + 0.65f * k))
+        val dim = 1f - k
+        text.color = Color.argb((255 * a).toInt(), (240 - 90 * dim).toInt(), (246 - 70 * dim).toInt(), (255 - 30 * dim).toInt())
+        if (k > 0.05f) text.setShadowLayer(2 * d + 12 * d * k, 0f, 0f, Color.argb((220 * k * a).toInt(), 70, 140, 255))
+        c.drawText(name, tmpRect.right + 12 * d, cy + size * 0.35f, text)
+        text.setShadowLayer(0f, 0f, 0f, 0)
+        if (sub.isNotEmpty()) {
+            cdPaint.textAlign = Paint.Align.CENTER; cdPaint.textSize = 11 * d; cdPaint.letterSpacing = 0.2f
+            cdPaint.color = Color.argb(((120 + 90 * k) * a).toInt(), 165, 195, 240)
+            c.drawText(sub, r.centerX(), cy + size * 0.35f + 17 * d, cdPaint)
+        }
+        text.textAlign = Paint.Align.CENTER
+    }
+
+    /** The last line of the PS2-style menu: add an app. */
+    private fun drawListAdd(c: Canvas, r: RectF, sel: Boolean, a0: Float) {
+        val k = max(listFocus(r), if (sel) 1f else 0f)
+        val a = a0 * listFade(r)
+        text.textAlign = Paint.Align.CENTER; text.textSize = (13f + 2f * k) * d; text.letterSpacing = 0.32f
+        text.color = Color.argb(((110 + 120 * k) * a).toInt(), 160, 195, 245)
+        if (k > 0.05f) text.setShadowLayer(10 * d * k, 0f, 0f, Color.argb((180 * k * a).toInt(), 70, 140, 255))
+        c.drawText("+  ADD AN APP", r.centerX(), r.centerY() + 5 * d, text)
+        text.setShadowLayer(0f, 0f, 0f, 0)
     }
 
     private fun drawAddTile(c: Canvas, r: RectF, sel: Boolean, a: Float) {

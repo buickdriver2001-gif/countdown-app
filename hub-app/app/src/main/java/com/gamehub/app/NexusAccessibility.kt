@@ -337,6 +337,7 @@ class NexusAccessibility : AccessibilityService() {
         running = true
         instance = this
         LockTrace.log(this, "helper started")
+        safe { loadQueue() }
         // The screen on/off listener first: the NEXUS lock screen depends on it
         val f = android.content.IntentFilter(Intent.ACTION_SCREEN_ON).apply { addAction(Intent.ACTION_SCREEN_OFF) }
         try {
@@ -376,7 +377,9 @@ class NexusAccessibility : AccessibilityService() {
     /** A "real" app worth remembering (not the keyboard, system bars, home screens or NEXUS). */
     private fun isRealApp(pkg: String): Boolean {
         if (pkg == packageName || pkg == "com.android.systemui" || pkg == "android") return false
-        if (pkg in homePkgs) return false
+        // (The phone's launchers aren't apps you've opened; but Settings, which also counts as a "home" on many
+        // phones, is: it's listed in Recent Apps, and closed fully, like any other app)
+        if (pkg in homePkgs && pkg != "com.android.settings") return false
         if ("inputmethod" in pkg || "keyboard" in pkg) return false
         return packageManager.getLaunchIntentForPackage(pkg) != null
     }
@@ -404,7 +407,9 @@ class NexusAccessibility : AccessibilityService() {
         /** Cards already pressed Close on (so one that won't go away can't keep it going). */
         val tried = HashSet<String>()
         /** Closing stops after this long, so the whole thing stays about 2 seconds. */
-        fun outOfTime() = SystemClock.uptimeMillis() - startedAt > 2300
+        fun outOfTime() = SystemClock.uptimeMillis() - startedAt > (if (all) 2300 else 4000)
+        /** How many times the phone's recent apps were scrolled to find a card. */
+        var scrolls = 0
     }
     private var closeJob: CloseJob? = null
 
@@ -412,7 +417,19 @@ class NexusAccessibility : AccessibilityService() {
         if (!fullCloseOn(this) || Build.VERSION.SDK_INT < 26) return false
         for (p in pkgs) if (p !in OWN_APPS && p != packageName) toClose.add(p)
         if (all) closeAllPending = true
+        saveQueue()
         return true
+    }
+
+    /** Apps waiting to be closed fully are kept on the phone (so they're still closed if Android stops NEXUS meanwhile). */
+    private fun saveQueue() {
+        getSharedPreferences("hub", Context.MODE_PRIVATE).edit()
+            .putString("closeQueue", toClose.joinToString(",")).putBoolean("closeAllPending", closeAllPending).apply()
+    }
+    private fun loadQueue() {
+        val p = getSharedPreferences("hub", Context.MODE_PRIVATE)
+        p.getString("closeQueue", "")?.split(",")?.filter { it.isNotBlank() }?.let { toClose.addAll(it) }
+        closeAllPending = closeAllPending || p.getBoolean("closeAllPending", false)
     }
 
     /** Step 0: the cube comes up at once (the caller is heading to the NEXUS home screen underneath it). */
@@ -422,7 +439,7 @@ class NexusAccessibility : AccessibilityService() {
         val km = getSystemService(KeyguardManager::class.java)
         if (pm?.isInteractive != true || km?.isKeyguardLocked == true) return false
         val j = CloseJob(toClose.toList(), closeAllPending, returnToSwitcher)
-        toClose.clear(); closeAllPending = false
+        toClose.clear(); closeAllPending = false; saveQueue()
         veilPkg = null; h.removeCallbacks(veilRun) // the closing cover takes over from any opening fade
         closeJob = j; j.stage = 0
         LockTrace.log(this, "closing apps fully" + (if (j.all) ": all" else " (quietly): " + j.pkgs.joinToString()))
@@ -537,7 +554,10 @@ class NexusAccessibility : AccessibilityService() {
 
     private fun closeNext(j: CloseJob, left: ArrayDeque<String>) {
         if (closeJob !== j) return
-        if (j.outOfTime() && left.isNotEmpty()) { goHomeAfterClose(j, "time's up, closed ${j.closed}"); return }
+        if (j.outOfTime() && left.isNotEmpty()) {
+            toClose.addAll(left); saveQueue()
+            goHomeAfterClose(j, "time's up, closed ${j.closed} (the rest next time)"); return
+        }
         val pkg = left.removeFirstOrNull()
         if (pkg == null) {
             h.postDelayed({ safe { goHomeAfterClose(j, "closed ${j.closed}" + (if (j.missed > 0) ", ${j.missed} not found" else "")) } }, 120)
@@ -545,7 +565,20 @@ class NexusAccessibility : AccessibilityService() {
         }
         val name = label(pkg)
         val root = recentsRoot(j)
-        val card = root?.let { findCard(it, name) }
+        val card = root?.let { findCard(it, namesFor(pkg)) }
+        if (card == null && root != null && j.scrolls < 8) {
+            // Not in view: scroll the phone's recent apps along (further, then back the other way) and look again
+            val forward = j.scrolls < 4
+            val list = findScrollable(root)
+            val moved = list?.performAction(if (forward) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) == true
+            if (moved) {
+                j.scrolls++
+                left.addFirst(pkg)
+                h.postDelayed({ safe { closeNext(j, left) } }, 260)
+                return
+            }
+            if (forward) { j.scrolls = 4; left.addFirst(pkg); h.post { safe { closeNext(j, left) } }; return }
+        }
         if (card != null && card.first.performAction(card.second)) { j.closed++; LockTrace.log(this, "  closed $name") }
         else { j.missed++; LockTrace.log(this, "  $name wasn't in the phone's recent apps (already closed?)") }
         cover?.peel(pkg) // either way it's no longer open: its icon falls off the cube
@@ -613,8 +646,30 @@ class NexusAccessibility : AccessibilityService() {
     }
 
     /** The card for the app called [name] (its exact name first), with its Close button. */
-    private fun findCard(root: AccessibilityNodeInfo, name: String): Pair<AccessibilityNodeInfo, Int>? {
-        val want = name.trim().lowercase()
+    /** Every name an app's card may show: the app's name, and the name of the screen it opens on. */
+    private fun namesFor(pkg: String): List<String> {
+        val out = LinkedHashSet<String>()
+        out.add(label(pkg).trim().lowercase())
+        try {
+            packageManager.getLaunchIntentForPackage(pkg)?.let { packageManager.resolveActivity(it, 0) }
+                ?.loadLabel(packageManager)?.toString()?.trim()?.lowercase()?.let { out.add(it) }
+        } catch (_: Exception) {}
+        return out.filter { it.isNotEmpty() }
+    }
+
+    /** The phone's scrolling list of app cards. */
+    private fun findScrollable(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val q = ArrayDeque<AccessibilityNodeInfo>(); q.add(root)
+        var seen = 0
+        while (q.isNotEmpty() && seen++ < 3000) {
+            val n = q.removeFirst()
+            if (n.isScrollable) return n
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        return null
+    }
+
+    private fun findCard(root: AccessibilityNodeInfo, wants: List<String>): Pair<AccessibilityNodeInfo, Int>? {
         var loose: Pair<AccessibilityNodeInfo, Int>? = null
         val q = ArrayDeque<AccessibilityNodeInfo>(); q.add(root)
         var seen = 0
@@ -623,8 +678,8 @@ class NexusAccessibility : AccessibilityService() {
             val act = closeAction(n)
             if (act != null) {
                 val names = namesOf(n)
-                if (names.any { it == want }) return n to act
-                if (loose == null && names.any { it.startsWith("$want,") }) loose = n to act
+                if (names.any { it in wants }) return n to act
+                if (loose == null && names.any { nm -> wants.any { nm.startsWith("$it,") } }) loose = n to act
             }
             for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
         }
@@ -728,7 +783,7 @@ class NexusAccessibility : AccessibilityService() {
             // Which screen of the app is showing (only real screens: some apps report a view's name instead)
             val screen = if (isActivity(pkg, cls)) cls else null
             if (pkg != current) currentCls = screen else if (screen != null) currentCls = screen
-            toClose.remove(pkg) // opened again before it was closed: leave it open
+            if (toClose.remove(pkg)) saveQueue() // opened again before it was closed: leave it open
             if (pkg != current) {
                 current = pkg
                 val token = ++openToken

@@ -71,7 +71,7 @@ class MainActivity : Activity() {
         val opts = ArrayList<NexusUi.Option>()
         // The app's own shortcuts first (Android shares them with the Home app), then NEXUS's options
         opts.addAll(AppActions.shortcutOptions(this, g.pkg))
-        opts.add(NexusUi.Option("Tile size:  ${sizeName(g.tileW, g.tileH)}", primary = true) { chooseTileSize(g) })
+        if (!hub.ps2Menu) opts.add(NexusUi.Option("Tile size:  ${sizeName(g.tileW, g.tileH)}", primary = true) { chooseTileSize(g) })
         opts.add(NexusUi.Option("Open") { open(g) })
         if (g.installed) opts.add(AppActions.infoOption(this, g.pkg))
         if (g.custom) opts.add(NexusUi.Option("Remove from NEXUS", danger = true) { removeGame(g) })
@@ -133,6 +133,7 @@ class MainActivity : Activity() {
         }
         val grid = prefs.getString("grid", "4x6")!!.split("x")
         hub.gridCols = grid.getOrNull(0)?.toIntOrNull() ?: 4; hub.gridRows = grid.getOrNull(1)?.toIntOrNull() ?: 6
+        hub.ps2Menu = prefs.getString("homeStyle", "ps2") == "ps2"
         hub.games = list
         hub.loadLiveShots()
     }
@@ -591,10 +592,11 @@ class MainActivity : Activity() {
     private fun homeSettings() {
         val isHome = HomeMode.isDefault(this)
         val version = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Exception) { "" }
-        NexusUi.panel(this, "NEXUS settings", "Version $version", listOf(
+        NexusUi.panel(this, "Settings", "Version $version", listOfNotNull(
             NexusUi.Option("System", primary = true) { openSystem() },
             NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
-            NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
+            NexusUi.Option("Home screen style:  " + (if (hub.ps2Menu) "PS2 menu" else "Tiles")) { toggleHomeStyle() },
+            if (hub.ps2Menu) null else NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
             NexusUi.Option("Choose my normal home screen") { chooseNormalHome() },
             NexusUi.Option("Recent apps (square button):  " + when {
                 Recents.serviceOn(this) && helperRunning() -> "ON"
@@ -617,6 +619,14 @@ class MainActivity : Activity() {
             },
             NexusUi.Option("Close NEXUS", danger = true) { askClose() }
         ), cancel = "Done")
+    }
+
+    /** Home screen style: the PS2-style menu or tiles on a grid. */
+    private fun toggleHomeStyle() {
+        hub.ps2Menu = !hub.ps2Menu
+        prefs.edit().putString("homeStyle", if (hub.ps2Menu) "ps2" else "tiles").apply()
+        hub.styleChanged()
+        homeSettings()
     }
 
     /** NEXUS buttons in all apps: on or off. It needs the helper, and the phone's 3-button navigation. */
