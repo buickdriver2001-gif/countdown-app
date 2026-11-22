@@ -658,12 +658,18 @@ class MainActivity : Activity() {
     private fun soundSettings() {
         val amb = Ambience.enabled(this); val menu = prefs.getBoolean("menuSounds", true)
         NexusUi.panel(this, "Sound",
-            "Background sound: a deep, soft drone while you're on the home screen. It's quiet, follows your media volume, " +
-                "and stays silent while music or videos play, during calls and alarms, and when your phone is on silent or vibrate.",
+            "Background sound: a deep, soft drone while you're on the home screen. It plays by itself on your media volume " +
+                "(silent or vibrate don't stop it), and pauses while music or videos play and during calls and alarms.",
             listOf(
                 NexusUi.Option("Background sound:  " + onOff(amb)) {
                     Ambience.setEnabled(this, !amb)
                     if (!amb) ambience.start() else ambience.stop()
+                    soundSettings()
+                },
+                NexusUi.Option("Background volume:  " + Ambience.volumeName(Ambience.volume(this))) {
+                    val v = Ambience.volume(this)
+                    Ambience.setVolume(this, when { v < 0.45f -> 0.6f; v < 0.8f -> 1f; else -> 0.3f })
+                    ambience.refreshVolume()
                     soundSettings()
                 },
                 NexusUi.Option("Menu sounds:  " + onOff(menu)) {

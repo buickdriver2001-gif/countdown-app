@@ -20,9 +20,9 @@ import kotlin.math.sin
  * in the spirit of an old console menu (made up on the phone from scratch: no recordings). It loops seamlessly
  * and costs almost nothing to play (the phone loops it by itself).
  *
- * Considerate by design: quiet, on the media volume, only while the NEXUS home screen is in front, and silent
- * while music or a video is playing, during calls, alarms and ringing, and when the phone is on silent or
- * vibrate. Settings → Sound switches it off.
+ * Plays by itself whenever the NEXUS home screen is in front (on the media volume, so silent or vibrate
+ * don't stop it), and steps aside while music or a video is playing and during calls, alarms and ringing.
+ * Settings → Sound sets its volume or switches it off.
  */
 class Ambience(private val c: Context) {
     private val h = Handler(Looper.getMainLooper())
@@ -39,7 +39,10 @@ class Ambience(private val c: Context) {
     /** The home screen is in front: fade in (if it's switched on and nothing else is sounding). */
     fun start() {
         wanted = true
-        if (!enabled(c) || !quietNow()) return
+        h.removeCallbacks(retry)
+        if (!enabled(c)) return
+        // Something else sounding (music, a video, a call): try again in a few seconds
+        if (!quietNow()) { h.postDelayed(retry, RETRY_MS); return }
         val data = pcm
         if (data == null) {
             if (!building) {
@@ -55,12 +58,13 @@ class Ambience(private val c: Context) {
         others = otherPlayers()
         listen(true)
         try { if (t.playState != AudioTrack.PLAYSTATE_PLAYING) t.play() } catch (_: Throwable) { return }
-        fadeTo(GAIN)
+        fadeTo(gain())
     }
 
     /** Leaving the home screen: fade out (and stop). */
     fun stop() {
         wanted = false
+        h.removeCallbacks(retry)
         listen(false)
         fadeTo(0f)
     }
@@ -68,6 +72,7 @@ class Ambience(private val c: Context) {
     /** Stops at once and lets go of the sound. */
     fun release() {
         wanted = false
+        h.removeCallbacks(retry)
         listen(false)
         h.removeCallbacks(fader)
         try { track?.stop() } catch (_: Throwable) {}
@@ -75,11 +80,19 @@ class Ambience(private val c: Context) {
         track = null
     }
 
-    /** Nothing else to be considerate of: not silent/vibrate, no call, no music or video playing. */
+    /** Nothing else is sounding: no call, no music or video playing. (Silent and vibrate don't matter: it's on the media volume.) */
     private fun quietNow(): Boolean {
         val am = audio ?: return false
-        return am.ringerMode == AudioManager.RINGER_MODE_NORMAL && am.mode == AudioManager.MODE_NORMAL && !am.isMusicActive
+        return am.mode == AudioManager.MODE_NORMAL && !am.isMusicActive
     }
+
+    private val retry = Runnable { if (wanted) start() }
+
+    /** How loud it plays now (Settings > Sound > Background volume). */
+    private fun gain() = MAX_GAIN * volume(c)
+
+    /** The volume setting changed: fade to the new level (if it's playing). */
+    fun refreshVolume() { if (wanted && track != null && target > 0f) fadeTo(gain()) }
 
     // ------------------------------------------------------------------ stepping aside for other sounds
 
@@ -99,7 +112,8 @@ class Ambience(private val c: Context) {
     private val watcher = object : AudioManager.AudioPlaybackCallback() {
         override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>?) {
             val n = configs?.count { quietFor(it) } ?: 0
-            if (n > others) { listen(false); fadeTo(0f) } // something else started: step aside (until next time)
+            // Something else started: step aside, and come back once it's quiet again
+            if (n > others) { listen(false); fadeTo(0f); h.removeCallbacks(retry); h.postDelayed(retry, RETRY_MS) }
             else others = n
         }
     }
@@ -120,7 +134,7 @@ class Ambience(private val c: Context) {
     private val fader = object : Runnable {
         override fun run() {
             val t = track ?: return
-            val step = if (target > vol) GAIN / 30f else GAIN / 14f // about 0.9 s in, 0.4 s out
+            val step = if (target > vol) MAX_GAIN / 40f else MAX_GAIN / 18f // a second or so in, half a second out
             vol = if (abs(target - vol) <= step) target else vol + if (target > vol) step else -step
             try { t.setVolume(vol) } catch (_: Throwable) {}
             if (vol != target) { h.postDelayed(this, 30); return }
@@ -144,12 +158,18 @@ class Ambience(private val c: Context) {
     companion object {
         private const val RATE = 22050
         private const val LOOP_S = 16
-        /** How loud, at most (of the media volume). */
-        private const val GAIN = 0.42f
+        /** How loud, at most (of the media volume), with the volume setting at High. */
+        private const val MAX_GAIN = 0.7f
+        /** How often it checks whether it can come back after stepping aside. */
+        private const val RETRY_MS = 5000L
         @Volatile private var pcm: ShortArray? = null
 
         fun enabled(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("ambience", true)
         fun setEnabled(c: Context, on: Boolean) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit().putBoolean("ambience", on).apply()
+        /** Background volume: 0.3 low, 0.6 medium (the start), 1 high. */
+        fun volume(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getFloat("ambienceVol", 0.6f)
+        fun setVolume(c: Context, v: Float) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit().putFloat("ambienceVol", v).apply()
+        fun volumeName(v: Float) = when { v < 0.45f -> "Low"; v < 0.8f -> "Medium"; else -> "High" }
 
         /**
          * Makes the loop: a deep drone (a low tone of 55 Hz with its harmonics, played twice a quarter of a
