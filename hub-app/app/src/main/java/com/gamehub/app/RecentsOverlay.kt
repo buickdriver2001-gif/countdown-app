@@ -18,7 +18,8 @@ import android.widget.FrameLayout
  * phone's own slide is never seen).
  *
  * Safety: never over the lock screen; gone the moment the screen turns off; steps aside at once for a call,
- * an alarm or any other app that comes in front; and if it's left alone for two minutes it closes itself.
+ * an alarm or timer going off, or any other app that comes in front; a swipe down from the top edge opens the
+ * notification shade; and if it's left untouched for two minutes it closes itself.
  */
 class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     override val ctx: Context get() = svc
@@ -26,7 +27,8 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     override var zoomHandover = false
 
     private val h = android.os.Handler(android.os.Looper.getMainLooper())
-    private val sfx by lazy { Sfx() }
+    private var sfxMade: Sfx? = null
+    private val sfx: Sfx get() = sfxMade ?: Sfx().also { sfxMade = it }
     private var root: Root? = null
     private var view: SwitcherView? = null
 
@@ -44,6 +46,42 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     private var fromWin = Int.MIN_VALUE
 
     private inner class Root(c: Context) : FrameLayout(c) {
+        private val edge = run {
+            val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+            (if (id > 0) resources.getDimensionPixelSize(id) else 0).coerceAtLeast((24 * resources.displayMetrics.density).toInt()) +
+                (8 * resources.displayMetrics.density).toInt()
+        }
+        private val slop = 20 * resources.displayMetrics.density
+        private var downX = 0f
+        private var downY = -1f
+
+        override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+            // Still in use: the two-minute close waits
+            if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN && showing && waitFor == null) {
+                h.removeCallbacks(idleClose); h.postDelayed(idleClose, IDLE_MS)
+            }
+            return super.dispatchTouchEvent(ev)
+        }
+
+        /** A swipe down from the top edge (where the status bar is): the notification shade, as anywhere else. */
+        override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> { downX = ev.x; downY = if (ev.y <= edge) ev.y else -1f }
+                android.view.MotionEvent.ACTION_MOVE -> if (downY >= 0f) {
+                    val dy = ev.y - downY; val dx = kotlin.math.abs(ev.x - downX)
+                    if (dy > slop && dy > dx) {
+                        downY = -1f
+                        svc.safeRun { hide(false); svc.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS) }
+                        return true
+                    }
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> downY = -1f
+            }
+            return false
+        }
+
+        override fun onTouchEvent(event: android.view.MotionEvent): Boolean = true
+
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
             if (event.keyCode == KeyEvent.KEYCODE_BACK) {
                 if (event.action == KeyEvent.ACTION_UP) svc.safeRun { back() }
@@ -86,15 +124,72 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
         // A quick fade over the app; the cards glide in at the same time
         r.animate().alpha(1f).setDuration(120).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
         r.requestFocus()
-        h.removeCallbacks(idleClose); h.postDelayed(idleClose, 120_000)
+        h.removeCallbacks(idleClose); h.postDelayed(idleClose, IDLE_MS)
+        // Calls and alarms: what's sounding right now doesn't count (e.g. a call you're already on)
+        startMode = audio()?.mode ?: android.media.AudioManager.MODE_NORMAL
+        alarmPlayers = alarmPlayerCount()
+        h.removeCallbacks(guard); h.postDelayed(guard, GUARD_MS)
         return true
+    }
+
+    /** Back on NEXUS's Recent button while Recent Apps is up: the card in the middle opens. */
+    fun recentPressed() { if (showing && !leaving) view?.openCentered() }
+
+    /** The helper is stopping: Recent Apps goes, and its sounds are let go. */
+    fun destroy() {
+        hide(false)
+        h.removeCallbacks(guard)
+        sfxMade?.release(); sfxMade = null
+    }
+
+    // ------------------------------------------------------------------ calls and alarms
+
+    private var startMode = android.media.AudioManager.MODE_NORMAL
+    private var alarmPlayers = 0
+    private fun audio() = svc.getSystemService(android.media.AudioManager::class.java)
+
+    /**
+     * How many alarm or ringtone players the phone has. (Android lists ones that are only set up and not
+     * sounding too, so it's a new one appearing that counts: an alarm, a timer or a call starting to ring.)
+     */
+    private fun alarmPlayerCount(): Int = try {
+        audio()?.activePlaybackConfigurations?.count {
+            val u = it.audioAttributes.usage
+            u == android.media.AudioAttributes.USAGE_ALARM || u == android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE
+        } ?: 0
+    } catch (_: Throwable) { 0 }
+
+    /**
+     * A call coming in (or starting), or an alarm or timer going off, while Recent Apps is up: it steps aside at
+     * once so you see it (they show as a pop-up at the top, which Recent Apps would otherwise be covering).
+     */
+    private val guard = object : Runnable {
+        override fun run() {
+            svc.safeRun {
+                if (!showing || root == null) return@safeRun
+                val am = audio()
+                val mode = am?.mode ?: android.media.AudioManager.MODE_NORMAL
+                val callNow = mode != startMode && (mode == android.media.AudioManager.MODE_RINGTONE ||
+                    mode == android.media.AudioManager.MODE_IN_CALL || mode == android.media.AudioManager.MODE_IN_COMMUNICATION)
+                val players = alarmPlayerCount()
+                val alarm = players > alarmPlayers
+                alarmPlayers = players
+                if (callNow || alarm) {
+                    LockTrace.log(svc, "Recent Apps stepped aside: " + (if (callNow) "call" else "alarm or ringtone"))
+                    hide(false)
+                    return@safeRun
+                }
+                startMode = mode
+                h.postDelayed(this, GUARD_MS)
+            }
+        }
     }
 
     /** Fades Recent Apps away (or removes it at once). */
     fun hide(animated: Boolean = true) {
         val r = root ?: return
         showing = false; leaving = false; waitFor = null
-        h.removeCallbacks(waitRun); h.removeCallbacks(idleClose)
+        h.removeCallbacks(waitRun); h.removeCallbacks(idleClose); h.removeCallbacks(guard)
         if (!animated) { remove(r); return }
         r.animate().cancel()
         r.animate().alpha(0f).setDuration(150).setInterpolator(android.view.animation.AccelerateInterpolator())
@@ -123,14 +218,16 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
      * Something else came in front (a call, an alarm, another app): Recent Apps steps aside at once. Apps it's
      * waiting for, the phone's own launcher and NEXUS itself don't count.
      */
-    fun onWindowEvent(pkg: String, homeLike: Boolean) {
+    fun onWindowEvent(pkg: String, cls: String, homeLike: Boolean) {
         if (!showing) return
         val w = waitFor
         if (w != null) {
-            if ((w == svc.packageName && pkg == svc.packageName) || pkg == w) seen()
+            if (pkg == w && (w != svc.packageName || cls == MainActivity::class.java.name)) seen()
             return
         }
-        if (pkg == svc.packageName || homeLike || pkg == "com.android.systemui" || "inputmethod" in pkg || "keyboard" in pkg) return
+        // The NEXUS home screen came up some other way (e.g. the phone's Home, with NEXUS starting afresh)
+        if (pkg == svc.packageName) { if (cls == MainActivity::class.java.name && openedOver != svc.packageName) hide(true); return }
+        if (homeLike || pkg == "com.android.systemui" || "inputmethod" in pkg || "keyboard" in pkg) return
         if (pkg == openedOver) return
         hide(true)
     }
@@ -174,6 +271,8 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     override fun closeApp(pkg: String, queue: Boolean): Boolean {
         val own = pkg in NexusAccessibility.OWN_APPS
         if (own) NexusAccessibility.closeOwnApp(svc, pkg)
+        // (Only has an effect on older Android versions, and only for apps already in the background)
+        try { (svc.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager).killBackgroundProcesses(pkg) } catch (_: Exception) {}
         Recents.remove(svc, pkg)
         if (own) return true
         return queue && NexusAccessibility.closeFully(listOf(pkg), all = false)
@@ -232,5 +331,9 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     companion object {
         /** After the new screen is in place, before fading away (the phone's own slide underneath is all but done). */
         private const val HOLD = 170L
+        /** Left untouched this long, Recent Apps closes itself. */
+        private const val IDLE_MS = 120_000L
+        /** How often it checks for a call or an alarm while it's up. */
+        private const val GUARD_MS = 400L
     }
 }

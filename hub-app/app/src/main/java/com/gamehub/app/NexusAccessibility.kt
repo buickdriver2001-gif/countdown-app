@@ -402,6 +402,7 @@ class NexusAccessibility : AccessibilityService() {
         try { unregisterReceiver(screenOn) } catch (_: Exception) {}
         dropCover()
         dropButtons()
+        try { recents.destroy() } catch (_: Throwable) {}
         lockStrip?.let { s -> lockStrip = null; lockStripLp = null; try { getSystemService(android.view.WindowManager::class.java)?.removeView(s) } catch (_: Throwable) {} }
         instance = null
         running = false
@@ -809,7 +810,7 @@ class NexusAccessibility : AccessibilityService() {
         if (pkg != "com.android.systemui" && pkg != "android" && "inputmethod" !in pkg && "keyboard" !in pkg) { frontPkg = pkg; frontCls = cls }
         queueButtons()
         // Recent Apps (NEXUS's layer) steps aside for a call, an alarm or any app that comes in front
-        recents.onWindowEvent(pkg, pkg in homePkgs)
+        recents.onWindowEvent(pkg, cls, pkg in homePkgs)
         // Under NEXUS's fade: the new screen has announced itself (the home screen, or the app being opened)
         if (veilKind != 0 && veilSeenAt == 0L && pkg != "com.android.systemui" && "inputmethod" !in pkg && "keyboard" !in pkg &&
             ((veilKind == FADE_HOME && cls == MainActivity::class.java.name) ||
@@ -1253,18 +1254,22 @@ class NexusAccessibility : AccessibilityService() {
 
     /** NEXUS's Home button over an app: the home screen shows at once (no phone slide), then Home. */
     private fun homeButton() {
+        // (Recent Apps up: it handles it, fading into the home screen)
+        if (recents.showing) { recents.goNexus(); return }
         fadeFor(FADE_HOME, null, 90L)
         performGlobalAction(GLOBAL_ACTION_HOME)
     }
 
     /** NEXUS's Back button over an app: the quick fade (not while typing: that Back only closes the keyboard). */
     private fun backButton() {
+        if (recents.showing) { recents.back(); return }
         if (appBar?.ime != true) fadeFor(FADE_BACK, null, 80L)
         performGlobalAction(GLOBAL_ACTION_BACK)
     }
 
     /** NEXUS's Recent button over an app: NEXUS Recent Apps (or the phone's own, if that's what's set). */
     private fun recentButton() {
+        if (recents.showing) { recents.recentPressed(); return }
         if (takeOverRecents() && HomeMode.isOn(this) && HomeMode.isDefault(this) && !talkBackOn()) openNexusRecents("Recent button")
         else performGlobalAction(GLOBAL_ACTION_RECENTS)
     }
