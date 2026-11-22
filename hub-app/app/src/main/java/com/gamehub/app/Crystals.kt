@@ -93,16 +93,16 @@ class Crystals(context: Context) {
     private val lx = -0.45f; private val ly = 0.72f; private val lz = -0.53f
 
     /**
-     * Draws the crystals, fading in with [k] (0..1). They orbit an oval around the middle of the screen (above
-     * and below an open panel), the near ones larger and brighter. [dt] seconds have passed.
+     * Draws the crystals, fading in with [k] (0..1). They orbit an oval (centre [cx], [cy], radii [rx], [ry]; by
+     * default round the middle of the screen, above and below an open panel), the near ones larger and brighter,
+     * [scale] times their usual size. [dt] seconds have passed.
      */
-    fun draw(c: Canvas, w: Int, h: Int, dt: Float, k: Float) {
+    fun draw(c: Canvas, w: Int, h: Int, dt: Float, k: Float,
+             cx: Float = w / 2f, cy: Float = h * 0.5f, rx: Float = w * 0.41f, ry: Float = h * 0.42f, scale: Float = 1f) {
         if (k <= 0.01f || w <= 0 || h <= 0) return
         t += dt
         val turn = t * 0.11f
-        val rx = w * 0.41f; val ry = h * 0.42f
-        val cx = w / 2f; val cy = h * 0.5f
-        val unit0 = min(w, h) * 0.085f
+        val unit0 = min(w, h) * 0.085f * scale
         for (i in 0 until COUNT) {
             val a = crystals[i].a0 + turn
             ox[i] = cx + cos(a) * rx; oy[i] = cy + sin(a) * ry

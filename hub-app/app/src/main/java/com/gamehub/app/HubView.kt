@@ -81,6 +81,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     var panelOpen = false
         set(v) { field = v; invalidate() }
     private var crystalK = 0f
+    /** The PS2-style crystals: a slow ring of them turning in the space above the menu. */
+    private val crystals by lazy { Crystals(context) }
+    private var homeCrystalK = 0f
     /** Start-up animation clock (the hub appears when it finishes). */
     private var bootT = 0f
     var booting = true
@@ -208,6 +211,13 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         world.draw(c, width, height, dt, intro, 0.6f, if (ps2Menu) 0.62f else 0.8f)
         // (A panel open: the menu steps back; the panel's own layer shows the crystals)
         crystalK = if (panelOpen) min(1f, crystalK + dt * 2.5f) else max(0f, crystalK - dt * 3f)
+        // Crystals over the towers, in the open space above the menu: a carousel seen from a little above
+        // (they make way for a panel's own crystals while one is open)
+        if (ps2Menu) {
+            homeCrystalK = if (panelOpen) max(0f, homeCrystalK - dt * 3f) else min(1f, homeCrystalK + dt * 1.2f)
+            val ck = homeCrystalK * intro * 0.85f
+            if (ck > 0.01f) crystals.draw(c, width, height, dt, ck, w / 2f, h * 0.25f, w * 0.34f, h * 0.06f, 0.8f)
+        }
         drawMenu(c, intro, dt)
 
         if (launchFlash > 0f) {
