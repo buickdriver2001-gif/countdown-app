@@ -96,7 +96,9 @@ class LockActivity : Activity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         LockTrace.log(this, "  lock screen focus=" + hasFocus)
+        focused = hasFocus
         if (hasFocus) { hideBars(); stillNeeded() }
+        NexusAccessibility.instance?.refreshAppButtons()
     }
 
     /** No status bar and no phone buttons on the lock screen (a swipe from the edge still peeks at them). */
@@ -297,6 +299,8 @@ class LockActivity : Activity() {
     companion object {
         /** True while the NEXUS lock screen is on screen. */
         @Volatile var showing = false
+        /** The NEXUS lock screen is in front with focus (not under the phone's PIN screen, say). */
+        @Volatile var focused = false
 
         /**
          * True while the NEXUS lock screen exists at all (even if something else, such as an alarm,

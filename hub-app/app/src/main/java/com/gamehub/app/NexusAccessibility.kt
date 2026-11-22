@@ -421,7 +421,9 @@ class NexusAccessibility : AccessibilityService() {
         /** Cards already pressed Close on (so one that won't go away can't keep it going). */
         val tried = HashSet<String>()
         /** Closing stops after this long, so the whole thing stays about 2 seconds. */
-        fun outOfTime() = SystemClock.uptimeMillis() - startedAt > (if (all) 2300 else 4000)
+        fun outOfTime() = SystemClock.uptimeMillis() - startedAt > (if (all) 3500 else 5500)
+        /** Cards still there after closing got a second press already. */
+        var retried = false
         /** How many times the phone's recent apps were scrolled to find a card. */
         var scrolls = 0
     }
@@ -512,7 +514,8 @@ class NexusAccessibility : AccessibilityService() {
             val clear = findByWords(root, setOf("clear all"))
             val pressed = clear != null && clear.isEnabled && clear.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             if (pressed) { LockTrace.log(this, "  pressed Clear all"); cover?.peelAll() }
-            h.postDelayed({ safe { closeEveryCard(j, 0) } }, if (pressed) 320L else 0L)
+            // (The phone clears them once its animation has finished: wait for that before looking again)
+            h.postDelayed({ safe { closeEveryCard(j, 0) } }, if (pressed) 650L else 0L)
             return
         }
         closeNext(j, ArrayDeque(j.pkgs))
@@ -525,12 +528,14 @@ class NexusAccessibility : AccessibilityService() {
         // Each card once (a card that doesn't go away isn't pressed again), and never past the time limit
         val card = if (round < 20 && root != null && !j.outOfTime()) findAnyCard(root, j.tried) else null
         if (card == null || !card.first.performAction(card.second)) {
-            val why = if (j.outOfTime() && card != null) "time's up, closed $round" else if (round == 0) "nothing left to close" else "closed $round"
-            h.postDelayed({ safe { goHomeAfterClose(j, why) } }, 80)
+            val left = if (root != null) cardNames(root) else emptyList()
+            val why = (if (j.outOfTime() && card != null) "time's up, closed $round" else if (round == 0) "nothing left to close" else "closed $round") +
+                (if (left.isNotEmpty() && round > 0) ", still showing: " + left.joinToString() else "")
+            h.postDelayed({ safe { goHomeAfterClose(j, why) } }, 150)
             return
         }
         cover?.peel(null)
-        h.postDelayed({ safe { closeEveryCard(j, round + 1) } }, 200)
+        h.postDelayed({ safe { closeEveryCard(j, round + 1) } }, 420)
     }
 
     /** The names on the app cards that have a Close button (for the log, to see what NEXUS found). */
@@ -577,7 +582,7 @@ class NexusAccessibility : AccessibilityService() {
         }
         val pkg = left.removeFirstOrNull()
         if (pkg == null) {
-            h.postDelayed({ safe { goHomeAfterClose(j, "closed ${j.closed}" + (if (j.missed > 0) ", ${j.missed} not found" else "")) } }, 120)
+            h.postDelayed({ safe { verifyThenHome(j) } }, 150)
             return
         }
         val name = label(pkg)
@@ -599,7 +604,27 @@ class NexusAccessibility : AccessibilityService() {
         if (card != null && card.first.performAction(card.second)) { j.closed++; LockTrace.log(this, "  closed $name") }
         else { j.missed++; LockTrace.log(this, "  $name wasn't in the phone's recent apps (already closed?)") }
         cover?.peel(pkg) // either way it's no longer open: its icon falls off the cube
-        h.postDelayed({ safe { closeNext(j, left) } }, 200) // the card's close animation
+        // The phone only really closes the app once the card has finished flying away: wait for that (leaving its
+        // recent apps any sooner can cancel it, and the app stays open)
+        h.postDelayed({ safe { closeNext(j, left) } }, 420)
+    }
+
+    /** A last look at the phone's recent apps: any app still there gets one more press, then home. */
+    private fun verifyThenHome(j: CloseJob) {
+        if (closeJob !== j) return
+        val root = recentsRoot(j)
+        val names = if (root != null) cardNames(root) else emptyList()
+        val stuck = j.pkgs.filter { p -> val ns = namesFor(p); names.any { n -> n in ns || ns.any { n.startsWith("$it,") } } }
+        if (stuck.isNotEmpty() && !j.retried && root != null && !j.outOfTime()) {
+            j.retried = true
+            LockTrace.log(this, "  still open after closing: " + stuck.joinToString { label(it) } + " (pressing Close again)")
+            for (p in stuck) findCard(root, namesFor(p))?.let { it.first.performAction(it.second) }
+            h.postDelayed({ safe { verifyThenHome(j) } }, 450)
+            return
+        }
+        val note = "closed ${j.closed}" + (if (j.missed > 0) ", ${j.missed} not found" else "") +
+            (if (stuck.isNotEmpty()) ", still open: " + stuck.joinToString { label(it) } else "")
+        goHomeAfterClose(j, note)
     }
 
     private fun goHomeAfterClose(j: CloseJob, why: String) {
@@ -1023,8 +1048,9 @@ class NexusAccessibility : AccessibilityService() {
         if (now - homeCheckedAt > 3000) { homeOk = HomeMode.isOn(this) && HomeMode.isDefault(this); homeCheckedAt = now }
         if (!homeOk) return "NEXUS isn't the home screen"
         if (talkBackOn()) return "TalkBack is on"
-        if (getSystemService(PowerManager::class.java)?.isInteractive != true) return "screen off"
-        if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return "phone locked"
+        if (getSystemService(PowerManager::class.java)?.isInteractive != true) { coverPhoneButtonsOnLock(); return "screen off" }
+        if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) { coverPhoneButtonsOnLock(); return "phone locked" }
+        lockStrip?.let { if (it.visibility == android.view.View.VISIBLE) coverPhoneButtonsOnLock() }
         // NEXUS's cover (Recent Apps opening, closing apps) draws the buttons itself: look again once it's gone
         // (They stay put above NEXUS's quick fade, like the phone's own buttons would)
         if (closeJob != null || ((coverLp?.alpha ?: 0f) > 0.5f && veilKind == 0)) { queueButtons(200); return "NEXUS cover showing" }
@@ -1124,9 +1150,50 @@ class NexusAccessibility : AccessibilityService() {
     }
 
     private fun dropButtons() {
+        lockStrip?.let { s -> lockStrip = null; lockStripLp = null; try { getSystemService(android.view.WindowManager::class.java)?.removeView(s) } catch (_: Throwable) {} }
         val v = appBar ?: return
         appBar = null; appBarLp = null; appBarShown = false
         try { getSystemService(android.view.WindowManager::class.java)?.removeView(v) } catch (_: Throwable) {}
+    }
+
+    /**
+     * On the NEXUS lock screen, a swipe up from the very bottom edge makes Android show its own buttons for a
+     * couple of seconds. While the NEXUS lock screen is in front (not under the phone's PIN screen), a dark strip
+     * the colour of the lock screen covers them. It takes no touches: the swipe still unlocks.
+     */
+    private var lockStrip: android.view.View? = null
+    private var lockStripLp: android.view.WindowManager.LayoutParams? = null
+    private fun coverPhoneButtonsOnLock() {
+        val bar = if (LockActivity.showing && LockActivity.focused && getSystemService(PowerManager::class.java)?.isInteractive == true) phoneBar() else null
+        val wm = getSystemService(android.view.WindowManager::class.java) ?: return
+        val v = lockStrip; val lp = lockStripLp
+        if (bar == null) {
+            if (v != null && lp != null && v.visibility == android.view.View.VISIBLE) {
+                v.visibility = android.view.View.GONE
+                try { wm.updateViewLayout(v, lp) } catch (_: Throwable) {}
+            }
+            return
+        }
+        val r = bar.first
+        if (v == null || lp == null) {
+            val s = android.view.View(this).apply { setBackgroundColor(android.graphics.Color.rgb(1, 2, 8)) } // the lock screen's own bottom colour
+            val p = android.view.WindowManager.LayoutParams(r.width(), r.height(),
+                android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                android.graphics.PixelFormat.OPAQUE)
+            p.gravity = android.view.Gravity.TOP or android.view.Gravity.LEFT
+            p.x = r.left; p.y = r.top
+            if (Build.VERSION.SDK_INT >= 30) p.fitInsetsTypes = 0
+            p.title = "NEXUS lock strip"
+            try { wm.addView(s, p) } catch (_: Throwable) { return }
+            lockStrip = s; lockStripLp = p
+            logButtons("covered the phone's own buttons on the lock screen")
+            return
+        }
+        lp.x = r.left; lp.y = r.top; lp.width = r.width(); lp.height = r.height()
+        v.visibility = android.view.View.VISIBLE
+        try { wm.updateViewLayout(v, lp) } catch (_: Throwable) {}
     }
 
     /** Safety: if the buttons ever keep flicking on and off, they step aside for a while (the phone's own show). */
