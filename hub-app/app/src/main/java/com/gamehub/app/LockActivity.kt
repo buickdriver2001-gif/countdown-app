@@ -79,6 +79,7 @@ class LockActivity : Activity() {
         // While the screen is off the phone may take a moment to lock: stay ready rather than closing early
         if (!stillNeeded()) return
         showing = true
+        inFront = true; NexusAccessibility.instance?.updateLockStrip()
         // Left alone, it fades out and the screen turns off (a fresh count each time it comes on)
         resetShade()
         lastUse = android.os.SystemClock.uptimeMillis(); seenItems = NexusNotifications.items; sleepFailed = false
@@ -98,7 +99,7 @@ class LockActivity : Activity() {
         LockTrace.log(this, "  lock screen focus=" + hasFocus)
         focused = hasFocus
         if (hasFocus) { hideBars(); stillNeeded() }
-        NexusAccessibility.instance?.refreshAppButtons()
+        NexusAccessibility.instance?.updateLockStrip()
     }
 
     /** No status bar and no phone buttons on the lock screen (a swipe from the edge still peeks at them). */
@@ -138,6 +139,7 @@ class LockActivity : Activity() {
     override fun onPause() {
         super.onPause()
         view.removeCallbacks(idleCheck)
+        inFront = false; NexusAccessibility.instance?.updateLockStrip()
     }
 
     override fun onStop() {
@@ -251,15 +253,17 @@ class LockActivity : Activity() {
         val km = getSystemService(KeyguardManager::class.java) ?: return finish()
         if (!km.isKeyguardLocked) { afterUnlock(byNexus = true); return }
         unlockAsked = true
+        askingUnlock = true; NexusAccessibility.instance?.updateLockStrip()
         km.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
-            override fun onDismissSucceeded() { afterUnlock(byNexus = true) }
-            override fun onDismissCancelled() { unlockAsked = false; pendingOpen = null; view.reset() }
-            override fun onDismissError() { unlockAsked = false; pendingOpen = null; view.reset() }
+            override fun onDismissSucceeded() { askingUnlock = false; afterUnlock(byNexus = true) }
+            override fun onDismissCancelled() { unlockAsked = false; askingUnlock = false; pendingOpen = null; view.reset(); NexusAccessibility.instance?.updateLockStrip() }
+            override fun onDismissError() { unlockAsked = false; askingUnlock = false; pendingOpen = null; view.reset(); NexusAccessibility.instance?.updateLockStrip() }
         })
     }
 
     /** [byNexus]: unlocked by swiping up on the NEXUS lock screen (rather than from the notification shade etc.). */
     private fun afterUnlock(byNexus: Boolean) {
+        askingUnlock = false
         if (isFinishing) return
         // A notification was tapped here: open it (not the NEXUS home screen)
         pendingOpen?.let { item ->
@@ -299,6 +303,10 @@ class LockActivity : Activity() {
     companion object {
         /** True while the NEXUS lock screen is on screen. */
         @Volatile var showing = false
+        /** In front and running (between onResume and onPause). */
+        @Volatile var inFront = false
+        /** The phone's own unlock screen (PIN / pattern) has been asked for. */
+        @Volatile var askingUnlock = false
         /** The NEXUS lock screen is in front with focus (not under the phone's PIN screen, say). */
         @Volatile var focused = false
 
@@ -682,11 +690,15 @@ class LockView(private val a: LockActivity) : View(a) {
         }
         c.save(); c.translate(w / 2, 0f); c.scale(w * 0.2f, 1f)
         fill.color = Color.WHITE; fill.alpha = (150 * fade).toInt(); fill.shader = ruleShader
-        c.drawRect(-1f, by + 22 * d, 1f, by + 23.2f * d, fill); fill.shader = null
+        c.drawRect(-1f, by + 14 * d, 1f, by + 15.2f * d, fill); fill.shader = null
         c.restore()
 
         // Spring back when let go
         if (!dragging && dragY > 0f) dragY = max(0f, dragY - dt * h * 2.5f)
+        // The bottom edge (where the phone's buttons would be) in one plain colour: the strip that hides the phone's
+        // buttons is the same colour, so it can never be seen
+        fill.color = NexusAccessibility.LOCK_BOTTOM
+        c.drawRect(0f, h - NexusAccessibility.lockStripPx(context), w, h, fill)
         // Fade in from black
         if (intro < 1f) { fill.color = Color.argb(((1f - intro) * 255).toInt(), 0, 0, 0); c.drawRect(0f, 0f, w, h, fill) }
         // Unlocking under NEXUS's fade: hold this frame (the phone puts everything into showing your app)

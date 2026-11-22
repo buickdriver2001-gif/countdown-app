@@ -78,6 +78,15 @@ class NexusAccessibility : AccessibilityService() {
          */
         val coverBusy: Boolean get() = instance?.let { it.veilKind != 0 || it.closeJob != null } ?: false
 
+        /** The colour of the lock screen's bottom edge (where the phone's buttons would be). */
+        val LOCK_BOTTOM = android.graphics.Color.rgb(1, 2, 8)
+        /** How tall the strip over the phone's buttons is on the lock screen. */
+        fun lockStripPx(c: Context): Int {
+            val id = c.resources.getIdentifier("navigation_bar_height", "dimen", "android")
+            val sys = if (id != 0) try { c.resources.getDimensionPixelSize(id) } catch (_: Exception) { 0 } else 0
+            return maxOf(NavBar.heightPx(c), sys)
+        }
+
         /** Kinds of screen change NEXUS's quick fade covers. */
         const val FADE_APP = 1
         const val FADE_HOME = 2
@@ -374,6 +383,7 @@ class NexusAccessibility : AccessibilityService() {
         try { unregisterReceiver(screenOn) } catch (_: Exception) {}
         dropCover()
         dropButtons()
+        lockStrip?.let { s -> lockStrip = null; lockStripLp = null; try { getSystemService(android.view.WindowManager::class.java)?.removeView(s) } catch (_: Throwable) {} }
         instance = null
         running = false
         h.removeCallbacksAndMessages(null)
@@ -1048,9 +1058,8 @@ class NexusAccessibility : AccessibilityService() {
         if (now - homeCheckedAt > 3000) { homeOk = HomeMode.isOn(this) && HomeMode.isDefault(this); homeCheckedAt = now }
         if (!homeOk) return "NEXUS isn't the home screen"
         if (talkBackOn()) return "TalkBack is on"
-        if (getSystemService(PowerManager::class.java)?.isInteractive != true) { coverPhoneButtonsOnLock(); return "screen off" }
-        if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) { coverPhoneButtonsOnLock(); return "phone locked" }
-        lockStrip?.let { if (it.visibility == android.view.View.VISIBLE) coverPhoneButtonsOnLock() }
+        if (getSystemService(PowerManager::class.java)?.isInteractive != true) return "screen off"
+        if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return "phone locked"
         // NEXUS's cover (Recent Apps opening, closing apps) draws the buttons itself: look again once it's gone
         // (They stay put above NEXUS's quick fade, like the phone's own buttons would)
         if (closeJob != null || ((coverLp?.alpha ?: 0f) > 0.5f && veilKind == 0)) { queueButtons(200); return "NEXUS cover showing" }
@@ -1150,50 +1159,54 @@ class NexusAccessibility : AccessibilityService() {
     }
 
     private fun dropButtons() {
-        lockStrip?.let { s -> lockStrip = null; lockStripLp = null; try { getSystemService(android.view.WindowManager::class.java)?.removeView(s) } catch (_: Throwable) {} }
         val v = appBar ?: return
         appBar = null; appBarLp = null; appBarShown = false
         try { getSystemService(android.view.WindowManager::class.java)?.removeView(v) } catch (_: Throwable) {}
     }
 
     /**
-     * On the NEXUS lock screen, a swipe up from the very bottom edge makes Android show its own buttons for a
-     * couple of seconds. While the NEXUS lock screen is in front (not under the phone's PIN screen), a dark strip
-     * the colour of the lock screen covers them. It takes no touches: the swipe still unlocks.
+     * The NEXUS lock screen never shows the phone's own Back / Home buttons (Android shows them now and then over a
+     * lock screen, e.g. after a swipe from the bottom edge): while it's in front, a strip the colour of the lock
+     * screen's bottom edge always covers their place (the lock screen paints the same colour there, so the strip
+     * itself can't be seen). It takes no touches, so the swipe still unlocks, and it steps aside for the phone's PIN
+     * screen (which has its own Back button) and for calls, alarms and anything else that comes in front.
      */
     private var lockStrip: android.view.View? = null
     private var lockStripLp: android.view.WindowManager.LayoutParams? = null
-    private fun coverPhoneButtonsOnLock() {
-        val bar = if (LockActivity.showing && LockActivity.focused && getSystemService(PowerManager::class.java)?.isInteractive == true) phoneBar() else null
+    fun updateLockStrip() { h.post { safe { applyLockStrip() } } }
+    private fun applyLockStrip() {
+        val want = LockActivity.inFront && !LockActivity.askingUnlock && !talkBackOn() &&
+            getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
         val wm = getSystemService(android.view.WindowManager::class.java) ?: return
-        val v = lockStrip; val lp = lockStripLp
-        if (bar == null) {
+        var v = lockStrip; var lp = lockStripLp
+        if (!want) {
             if (v != null && lp != null && v.visibility == android.view.View.VISIBLE) {
                 v.visibility = android.view.View.GONE
+                lp.flags = lp.flags or android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                 try { wm.updateViewLayout(v, lp) } catch (_: Throwable) {}
             }
             return
         }
-        val r = bar.first
+        val hpx = lockStripPx(this)
         if (v == null || lp == null) {
-            val s = android.view.View(this).apply { setBackgroundColor(android.graphics.Color.rgb(1, 2, 8)) } // the lock screen's own bottom colour
-            val p = android.view.WindowManager.LayoutParams(r.width(), r.height(),
+            v = android.view.View(this).apply { setBackgroundColor(LOCK_BOTTOM) }
+            lp = android.view.WindowManager.LayoutParams(android.view.WindowManager.LayoutParams.MATCH_PARENT, hpx,
                 android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                     android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 android.graphics.PixelFormat.OPAQUE)
-            p.gravity = android.view.Gravity.TOP or android.view.Gravity.LEFT
-            p.x = r.left; p.y = r.top
-            if (Build.VERSION.SDK_INT >= 30) p.fitInsetsTypes = 0
-            p.title = "NEXUS lock strip"
-            try { wm.addView(s, p) } catch (_: Throwable) { return }
-            lockStrip = s; lockStripLp = p
-            logButtons("covered the phone's own buttons on the lock screen")
+            lp.gravity = android.view.Gravity.BOTTOM or android.view.Gravity.LEFT
+            if (Build.VERSION.SDK_INT >= 30) lp.fitInsetsTypes = 0
+            if (Build.VERSION.SDK_INT >= 28) lp.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            lp.title = "NEXUS lock strip"
+            try { wm.addView(v, lp) } catch (_: Throwable) { return }
+            lockStrip = v; lockStripLp = lp
             return
         }
-        lp.x = r.left; lp.y = r.top; lp.width = r.width(); lp.height = r.height()
-        v.visibility = android.view.View.VISIBLE
-        try { wm.updateViewLayout(v, lp) } catch (_: Throwable) {}
+        if (v.visibility != android.view.View.VISIBLE || lp.height != hpx) {
+            v.visibility = android.view.View.VISIBLE; lp.height = hpx
+            try { wm.updateViewLayout(v, lp) } catch (_: Throwable) {}
+        }
     }
 
     /** Safety: if the buttons ever keep flicking on and off, they step aside for a while (the phone's own show). */
