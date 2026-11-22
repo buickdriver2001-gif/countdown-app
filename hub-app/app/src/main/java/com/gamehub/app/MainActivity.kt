@@ -306,6 +306,7 @@ class MainActivity : Activity() {
     }
 
     private fun openSwitcher() {
+        NexusAccessibility.instance?.fadeFor(NexusAccessibility.FADE_RECENTS, null, 90L)
         startActivity(Intent(this, SwitcherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), Transitions.app(window.decorView, solidSplash = true))
     }
 
@@ -741,7 +742,7 @@ class MainActivity : Activity() {
             // Back from an app with the phone's own Home button: the home screen shows at once on NEXUS's cover
             // while the phone's slide back plays underneath (already done if NEXUS's own Home button was used)
             if (leftForApp && !NexusAccessibility.busyClosing && !NexusAccessibility.veiling)
-                stillPicture()?.let { NexusAccessibility.instance?.veilForLaunch(packageName, it, 0L) }
+                NexusAccessibility.instance?.fadeFor(NexusAccessibility.FADE_HOME, null, 60L)
             return
         }
         // Opened from its icon or back from one of the apps

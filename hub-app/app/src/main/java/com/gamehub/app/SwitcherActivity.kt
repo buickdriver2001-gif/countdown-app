@@ -130,8 +130,8 @@ class SwitcherActivity : Activity() {
         val i = packageManager.getLaunchIntentForPackage(packageName) ?: return
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         i.putExtra("fromApp", true)
-        // The home screen shows at once (a still picture of it on NEXUS's cover) while it comes up underneath
-        MainActivity.homeStill()?.let { NexusAccessibility.instance?.veilForLaunch(packageName, it, 0L) }
+        // NEXUS's quick fade while the home screen comes up underneath
+        NexusAccessibility.instance?.fadeFor(NexusAccessibility.FADE_HOME, null, 90L)
         startActivity(i, Transitions.app(window.decorView))
         finish()
     }

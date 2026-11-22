@@ -288,6 +288,8 @@ class LockActivity : Activity() {
             }
         }
         LockTrace.log(this, "  unlocked: " + if (unlockToHome(this)) "to the NEXUS home screen" else "back to where you were")
+        // NEXUS's quick fade while the screen you were on comes back underneath
+        if (!unlockToHome(this)) NexusAccessibility.instance?.fadeFor(NexusAccessibility.FADE_NEXT, null, 90L)
         finish()
         @Suppress("DEPRECATION") overridePendingTransition(0, R.anim.nexus_exit)
     }
