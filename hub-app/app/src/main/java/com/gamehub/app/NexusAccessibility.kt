@@ -70,6 +70,8 @@ class NexusAccessibility : AccessibilityService() {
          * home screen. Returns true if it started (the caller then heads to the NEXUS home screen underneath).
          */
         fun closeNow(returnToSwitcher: Boolean): Boolean = instance?.beginClose(returnToSwitcher) ?: false
+        /** NEXUS's opening fade is up right now (the home screen skips its own fade-in meanwhile). */
+        val veiling: Boolean get() = instance?.veilPkg != null
         /** NEXUS is closing apps under its cover right now (the home screen skips its fade-in meanwhile). */
         val busyClosing: Boolean get() = instance?.closeJob != null
 
@@ -310,8 +312,11 @@ class NexusAccessibility : AccessibilityService() {
     /** Called by NEXUS Recent Apps once it is drawn and in front: the cover fades away to reveal it
      *  (after the app has finished shrinking into its card). */
     fun switcherReady() {
-        val end = cover?.zoomEnd() ?: 0L
-        armSafety(maxOf(30L, end - SystemClock.uptimeMillis() + 30L), "square button: Recent Apps ready, cover lifted on time")
+        // Lifted once the card has shrunk into place, and not before the phone's own slide-in of Recent Apps
+        // (underneath) is all but done
+        val now = SystemClock.uptimeMillis()
+        val end = maxOf(cover?.zoomEnd() ?: 0L, now + VEIL_HOLD + 30L)
+        armSafety(maxOf(30L, end - now + 30L), "square button: Recent Apps ready, cover lifted on time")
     }
 
     /** Another app's screen appeared after the screen went off (alarm, timer, camera, call...). */
@@ -418,6 +423,7 @@ class NexusAccessibility : AccessibilityService() {
         if (pm?.isInteractive != true || km?.isKeyguardLocked == true) return false
         val j = CloseJob(toClose.toList(), closeAllPending, returnToSwitcher)
         toClose.clear(); closeAllPending = false
+        veilPkg = null; h.removeCallbacks(veilRun) // the closing cover takes over from any opening fade
         closeJob = j; j.stage = 0
         LockTrace.log(this, "closing apps fully" + (if (j.all) ": all" else " (quietly): " + j.pkgs.joinToString()))
         // The cover comes up (fading in), and takes touches meanwhile so nothing underneath gets tapped by accident
@@ -676,6 +682,10 @@ class NexusAccessibility : AccessibilityService() {
         if (pkg == packageName && !cls.startsWith("$packageName.")) { queueButtons(); return }
         if (pkg != "com.android.systemui" && pkg != "android" && "inputmethod" !in pkg && "keyboard" !in pkg) { frontPkg = pkg; frontCls = cls }
         queueButtons()
+        // Going home under NEXUS's fade: the home screen has appeared underneath
+        if (veilPkg == packageName && veilSeenAt == 0L && cls == MainActivity::class.java.name) {
+            veilSeenAt = SystemClock.uptimeMillis(); h.removeCallbacks(veilRun); h.postDelayed(veilRun, VEIL_HOLD)
+        }
         // Another app put up a screen (alarm, timer, camera, call...): the wake-up cover must never hide it
         if (pkg != packageName && pkg != "com.android.systemui" && pkg != "android" && pkg !in homePkgs &&
             "inputmethod" !in pkg && "keyboard" !in pkg) {
@@ -816,8 +826,8 @@ class NexusAccessibility : AccessibilityService() {
     private val veilRun = Runnable { safe { stepVeil() } }
     /** After the app appears underneath, before the fade (the phone's slide-in is all but done by then). */
     private val VEIL_HOLD = 170L
-    /** Going to NEXUS's own home screen (there's no other app to watch for). */
-    private val VEIL_HOME = 360L
+    /** Going to NEXUS's own home screen: never longer than this if its appearing goes unnoticed. */
+    private val VEIL_HOME = 450L
     /** Never longer than this before fading away, however long the app takes. */
     private val VEIL_MAX = 1100L
 
@@ -840,7 +850,7 @@ class NexusAccessibility : AccessibilityService() {
         }
         veilPkg = pkg; veilAt = SystemClock.uptimeMillis(); veilSeenAt = 0L
         armSafety(VEIL_MAX + 600, "opening an app: cover lifted by the fallback")
-        h.removeCallbacks(veilRun); h.postDelayed(veilRun, if (pkg == packageName) VEIL_HOME else 40L)
+        h.removeCallbacks(veilRun); h.postDelayed(veilRun, 40L)
         return true
     }
 
@@ -850,11 +860,12 @@ class NexusAccessibility : AccessibilityService() {
     private fun stepVeil() {
         val pkg = veilPkg ?: return
         val now = SystemClock.uptimeMillis()
-        if (pkg == packageName) { liftVeil(); return }
-        if (veilSeenAt == 0L && otherAppInFront()) veilSeenAt = now
+        val home = pkg == packageName
+        // (The home screen is noticed from its own window appearing; another app from the top app window)
+        if (!home && veilSeenAt == 0L && otherAppInFront()) veilSeenAt = now
         when {
             veilSeenAt != 0L && now - veilSeenAt >= VEIL_HOLD -> liftVeil()
-            now - veilAt >= VEIL_MAX -> liftVeil()
+            now - veilAt >= (if (home) VEIL_HOME else VEIL_MAX) -> liftVeil()
             veilSeenAt != 0L -> h.postDelayed(veilRun, VEIL_HOLD - (now - veilSeenAt))
             else -> h.postDelayed(veilRun, 40L)
         }
@@ -1011,7 +1022,7 @@ class NexusAccessibility : AccessibilityService() {
         if (v0 == null || lp0 == null) {
             val v = NavBar(this,
                 onBack = { safe { performGlobalAction(GLOBAL_ACTION_BACK) } },
-                onHome = { safe { performGlobalAction(GLOBAL_ACTION_HOME) } },
+                onHome = { safe { homeButton() } },
                 onRecent = { safe { recentButton() } })
             v.solid = true; v.ime = ime
             val lp = android.view.WindowManager.LayoutParams(r.width(), r.height(),
@@ -1070,6 +1081,12 @@ class NexusAccessibility : AccessibilityService() {
                 (if (buttonsPauses >= 2) "until the helper restarts" else "for 15s") + " (the phone's own buttons show meanwhile)")
             h.post { safe { hideButtons("paused") } }
         }
+    }
+
+    /** NEXUS's Home button over an app: the home screen shows at once (no phone slide), then Home. */
+    private fun homeButton() {
+        MainActivity.homeStill()?.let { veilForLaunch(packageName, it, 0L) }
+        performGlobalAction(GLOBAL_ACTION_HOME)
     }
 
     /** NEXUS's Recent button over an app: NEXUS Recent Apps (or the phone's own, if that's what's set). */

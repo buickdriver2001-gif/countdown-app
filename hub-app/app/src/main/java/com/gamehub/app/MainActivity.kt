@@ -728,6 +728,10 @@ class MainActivity : Activity() {
             // Home pressed from an app: apps swiped away in Recent Apps earlier get closed fully now
             if (leftForApp) NexusAccessibility.closeWhenHome()
             goHome(onScreen = !leftForApp)
+            // Back from an app with the phone's own Home button: the home screen shows at once on NEXUS's cover
+            // while the phone's slide back plays underneath (already done if NEXUS's own Home button was used)
+            if (leftForApp && !NexusAccessibility.busyClosing && !NexusAccessibility.veiling)
+                stillPicture()?.let { NexusAccessibility.instance?.veilForLaunch(packageName, it, 0L) }
             return
         }
         // Opened from its icon or back from one of the apps
@@ -744,7 +748,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         // (No fade-in while NEXUS closes apps under its cover: the cover is already showing this screen)
-        if (::hub.isInitialized) { refresh(); hub.resumed(leftForApp && !NexusAccessibility.busyClosing) }
+        if (::hub.isInitialized) { refresh(); hub.resumed(leftForApp && !NexusAccessibility.busyClosing && !NexusAccessibility.veiling) }
         loadCountdown()
         leftForApp = false
         hideBars()
