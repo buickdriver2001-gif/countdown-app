@@ -77,6 +77,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private var t = 0f
     /** The world behind the menu: grey glass towers and balls of coloured light (after the PS2's start-up screen). */
     private val world = Ps2World(context)
+    /** A NEXUS panel (Settings and the like) is open over the home screen: crystals come out, the menu steps back. */
+    var panelOpen = false
+        set(v) { field = v; invalidate() }
+    private var crystalK = 0f
+    private val crystals by lazy { Crystals(context) }
     /** Start-up animation clock (the hub appears when it finishes). */
     private var bootT = 0f
     var booting = true
@@ -202,6 +207,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         drawHaze(c, dt, intro)
         world.quality = quality
         world.draw(c, width, height, dt, intro, 0.6f, if (ps2Menu) 0.62f else 0.8f)
+        crystalK = if (panelOpen) min(1f, crystalK + dt * 2.5f) else max(0f, crystalK - dt * 3f)
+        if (crystalK > 0f) crystals.draw(c, width, height, dt, crystalK)
         drawMenu(c, intro, dt)
 
         if (launchFlash > 0f) {
@@ -668,7 +675,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
     private fun drawMenu(c: Canvas, intro: Float, dt: Float) {
         val w = width.toFloat(); val h = height.toFloat()
-        val a = ((intro - 0.4f) / 0.6f).coerceIn(0f, 1f)
+        val a = ((intro - 0.4f) / 0.6f).coerceIn(0f, 1f) * (1f - 0.8f * crystalK)
         if (a <= 0f) return
         // (No title: the apps start right under the status row)
         // Status corners: date left, clock right, thin brackets
@@ -1131,7 +1138,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     /** Lets go of the tile pictures to free memory (they're read again next time NEXUS comes back). */
-    fun releasePictures() { liveShots.clear(); liveStamp.clear() }
+    fun releasePictures() { liveShots.clear(); liveStamp.clear(); nameGlow.clear(); addGlow.clear() }
+
+    // The menu's soft glows and dark outlines, blurred once and reused (see TextGlow)
+    private val nameGlow by lazy { TextGlow(text.typeface ?: Typeface.DEFAULT, 24 * d, 0.14f) }
+    private val addGlow by lazy { TextGlow(text.typeface ?: Typeface.DEFAULT, 15 * d, 0.32f, max = 6) }
 
     fun loadLiveShots() {
         val pkgs = games.filter { it.tileH >= 2 }.map { it.pkg }
@@ -1473,7 +1484,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             g.pkg == CountdownLink.PKG && cd != null -> countdownText(cd.target - System.currentTimeMillis())
             else -> ""
         }
-        val size = (19f + 5f * k) * d
+        // (In half steps, so the letters are drawn at a handful of sizes rather than a new one every frame)
+        val size = Math.round((19f + 5f * k) * 2f) / 2f * d
         val iconS = 24 * d * (0.86f + 0.14f * k)
         val name = listName(g, r.width() - 24 * d - 12 * d - 24 * d)
         text.textAlign = Paint.Align.LEFT; text.textSize = size; text.letterSpacing = 0.14f
@@ -1486,15 +1498,13 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.color = if (launching >= 0f) Color.argb((255 * a).toInt(), 255, 255, 255)
                      else Color.argb((255 * a).toInt(), (242 - 55 * dim).toInt(), (247 - 45 * dim).toInt(), (255 - 20 * dim).toInt())
         val tx = tmpRect.right + 12 * d; val ty = cy + size * 0.35f
-        // A dark outline first, so the name reads clearly in front of the towers and lights
-        text.setShadowLayer(5 * d, 0f, 1 * d, Color.argb((230 * a).toInt(), 0, 2, 8))
-        c.drawText(name, tx, ty, text)
+        // A dark outline first, so the name reads clearly in front of the towers and lights; then its glow
+        nameGlow.draw(c, name, tx, ty + 1 * d, size, 5 * d, Color.argb((230 * a).toInt(), 0, 2, 8))
         if (k > 0.05f) {
-            text.setShadowLayer(2 * d + 12 * d * k + (if (launching >= 0f) 8 * d else 0f), 0f, 0f,
-                if (launching >= 0f) Color.argb((255 * a).toInt(), 150, 200, 255) else Color.argb((220 * k * a).toInt(), 70, 140, 255))
-            c.drawText(name, tx, ty, text)
+            if (launching >= 0f) nameGlow.draw(c, name, tx, ty, size, 14 * d, Color.argb((255 * a).toInt(), 150, 200, 255), grow = 1.12f)
+            else nameGlow.draw(c, name, tx, ty, size, 14 * d, Color.argb((220 * k * a).toInt(), 70, 140, 255))
         }
-        text.setShadowLayer(0f, 0f, 0f, 0)
+        c.drawText(name, tx, ty, text)
         if (sub.isNotEmpty()) {
             cdPaint.textAlign = Paint.Align.CENTER; cdPaint.textSize = 11 * d; cdPaint.letterSpacing = 0.2f
             cdPaint.color = Color.argb(((150 + 80 * k) * a).toInt(), 175, 205, 245)
@@ -1510,11 +1520,14 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private fun drawListAdd(c: Canvas, r: RectF, pressed: Boolean, a0: Float) {
         val k = listFocus(r)
         val a = a0 * listFade(r) * (if (pressed) 1.15f else 1f).coerceAtMost(1f)
-        text.textAlign = Paint.Align.CENTER; text.textSize = (13f + 2f * k) * d; text.letterSpacing = 0.32f
+        val size = Math.round((13f + 2f * k) * 2f) / 2f * d
+        text.textAlign = Paint.Align.CENTER; text.textSize = size; text.letterSpacing = 0.32f
         text.color = Color.argb(((150 + 100 * k) * a).toInt(), 170, 205, 250)
-        text.setShadowLayer(4 * d + 6 * d * k, 0f, 0f, if (k > 0.05f) Color.argb((200 * k * a).toInt(), 70, 140, 255) else Color.argb((220 * a).toInt(), 0, 2, 8))
-        c.drawText("+  ADD AN APP", r.centerX(), r.centerY() + 5 * d, text)
-        text.setShadowLayer(0f, 0f, 0f, 0)
+        val label = "+  ADD AN APP"
+        val lx = r.centerX() - text.measureText(label) / 2; val ly = r.centerY() + 5 * d
+        if (k > 0.05f) addGlow.draw(c, label, lx, ly, size, 10 * d, Color.argb((200 * k * a).toInt(), 70, 140, 255))
+        else addGlow.draw(c, label, lx, ly, size, 4 * d, Color.argb((220 * a).toInt(), 0, 2, 8))
+        c.drawText(label, r.centerX(), ly, text)
     }
 
     private fun drawAddTile(c: Canvas, r: RectF, sel: Boolean, a: Float) {

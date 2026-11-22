@@ -102,7 +102,7 @@ class Ps2World(context: Context) {
     private val glowDst = RectF()
 
     // Light adds up (like real light) where the paint supports it
-    private val trail = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; additive() }
+    private val trail = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.BUTT; additive() }
     private val core = Paint(Paint.ANTI_ALIAS_FLAG).apply { additive() }
     private val floorGlow = Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = PorterDuffColorFilter(Color.rgb(120, 160, 255), PorterDuff.Mode.MULTIPLY) }
     private fun Paint.additive() { if (android.os.Build.VERSION.SDK_INT >= 29) blendMode = android.graphics.BlendMode.PLUS }
@@ -230,8 +230,66 @@ class Ps2World(context: Context) {
         if (o.n < TRAIL) o.n++
     }
 
+    // The trail as one smooth ribbon of light: soft at its edges, bright along its middle, tapering to nothing at
+    // the tail (drawn in one go, so nothing overlaps and builds up into dots)
+    private val rpx = FloatArray(TRAIL + 1); private val rpy = FloatArray(TRAIL + 1); private val rps = FloatArray(TRAIL + 1)
+    private val rv = FloatArray((TRAIL + 1) * 6)
+    private val rc = IntArray((TRAIL + 1) * 3)
+    private val ridx = ShortArray(TRAIL * 12).also { ix ->
+        for (i in 0 until TRAIL) {
+            val l = i * 3; val m = l + 1; val r = l + 2; val l2 = l + 3; val m2 = l + 4; val r2 = l + 5
+            val o = i * 12
+            ix[o] = l.toShort(); ix[o + 1] = m.toShort(); ix[o + 2] = l2.toShort()
+            ix[o + 3] = m.toShort(); ix[o + 4] = m2.toShort(); ix[o + 5] = l2.toShort()
+            ix[o + 6] = m.toShort(); ix[o + 7] = r.toShort(); ix[o + 8] = m2.toShort()
+            ix[o + 9] = r.toShort(); ix[o + 10] = r2.toShort(); ix[o + 11] = m2.toShort()
+        }
+    }
+    private val ribbonPaint = Paint().apply { color = Color.WHITE; additive() }
+
+    /** One ribbon along the [m] points gathered: [w0]..[w1] half-width (tail..head), brightest [a] at the head. */
+    private fun ribbon(c: Canvas, m: Int, color: Int, w0: Float, w1: Float, a: Float, curve: Float) {
+        val r = Color.red(color); val g = Color.green(color); val b = Color.blue(color)
+        val edge = Color.argb(0, r, g, b)
+        var nx = 0f; var ny = -1f
+        for (i in 0 until m) {
+            val i0 = if (i > 0) i - 1 else 0; val i1 = if (i < m - 1) i + 1 else m - 1
+            val tx = rpx[i1] - rpx[i0]; val ty = rpy[i1] - rpy[i0]
+            val l = sqrt(tx * tx + ty * ty)
+            if (l > 0.01f) { nx = -ty / l; ny = tx / l }
+            val k = i.toFloat() / (m - 1)
+            val half = (w0 + (w1 - w0) * k) * d * rps[i]
+            val v = i * 6
+            rv[v] = rpx[i] + nx * half; rv[v + 1] = rpy[i] + ny * half
+            rv[v + 2] = rpx[i]; rv[v + 3] = rpy[i]
+            rv[v + 4] = rpx[i] - nx * half; rv[v + 5] = rpy[i] - ny * half
+            val ci = i * 3
+            rc[ci] = edge; rc[ci + 2] = edge
+            rc[ci + 1] = Color.argb((255 * a * k.pow(curve)).toInt().coerceIn(0, 255), r, g, b)
+        }
+        c.drawVertices(Canvas.VertexMode.TRIANGLES, m * 6, rv, 0, null, 0, rc, 0, ridx, 0, (m - 1) * 12, ribbonPaint)
+    }
+
     private fun drawOrb(c: Canvas, o: Orb, len: Int, a: Float) {
         if (a <= 0.01f) return
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            // Oldest to newest, then the ball itself (a gap - e.g. behind the camera - starts it afresh)
+            val n0 = min(o.n, len)
+            var m = 0
+            for (i in 0 until n0) {
+                val idx = (o.head - n0 + i + TRAIL * 2) % TRAIL
+                if (!project(o.tx[idx], o.ty[idx], o.tz[idx])) { m = 0; continue }
+                rpx[m] = px; rpy[m] = py; rps[m] = min(1.15f, 14f / pz); m++
+            }
+            if (project(o.x, o.y, o.z)) { rpx[m] = px; rpy[m] = py; rps[m] = min(1.15f, 14f / pz); m++ }
+            if (m >= 2) {
+                ribbon(c, m, o.color, 0.6f, 10f, 0.75f * a, 1.25f)
+                val hot = Color.rgb((Color.red(o.color) + 2 * 255) / 3, (Color.green(o.color) + 2 * 255) / 3, (Color.blue(o.color) + 2 * 255) / 3)
+                ribbon(c, m, hot, 0.3f, 3.2f, 0.9f * a, 1.8f)
+            }
+            drawHead(c, o, a)
+            return
+        }
         val n = min(o.n, len)
         var lx = 0f; var ly = 0f; var ok = false
         for (i in 0 until n) {
@@ -254,6 +312,11 @@ class Ps2World(context: Context) {
             }
             lx = px; ly = py; ok = true
         }
+        drawHead(c, o, a)
+    }
+
+    /** The ball itself: a soft glow in its colour with a white-hot middle. */
+    private fun drawHead(c: Canvas, o: Orb, a: Float) {
         if (!project(o.x, o.y, o.z)) return
         val s = min(1.15f, 14f / pz)
         val pulse = 0.85f + 0.15f * sin(t * 3f + o.phase)
@@ -324,8 +387,9 @@ class Ps2World(context: Context) {
     private val path = android.graphics.Path()
 
     companion object {
-        private const val TRAIL = 40
-        private const val RATE = 40f
+        /** Trail points kept, and how many a second (a second's worth of trail). */
+        private const val TRAIL = 60
+        private const val RATE = 60f
 
         @Volatile private var used = -1f
         @Volatile private var usedAt = 0L

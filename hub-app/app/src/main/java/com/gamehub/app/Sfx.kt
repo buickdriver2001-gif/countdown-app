@@ -77,6 +77,7 @@ class Sfx {
     }
 
     fun tick() {
+        if (!on) return
         h.post {
             val pool = ticks
             if (pool.isEmpty()) return@post
@@ -84,7 +85,12 @@ class Sfx {
             play(pool[nextTick])
         }
     }
-    fun confirm() { h.post { play(confirm) } }
+    fun confirm() { if (on) h.post { play(confirm) } }
+
+    companion object {
+        /** Menu sounds on (Settings → Sound). */
+        @Volatile var on = true
+    }
 
     fun release() { h.post { ticks.forEach { it?.release() }; confirm?.release(); thread.quitSafely() } }
 }

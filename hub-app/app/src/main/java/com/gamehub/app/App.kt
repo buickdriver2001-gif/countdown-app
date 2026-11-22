@@ -9,6 +9,7 @@ import java.io.File
 class App : Application() {
     override fun onCreate() {
         super.onCreate()
+        Sfx.on = getSharedPreferences("hub", MODE_PRIVATE).getBoolean("menuSounds", true)
         // Which NEXUS screens are in front (so a problem in the background never pops up over what you're doing)
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityResumed(a: android.app.Activity) { screensInFront++ }

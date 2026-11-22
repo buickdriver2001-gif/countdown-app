@@ -204,6 +204,8 @@ class MainActivity : Activity() {
         // The home screen paints the whole screen itself every frame: no need to paint the window under it too
         window.setBackgroundDrawable(null)
         home = java.lang.ref.WeakReference(this)
+        // A panel open over the home screen (Settings and the like): its crystals come out
+        NexusUi.onPanels = { act, open -> if (act === this && ::hub.isInitialized) hub.panelOpen = open }
         dropOldDescriptions()
         addCountdownTileOnce()
         drawer.load()
@@ -247,7 +249,11 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         pausedAt = android.os.SystemClock.uptimeMillis()
+        ambience.stop()
     }
+
+    /** The home screen's soft background sound (Settings → Sound). */
+    private val ambience by lazy { Ambience(this) }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
@@ -346,7 +352,10 @@ class MainActivity : Activity() {
             openAppsSettings()
         })
         opts.add(NexusUi.Option("Show Recent Apps now") { openSwitcher() })
-        NexusUi.panel(this, "Recent apps", "$status\n\nStep 1: in Accessibility, choose NEXUS Recent Apps and switch it on.\nStep 2: if Android says \"Restricted setting\", open App info, tap ⋮ at the top right and choose Allow restricted settings. Then do step 1 again.\n\nFully closing apps: Android only lets the phone's own recent apps screen close other apps, so when you swipe apps away, NEXUS opens that screen behind a CLOSING APPS screen and presses Close for you. It only reads that screen, only while closing apps.\n\nPictures of your apps stay on this phone and are never sent anywhere.", opts, cancel = "Done")
+        NexusUi.panel(this, "Recent apps helper", "$status\n\nThe helper runs NEXUS Recent Apps, the NEXUS lock screen and NEXUS's buttons in apps.\n\n" +
+            "To turn it on: in Accessibility, choose NEXUS Recent Apps and switch it on. If Android says \"Restricted setting\", open App info, tap ⋮ at the top right, choose Allow restricted settings, then try again.\n\n" +
+            "Fully closing apps: Android only lets its own recent apps screen close other apps, so when you swipe an app away in NEXUS Recent Apps, NEXUS opens that screen behind Recent Apps and presses Close for you. It only reads that screen, only while closing apps. Nothing is ever sent anywhere.",
+            opts, cancel = "Back", back = { homeSettings() })
     }
 
     /** Closing NEXUS on purpose: NEXUS mode off until it's opened again from its icon. */
@@ -485,7 +494,7 @@ class MainActivity : Activity() {
             })
             opts.add(NexusUi.Option("Send a test notification") { sendTestNotification() })
         }
-        NexusUi.panel(this, "NEXUS lock screen", msg, opts, cancel = "Done")
+        NexusUi.panel(this, "NEXUS lock screen", msg, opts, cancel = "Back", back = { homeSettings() })
     }
 
     /** Shows (or hides) the Back / Home / Recent buttons in the chosen order, and makes room for them. */
@@ -592,37 +601,97 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    /** The gear: NEXUS settings. */
+    private fun onOff(b: Boolean) = if (b) "ON" else "OFF"
+
+    /** The gear: NEXUS settings, in a few plain sections (each opens its own page; Back returns here). */
     private fun homeSettings() {
         val isHome = HomeMode.isDefault(this)
         val version = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Exception) { "" }
+        val helper = when {
+            Recents.serviceOn(this) && helperRunning() -> "ON"
+            Recents.serviceOn(this) -> "STOPPED"
+            else -> "OFF"
+        }
+        val amb = Ambience.enabled(this); val menu = prefs.getBoolean("menuSounds", true)
+        val sound = when { amb && menu -> "ON"; amb -> "background only"; menu -> "menu only"; else -> "OFF" }
         NexusUi.panel(this, "Settings", "Version $version", listOfNotNull(
-            NexusUi.Option("System", primary = true) { openSystem() },
-            NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
-            NexusUi.Option("Home screen style:  " + (if (hub.ps2Menu) "PS2 menu" else "Tiles")) { toggleHomeStyle() },
-            if (hub.ps2Menu) null else NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
-            NexusUi.Option("Choose my normal home screen") { chooseNormalHome() },
-            NexusUi.Option("Recent apps (square button):  " + when {
-                Recents.serviceOn(this) && helperRunning() -> "ON"
-                Recents.serviceOn(this) -> "STOPPED"
-                else -> "OFF"
-            }) { openAppsSettings() },
-            NexusUi.Option("NEXUS lock screen:  " + (if (LockActivity.enabled(this)) "ON" else "OFF")) { lockSettings() },
-            NexusUi.Option("Navigation buttons:  " + NavBar.name(NavBar.order(this))) {
-                NavBar.setOrder(this, NavBar.next(NavBar.order(this))); applyNavBar()
-                NexusAccessibility.instance?.refreshAppButtons(); homeSettings()
-            },
-            NexusUi.Option("NEXUS buttons in all apps:  " + (if (NexusAccessibility.appButtonsOn(this)) "ON" else "OFF")) { toggleAppButtons() },
-            NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
-            NexusUi.Option("Tutorial") { showTutorial() },
-            NexusUi.Option("Report a problem") { reportProblem() },
-            NexusUi.Option("How it works") {
-                NexusUi.panel(this, "How it works",
-                    "• While NEXUS is open, Home brings you back to NEXUS, even after the screen turns off and on. Pressing Home on NEXUS closes anything open and goes back to the top.\n• Close NEXUS (here) and Home goes to your normal home screen.\n• Open NEXUS from its icon to make it your home again.\n• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n• Hold an app to see its shortcuts (like New incognito tab), App info and Uninstall. Hold and drag to move it.\n• Swipe down on the list to see your notifications.\n• NEXUS buttons in all apps (here in settings): NEXUS's Back, Home and Recent buttons take the place of the phone's own while you use your apps. They step aside for full-screen videos and games, the lock screen and TalkBack, and work with the phone's 3-button navigation.\n• Tap RECENT (or press the square button, once the helper is on) for your recent apps. Swipe an app up to close it. Android only lets the phone's own recent apps screen fully close apps, so when you get back to the NEXUS home screen, NEXUS briefly opens it behind a CLOSING APPS screen and presses Close for you (switch this off under Recent apps).\n\nTo stop using NEXUS as Home completely, choose your old home screen in Settings → Apps → Default apps → Home app.",
-                    emptyList(), cancel = "OK")
-            },
+            if (!isHome) NexusUi.Option("Make NEXUS my home screen", primary = true) { openHomeSettings() } else null,
+            NexusUi.Option("Home screen:  " + (if (hub.ps2Menu) "PS2 menu" else "Tiles")) { homeScreenSettings() },
+            NexusUi.Option("Lock screen:  " + onOff(LockActivity.enabled(this))) { lockSettings() },
+            NexusUi.Option("Recent apps helper:  $helper") { openAppsSettings() },
+            NexusUi.Option("Buttons in apps:  " + onOff(NexusAccessibility.appButtonsOn(this))) { buttonSettings() },
+            NexusUi.Option("Sound:  $sound") { soundSettings() },
+            NexusUi.Option("Help") { helpSettings() },
+            NexusUi.Option("Phone settings") { openSystem() },
             NexusUi.Option("Close NEXUS", danger = true) { askClose() }
         ), cancel = "Done")
+    }
+
+    /** Settings → Home screen. */
+    private fun homeScreenSettings() {
+        val isHome = HomeMode.isDefault(this)
+        NexusUi.panel(this, "Home screen", null, listOfNotNull(
+            NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
+            NexusUi.Option("Style:  " + (if (hub.ps2Menu) "PS2 menu" else "Tiles")) { toggleHomeStyle() },
+            if (hub.ps2Menu) null else NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
+            NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
+            NexusUi.Option("Home screen when NEXUS is closed") { chooseNormalHome() }
+        ), cancel = "Back", back = { homeSettings() })
+    }
+
+    /** Settings → Buttons in apps. */
+    private fun buttonSettings() {
+        NexusUi.panel(this, "Buttons in apps",
+            "NEXUS's Back, Home and Recent buttons can take the place of the phone's own while you use your apps. " +
+                "They need the phone's 3-button navigation, and step aside for full-screen videos and games, the lock screen and TalkBack.",
+            listOf(
+                NexusUi.Option("NEXUS buttons in apps:  " + onOff(NexusAccessibility.appButtonsOn(this))) { toggleAppButtons() },
+                NexusUi.Option("Button order:  " + NavBar.name(NavBar.order(this))) {
+                    NavBar.setOrder(this, NavBar.next(NavBar.order(this))); applyNavBar()
+                    NexusAccessibility.instance?.refreshAppButtons(); buttonSettings()
+                }
+            ), cancel = "Back", back = { homeSettings() })
+    }
+
+    /** Settings → Sound. */
+    private fun soundSettings() {
+        val amb = Ambience.enabled(this); val menu = prefs.getBoolean("menuSounds", true)
+        NexusUi.panel(this, "Sound",
+            "Background sound: a soft, airy wash while you're on the home screen. It's quiet, follows your media volume, " +
+                "and stays silent while music or videos play, during calls and alarms, and when your phone is on silent or vibrate.",
+            listOf(
+                NexusUi.Option("Background sound:  " + onOff(amb)) {
+                    Ambience.setEnabled(this, !amb)
+                    if (!amb) ambience.start() else ambience.stop()
+                    soundSettings()
+                },
+                NexusUi.Option("Menu sounds:  " + onOff(menu)) {
+                    prefs.edit().putBoolean("menuSounds", !menu).apply(); Sfx.on = !menu
+                    soundSettings()
+                }
+            ), cancel = "Back", back = { homeSettings() })
+    }
+
+    /** Settings → Help. */
+    private fun helpSettings() {
+        NexusUi.panel(this, "Help", null, listOf(
+            NexusUi.Option("How it works") { howItWorks() },
+            NexusUi.Option("Tutorial") { showTutorial() },
+            NexusUi.Option("Report a problem") { reportProblem() }
+        ), cancel = "Back", back = { homeSettings() })
+    }
+
+    private fun howItWorks() {
+        NexusUi.panel(this, "How it works",
+            "• While NEXUS is open, Home brings you back to NEXUS. Pressing Home on NEXUS goes back to the top of the list.\n" +
+                "• Tap an app once to choose it, and again to open it. Hold an app for its shortcuts, App info and Uninstall; hold and drag to move it.\n" +
+                "• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n" +
+                "• Swipe down on the list to see your notifications.\n" +
+                "• Recent Apps (RECENT, or the square button once the helper is on): swipe an app up to close it. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent apps helper).\n" +
+                "• Buttons in apps: NEXUS's Back, Home and Recent buttons in place of the phone's own (needs 3-button navigation).\n" +
+                "• Close NEXUS (in Settings) and Home goes to your normal home screen; open NEXUS from its icon to make it your home again.\n\n" +
+                "To stop using NEXUS as Home completely, choose your old home screen in the phone's Settings → Apps → Default apps → Home app.",
+            emptyList(), cancel = "Back", back = { helpSettings() })
     }
 
     /** Home screen style: the PS2-style menu or tiles on a grid. */
@@ -630,12 +699,12 @@ class MainActivity : Activity() {
         hub.ps2Menu = !hub.ps2Menu
         prefs.edit().putString("homeStyle", if (hub.ps2Menu) "ps2" else "tiles").apply()
         hub.styleChanged()
-        homeSettings()
+        homeScreenSettings()
     }
 
     /** NEXUS buttons in all apps: on or off. It needs the helper, and the phone's 3-button navigation. */
     private fun toggleAppButtons() {
-        if (NexusAccessibility.appButtonsOn(this)) { NexusAccessibility.setAppButtons(this, false); homeSettings(); return }
+        if (NexusAccessibility.appButtonsOn(this)) { NexusAccessibility.setAppButtons(this, false); buttonSettings(); return }
         if (!Recents.serviceOn(this) || !helperRunning()) {
             NexusUi.panel(this, "NEXUS buttons in all apps",
                 "This uses NEXUS's helper (the one behind Recent Apps). Turn the helper on first, then switch this on here.",
@@ -648,7 +717,7 @@ class MainActivity : Activity() {
             if (NexusAccessibility.threeButtonNav(this)) "NEXUS's buttons now take the place of the phone's in your apps"
             else "Your phone uses gesture navigation: NEXUS's buttons appear in your apps once it's set to 3-button navigation (in the phone's Settings, search \"navigation\")",
             Toast.LENGTH_LONG).show()
-        homeSettings()
+        buttonSettings()
     }
 
     private fun hideBars() {
@@ -681,6 +750,8 @@ class MainActivity : Activity() {
         if (home?.get() === this) home = null
         try { getSystemService(android.content.pm.LauncherApps::class.java)?.unregisterCallback(appsChanged) } catch (_: Exception) {}
         window.decorView.removeCallbacks(reloadApps)
+        if (NexusUi.onPanels != null && home?.get() == null) NexusUi.onPanels = null
+        ambience.release()
         super.onDestroy()
         sfx.release()
     }
@@ -769,6 +840,7 @@ class MainActivity : Activity() {
         hideBars()
         // The helper may have measured the phone's own button bar since: match it
         if (::navBar.isInitialized && navBar.visibility == android.view.View.VISIBLE && navBar.layoutParams.height != NavBar.heightPx(this)) applyNavBar()
+        ambience.start()
         // If Android has stopped the helper, the NEXUS lock screen and Recent Apps can't work: say so, once
         window.decorView.removeCallbacks(checkHelper)
         window.decorView.postDelayed(checkHelper, 2500)

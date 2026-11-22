@@ -350,6 +350,8 @@ class LockView(private val a: LockActivity) : View(a) {
     private val dateFmt = SimpleDateFormat("EEEE, MMMM d", Locale.getDefault())
     private val thin: Typeface = Typeface.create("sans-serif-thin", Typeface.NORMAL)
     private val light: Typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+    /** The clock's blue glow, blurred once per minute rather than every frame (see TextGlow). */
+    private val clockGlow by lazy { TextGlow(thin, 88 * d, 0.02f, max = 3) }
     // Clock and date text, worked out once a second rather than every frame
     private var clockSec = -1L
     private var clockText = ""
@@ -618,9 +620,8 @@ class LockView(private val a: LockActivity) : View(a) {
         text.typeface = thin
         text.textSize = 88 * d; text.letterSpacing = 0.02f
         text.color = Color.argb((255 * fade).toInt(), 240, 246, 255)
-        text.setShadowLayer(16 * d, 0f, 0f, Color.argb((150 * fade).toInt(), 60, 130, 255))
+        clockGlow.draw(c, clockText, w / 2 - text.measureText(clockText) / 2, clockY, 88 * d, 16 * d, Color.argb((150 * fade).toInt(), 60, 130, 255))
         c.drawText(clockText, w / 2, clockY, text)
-        text.setShadowLayer(0f, 0f, 0f, 0)
         text.typeface = light
         text.textSize = 15 * d; text.letterSpacing = 0.14f
         text.color = Color.argb((210 * fade).toInt(), 190, 210, 245)

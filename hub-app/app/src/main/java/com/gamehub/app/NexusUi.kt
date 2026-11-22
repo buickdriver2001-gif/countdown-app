@@ -36,8 +36,18 @@ object NexusUi {
      * A panel with a title, optional message, optional text field, and a column of options.
      * Returns the text field (if asked for) so the caller can read it in an option's action.
      */
+    /** Told whenever panels open or close over an activity (true: one is open), e.g. so the home screen can show its crystals. */
+    var onPanels: ((Activity, Boolean) -> Unit)? = null
+
+    /** Is a panel open over [a] right now? */
+    fun anyShowing(a: Activity): Boolean = showing.any { it.ownerActivity === a && it.isShowing }
+
+    /**
+     * [back]: this panel is a page of a bigger menu: its last row (named [cancel]) and the phone's Back go back to
+     * the page before (tapping outside still closes it).
+     */
     fun panel(a: Activity, title: String, message: String? = null, options: List<Option>, cancel: String? = "Cancel",
-              input: String? = null, onSelect: Boolean = true): EditText? {
+              input: String? = null, onSelect: Boolean = true, back: (() -> Unit)? = null): EditText? {
         val d = a.resources.displayMetrics.density
         val dialog = Dialog(a)
         dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -64,16 +74,22 @@ object NexusUi {
         if (field != null) col.addView(field, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = (12 * d).toInt() })
         val list = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         for (o in options) list.addView(row(a, o.label, o.primary, o.danger) { if (onSelect) dialog.dismiss(); o.action() })
-        if (cancel != null) list.addView(row(a, cancel, false, false, quiet = true) { dialog.dismiss() })
+        if (cancel != null) list.addView(row(a, if (back != null) "‹  $cancel" else cancel, false, false, quiet = true) { dialog.dismiss(); back?.invoke() })
+        if (back != null) dialog.setOnKeyListener { _, code, e ->
+            if (code == android.view.KeyEvent.KEYCODE_BACK && e.action == android.view.KeyEvent.ACTION_UP) { dialog.dismiss(); back(); true }
+            else code == android.view.KeyEvent.KEYCODE_BACK
+        }
         col.addView(ScrollView(a).apply { addView(list) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         dialog.setContentView(col)
         dialog.window?.setLayout((minOf(a.resources.displayMetrics.widthPixels - (40 * d).toInt(), (420 * d).toInt())), ViewGroup.LayoutParams.WRAP_CONTENT)
-        dialog.window?.setDimAmount(0.6f)
+        // (Light enough that what's behind - the home screen's crystals - still shows)
+        dialog.window?.setDimAmount(0.4f)
         dialog.window?.attributes?.windowAnimations = android.R.style.Animation_Dialog
         if (field != null) dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
         showing.add(dialog)
-        dialog.setOnDismissListener { showing.remove(dialog) }
+        dialog.setOnDismissListener { showing.remove(dialog); onPanels?.invoke(a, anyShowing(a)) }
         dialog.show()
+        onPanels?.invoke(a, true)
         return field
     }
 
