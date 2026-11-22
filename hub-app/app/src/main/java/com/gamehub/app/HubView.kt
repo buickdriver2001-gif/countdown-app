@@ -75,6 +75,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
     private var yaw = 0f
     private var t = 0f
+    /** The world behind the menu: grey glass towers and balls of coloured light (after the PS2's start-up screen). */
+    private val world = Ps2World(context)
     /** Start-up animation clock (the hub appears when it finishes). */
     private var bootT = 0f
     var booting = true
@@ -194,9 +196,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         c.drawBitmap(backdrop(), 0f, 0f, null)
 
         drawHaze(c, dt, intro)
-        drawTowers(c, intro)
-        drawOrb(c, intro)
-        drawMotes(c, dt, intro)
+        world.quality = quality
+        world.draw(c, width, height, dt, intro, 0.6f, 0.8f)
         drawMenu(c, intro, dt)
 
         if (launchFlash > 0f) {
@@ -419,7 +420,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             if (hz.x > 1.6f) hz.x -= 2.2f
             glow(c, hz.x * w, hz.y * h, hz.r * w, (hz.alpha * intro).toInt())
         }
-        clusterGlows(c)
     }
 
     /** A soft orb of light wandering slowly through the towers. */

@@ -567,6 +567,9 @@ class LockView(private val a: LockActivity) : View(a) {
     }
     private var drawProblemNoted = false
 
+    /** The world behind the lock screen (the same as behind the home screen). */
+    private val world = Ps2World(context)
+
     private fun drawFrame(c: Canvas) {
         val now = System.nanoTime()
         // Time stands still while making the cover's picture, and while the cover still shows that picture
@@ -581,6 +584,8 @@ class LockView(private val a: LockActivity) : View(a) {
         val intro = 1f - (1f - introK) * (1f - introK) * (1f - introK)
         val lift = -dragY // content follows the finger up
         c.drawBitmap(backdrop(), 0f, 0f, null)
+        // The world: grey glass towers and balls of coloured light, the same as behind the home screen
+        world.draw(c, width, height, dt, intro, 0.64f, 0.95f)
         // Lift the black wake-up cover only once the NEXUS lock screen is really what's on screen:
         // the screen is lit, and NEXUS has the focus (it doesn't while the phone's own lock screen is
         // still drawn on top). The fade-in then starts from black, so the switch is seamless.
@@ -660,14 +665,7 @@ class LockView(private val a: LockActivity) : View(a) {
         val ease = min(1f, dt * 6f)
         cubeY += (cubeTarget - cubeY) * ease; cubeK += (kTarget - cubeK) * ease
 
-        // A smaller glass cube turning slowly in its own space below the text
-        val cx = w / 2; val cy = cubeY + lift * 0.3f
-        val s = min(w, h) * 0.16f * cubeK * (0.85f + 0.15f * intro)
-        c.save(); c.translate(cx, cy); c.scale(s * 3.2f, s * 3.2f)
-        fill.color = Color.WHITE; fill.alpha = (80 * intro).toInt(); fill.shader = glowShader
-        c.drawCircle(0f, 0f, 1f, fill); fill.shader = null
-        c.restore()
-        cube(c, cx, cy, s, t * 0.35f, 0.9f * fade)
+        // (The world behind the lock screen takes the place of the glass cube)
 
         // Swipe-up handle: chevrons that breathe, and a glow line
         val by = h - 70 * d + lift
