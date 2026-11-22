@@ -76,7 +76,13 @@ class NexusAccessibility : AccessibilityService() {
          * NEXUS's cover is hiding the screen right now (a screen change, or apps being closed): screens underneath
          * pause their animation meanwhile, so the phone puts everything into the app opening or closing.
          */
-        val coverBusy: Boolean get() = instance?.let { it.veilKind != 0 || it.closeJob != null } ?: false
+        val coverBusy: Boolean get() = instance?.let { it.veilKind != 0 || (it.closeJob != null && it.closeJob?.under != true) } ?: false
+        /** Apps swiped away in Recent Apps are being closed underneath it right now. */
+        val closingUnder: Boolean get() = instance?.closeJob?.under == true
+        /** Starts closing the apps swiped away, underneath Recent Apps (true if it's under way). */
+        fun closeUnder(): Boolean = instance?.closeUnderRecents() ?: false
+        /** Clear all is waiting (that one shows the closing cube on the way home). */
+        val clearAllPending: Boolean get() = instance?.closeAllPending == true
         /** Recent Apps (NEXUS's layer) is up. */
         val recentsShowing: Boolean get() = instance?.recents?.showing == true
         /** The home screen is hidden behind NEXUS's cover or Recent Apps right now (it pauses its animation). */
@@ -143,6 +149,8 @@ class NexusAccessibility : AccessibilityService() {
     val recents by lazy { RecentsOverlay(this) }
     /** For NEXUS's own parts (Recent Apps layer): runs [block], noting a problem instead of stopping the helper. */
     fun safeRun(block: () -> Unit) = safe(block)
+    /** One of the phone's own launcher / recent-apps apps (not NEXUS). */
+    fun isPhoneLauncher(pkg: String?): Boolean = pkg != null && pkg != packageName && pkg in homePkgs
     /** The app window in front (its id), and its app. */
     fun topAppWindowId(): Int = topAppWindow()
     fun topAppPackage(): String? = try {
@@ -456,6 +464,10 @@ class NexusAccessibility : AccessibilityService() {
         var retried = false
         /** How many times the phone's recent apps were scrolled to find a card. */
         var scrolls = 0
+        /** Closing underneath NEXUS Recent Apps while it's still up (no cover, no going home afterwards). */
+        var under = false
+        /** Apps already pressed Close on (or found already gone). */
+        val handled = HashSet<String>()
     }
     private var closeJob: CloseJob? = null
 
@@ -465,6 +477,51 @@ class NexusAccessibility : AccessibilityService() {
         if (all) closeAllPending = true
         saveQueue()
         return true
+    }
+
+    /**
+     * NEXUS Recent Apps (its own layer) is up and you've swiped apps away: they're closed right away, underneath
+     * it, through the phone's own recent apps (opened behind it). Recent Apps stays live the whole time, so
+     * there's nothing to wait for afterwards. Clear all keeps the closing cube on the way home.
+     */
+    fun closeUnderRecents(): Boolean {
+        if (closeJob != null) return closeJob?.under == true // (the running one picks up the new ones when it's done)
+        if (toClose.isEmpty() || closeAllPending) return false
+        if (!recents.showing) return false
+        val pm = getSystemService(PowerManager::class.java)
+        val km = getSystemService(KeyguardManager::class.java)
+        if (pm?.isInteractive != true || km?.isKeyguardLocked == true) return false
+        val clearRest = Recents.list(this).none { it.first !in OWN_APPS && it.first != packageName && it.first !in toClose }
+        val j = CloseJob(toClose.toList(), false, false, clearRest)
+        j.under = true
+        toClose.clear(); saveQueue()
+        closeJob = j
+        LockTrace.log(this, "closing apps fully (under Recent Apps): " + j.pkgs.joinToString() + if (clearRest) " and anything else left open" else "")
+        // The phone's own recent apps, behind NEXUS Recent Apps: already there (still open from the last ones), or opened now
+        val f = frontPkg
+        val already = f != null && f in homePkgs && f != packageName && frontCls.contains("Recents", ignoreCase = true) && !frontCls.contains("Launcher", ignoreCase = true)
+        if (already) { j.recentsPkg = f!!; if (recentsRoot(j) == null) j.recentsPkg = "" }
+        if (j.recentsPkg.isNotEmpty()) {
+            j.stage = 2; phoneRecentsOpen = true
+            h.postDelayed({ safe { runCloses(j) } }, 40)
+        } else {
+            j.stage = 1
+            if (!askPhoneRecents()) { endClose(j, "couldn't open the phone's recent apps", goHome = false); return false }
+            h.postDelayed({ safe { if (closeJob === j && j.stage == 1) endClose(j, "the phone's recent apps didn't open", goHome = false) } }, 1800)
+        }
+        // Whatever happens, it never takes more than a few seconds
+        h.postDelayed({ safe { if (closeJob === j) endClose(j, "took too long", goHome = false) } }, 6500)
+        return true
+    }
+
+    /** Done closing underneath Recent Apps: more swiped away meanwhile are closed straight after, then Recent Apps is told. */
+    private fun finishUnder(j: CloseJob, why: String) {
+        if (closeJob !== j) return
+        closeJob = null
+        LockTrace.log(this, "  $why (Recent Apps still up)")
+        queueButtons(60)
+        if (toClose.isNotEmpty() && !closeAllPending && recents.showing && closeUnderRecents()) return
+        recents.closesDone()
     }
 
     /** Apps waiting to be closed fully are kept on the phone (so they're still closed if Android stops NEXUS meanwhile). */
@@ -533,6 +590,7 @@ class NexusAccessibility : AccessibilityService() {
         val root = recentsRoot(j)
         if (root == null) {
             if (++j.tries < 16) { h.postDelayed({ safe { runCloses(j) } }, 120); return }
+            if (j.under) { endClose(j, "couldn't look at the phone's recent apps", goHome = false); return }
             // Most likely the helper needs switching off and on once, to get the access it now needs
             App.noteProblem(this, "closing apps fully", IllegalStateException("Android didn't let the helper look at the phone's recent apps. In NEXUS settings > Recent apps, turn the helper off and on again."))
             goHomeAfterClose(j, "couldn't look at the phone's recent apps (helper may need turning off and on)")
@@ -617,6 +675,11 @@ class NexusAccessibility : AccessibilityService() {
         }
         val name = label(pkg)
         val root = recentsRoot(j)
+        if (root == null && j.under) {
+            // The phone's recent apps isn't there any more (you went somewhere else): the rest are closed next time
+            left.addFirst(pkg); toClose.addAll(left); saveQueue()
+            finishUnder(j, "the phone's recent apps closed before finishing (the rest next time)"); return
+        }
         val card = root?.let { findCard(it, namesFor(pkg)) }
         if (card == null && root != null && j.scrolls < 8) {
             // Not in view: scroll the phone's recent apps along (further, then back the other way) and look again
@@ -631,6 +694,7 @@ class NexusAccessibility : AccessibilityService() {
             }
             if (forward) { j.scrolls = 4; left.addFirst(pkg); h.post { safe { closeNext(j, left) } }; return }
         }
+        j.handled.add(pkg)
         if (card != null && card.first.performAction(card.second)) { j.closed++; LockTrace.log(this, "  closed $name") }
         else { j.missed++; LockTrace.log(this, "  $name wasn't in the phone's recent apps (already closed?)") }
         cover?.peel(pkg) // either way it's no longer open: its icon falls off the cube
@@ -659,6 +723,7 @@ class NexusAccessibility : AccessibilityService() {
 
     private fun goHomeAfterClose(j: CloseJob, why: String) {
         if (closeJob !== j) return
+        if (j.under) { finishUnder(j, why); return }
         cover?.peelAll()
         j.stage = 3
         val back = j.toSwitcher && Recents.list(this).isNotEmpty()
@@ -677,6 +742,17 @@ class NexusAccessibility : AccessibilityService() {
     /** Done (or given up): the cover stops taking touches and fades away. */
     private fun endClose(j: CloseJob, problem: String?, goHome: Boolean) {
         if (closeJob !== j) return
+        if (j.under) {
+            closeJob = null
+            // Anything it didn't get to is closed next time
+            val rest = j.pkgs.filter { it !in j.handled }
+            if (rest.isNotEmpty()) { toClose.addAll(rest); saveQueue() }
+            if (j.all && j.handled.isEmpty()) { closeAllPending = true; saveQueue() }
+            LockTrace.log(this, "  closing apps stopped: " + (problem ?: "?") + if (rest.isNotEmpty()) " (the rest next time)" else "")
+            queueButtons(60)
+            recents.closesDone()
+            return
+        }
         closeJob = null
         if (problem != null) LockTrace.log(this, "  closing apps stopped: $problem")
         if (goHome) try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (_: Throwable) {}
@@ -1115,7 +1191,6 @@ class NexusAccessibility : AccessibilityService() {
                         barRect.height() >= (36 * d).toInt() && barRect.height() <= (80 * d).toInt()) {
                         // ...and really the phone's own (system) bar, not some other app's strip along the bottom
                         if (w.id == navWindowId || fromSystemUi(w)) { navWindowId = w.id; bar = android.graphics.Rect(barRect) }
-                        else logButtons("a bar-shaped window that isn't the phone's own was left alone")
                     }
                 }
             }
@@ -1123,8 +1198,20 @@ class NexusAccessibility : AccessibilityService() {
         return bar?.let { it to ime }
     }
 
-    private fun fromSystemUi(w: android.view.accessibility.AccessibilityWindowInfo): Boolean =
-        try { w.root?.packageName?.toString() == "com.android.systemui" } catch (_: Exception) { false }
+    private fun fromSystemUi(w: android.view.accessibility.AccessibilityWindowInfo): Boolean {
+        val pkg = try { w.root?.packageName?.toString() } catch (_: Exception) { null }
+        if (pkg == "com.android.systemui") return true
+        // On newer Android (16) the phone's button bar can be drawn by the phone's own launcher instead
+        // ("Navigation bar" / taskbar): that's still the phone's own, never another app's strip
+        val title = try { w.title?.toString()?.lowercase() } catch (_: Exception) { null } ?: ""
+        val own = pkg != null && pkg != packageName && pkg in homePkgs && pkg != "com.android.settings"
+        if (own || (pkg == null && ("navigation" in title || "taskbar" in title))) {
+            logButtons("the phone's button bar is drawn by " + (pkg ?: "?") + (if (title.isNotEmpty()) " ($title)" else ""))
+            return true
+        }
+        logButtons("a bar-shaped window from " + (pkg ?: "?") + (if (title.isNotEmpty()) " ($title)" else "") + " isn't the phone's own: left alone")
+        return false
+    }
 
     private fun screenSize(): android.graphics.Point? = try {
         val p = android.graphics.Point()

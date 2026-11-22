@@ -240,6 +240,9 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
     private var t = 0f
     private var lastNs = 0L
     private var enter = 0f
+    /** Recent Apps is on its way out (waiting a moment for apps to finish closing): the cards fade away. */
+    var leavingOut = false
+        set(v) { field = v; invalidate() }
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
@@ -318,7 +321,9 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
         val now = System.nanoTime()
         val dt = if (lastNs == 0L) 0f else min(0.05f, (now - lastNs) / 1e9f)
         lastNs = now; t += dt
-        if (!NexusAccessibility.coverBusy || enter > 0f) enter = min(1f, enter + dt * 3.5f)
+        if (leavingOut) enter = max(0f, enter - dt * 5f)
+        else if (!NexusAccessibility.coverBusy || enter > 0f) enter = min(1f, enter + dt * 3.5f)
+        val vis = if (leavingOut) enter else 1f
         val w = width.toFloat(); val h = height.toFloat()
         // Drawn and in front: let the helper fade its cover away. When the cover was shrinking the app
         // into its card, that card is already here in the same spot; otherwise the cards fade in now.
@@ -416,15 +421,15 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
                 r.set(x - cwS / 2, top, x + cwS / 2, top + chS)
                 card.rect.set(r)
                 val fade = ((1f - min(1f, abs(off)) * 0.45f) * (1f - min(1f, card.lift / (h * 0.5f)))).coerceIn(0f, 1f)
-                drawCard(c, card, r, fade, abs(off) < 0.5f)
+                drawCard(c, card, r, fade * vis, abs(off) < 0.5f)
             }
             // Name and time under the centre card
             val ci = pos.roundToInt().coerceIn(0, live.size - 1)
             val cc = live[ci]
             text.textAlign = Paint.Align.CENTER
-            text.textSize = 18 * d; text.letterSpacing = 0.1f; text.color = Color.argb(240, 240, 245, 255)
+            text.textSize = 18 * d; text.letterSpacing = 0.1f; text.color = Color.argb((240 * vis).toInt(), 240, 245, 255)
             c.drawText(cc.label, w / 2, cy + ch / 2 + 40 * d, text)
-            text.textSize = 12 * d; text.letterSpacing = 0.08f; text.color = Color.argb(170, 170, 200, 240)
+            text.textSize = 12 * d; text.letterSpacing = 0.08f; text.color = Color.argb((170 * vis).toInt(), 170, 200, 240)
             c.drawText(ago(cc.used), w / 2, cy + ch / 2 + 62 * d, text)
         }
 

@@ -188,8 +188,8 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     /** Fades Recent Apps away (or removes it at once). */
     fun hide(animated: Boolean = true) {
         val r = root ?: return
-        showing = false; leaving = false; waitFor = null
-        h.removeCallbacks(waitRun); h.removeCallbacks(idleClose); h.removeCallbacks(guard)
+        showing = false; leaving = false; waitFor = null; afterCloses = null
+        h.removeCallbacks(waitRun); h.removeCallbacks(idleClose); h.removeCallbacks(guard); h.removeCallbacks(closesTimeout)
         if (!animated) { remove(r); return }
         r.animate().cancel()
         r.animate().alpha(0f).setDuration(150).setInterpolator(android.view.animation.AccelerateInterpolator())
@@ -209,9 +209,16 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
         if (!showing || leaving) return
         val under = svc.topAppPackage()
         val first = Recents.list(svc).firstOrNull()?.first
-        if (openedOver == svc.packageName || under == first || first == null || svc.packageManager.getLaunchIntentForPackage(first) == null) {
-            hide(true)
-        } else view?.openWithZoom(first)
+        val canOpen = first != null && svc.packageManager.getLaunchIntentForPackage(first) != null
+        // Apps closing underneath right now (the phone's recent apps is behind): go where Back leads once they're done
+        if (NexusAccessibility.closingUnder) { if (canOpen && openedOver != svc.packageName) view?.openWithZoom(first!!) else goNexus(); return }
+        when {
+            // Still right there underneath (the app you were in, or the home screen): just fade away
+            under == first || (openedOver == svc.packageName && under == svc.packageName) -> hide(true)
+            canOpen && openedOver != svc.packageName -> view?.openWithZoom(first!!)
+            // Opened over the home screen (or nothing to go back to): back to the home screen
+            else -> goNexus()
+        }
     }
 
     /**
@@ -225,6 +232,8 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
             if (pkg == w && (w != svc.packageName || cls == MainActivity::class.java.name)) seen()
             return
         }
+        // What Recent Apps put back underneath after closing apps (see restoreUnder)
+        if (pkg == restoring) { restoring = null; return }
         // The NEXUS home screen came up some other way (e.g. the phone's Home, with NEXUS starting afresh)
         if (pkg == svc.packageName) { if (cls == MainActivity::class.java.name && openedOver != svc.packageName) hide(true); return }
         if (homeLike || pkg == "com.android.systemui" || "inputmethod" in pkg || "keyboard" in pkg) return
@@ -239,6 +248,9 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
 
     override fun openApp(pkg: String, revealed: Boolean, picture: Bitmap?): Boolean {
         val i = svc.packageManager.getLaunchIntentForPackage(pkg) ?: return false
+        // Apps still closing underneath: open it the moment they're done (leaving now would stop them closing).
+        // Its card already fills the screen meanwhile.
+        if (whenClosed { openApp(pkg, revealed, picture) }) return true
         // Already right underneath: just fade away
         if (svc.topAppPackage() == pkg) { hide(true); return true }
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
@@ -253,7 +265,11 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     override fun goNexus() {
         val i = svc.packageManager.getLaunchIntentForPackage(svc.packageName) ?: return
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION).putExtra("fromApp", true)
-        // Apps swiped away close fully on the way: the closing cover (showing the home screen) takes over at once
+        // Apps swiped away that haven't started closing yet: close them now, underneath, then go home
+        if (!forceGo && !NexusAccessibility.closingUnder && !NexusAccessibility.clearAllPending) NexusAccessibility.closeUnder()
+        // Still closing underneath: the cards fade away, and home comes the moment they're done
+        if (whenClosed { goNexus() }) { view?.leavingOut = true; return }
+        // Clear all: the closing cube takes over at once (the home screen comes up under it)
         if (NexusAccessibility.closeNow(returnToSwitcher = false)) {
             try { svc.startActivity(i) } catch (_: Exception) {}
             hide(false)
@@ -275,7 +291,71 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
         try { (svc.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager).killBackgroundProcesses(pkg) } catch (_: Exception) {}
         Recents.remove(svc, pkg)
         if (own) return true
-        return queue && NexusAccessibility.closeFully(listOf(pkg), all = false)
+        if (!queue || !NexusAccessibility.closeFully(listOf(pkg), all = false)) return false
+        // Closed right away, underneath Recent Apps (it stays live meanwhile)
+        NexusAccessibility.closeUnder()
+        return true
+    }
+
+    // ------------------------------------------------------------------ waiting for apps closing underneath
+
+    private var afterCloses: (() -> Unit)? = null
+    /** Waited long enough: go ahead anyway (anything not closed yet is closed next time). */
+    private var forceGo = false
+
+    /** If apps are still closing underneath, runs [action] once they're done (true) - otherwise false. */
+    private fun whenClosed(action: () -> Unit): Boolean {
+        if (forceGo || !NexusAccessibility.closingUnder) return false
+        leaving = true
+        afterCloses = action
+        h.removeCallbacks(closesTimeout); h.postDelayed(closesTimeout, CLOSE_WAIT_MAX)
+        return true
+    }
+
+    /** The apps underneath are done closing (or it stopped): carry on with what you pressed meanwhile. */
+    fun closesDone() {
+        val act = afterCloses ?: run { restoreUnder(); return }
+        afterCloses = null
+        h.removeCallbacks(closesTimeout)
+        if (root == null) return
+        leaving = false
+        svc.safeRun { act() }
+    }
+
+    /** What was put back underneath after closing (its screen coming up isn't "another app came in front"). */
+    private var restoring: String? = null
+
+    /**
+     * Apps finished closing and you're still in Recent Apps: what you were in goes back underneath (the app, or
+     * the home screen if that app was one you closed), so Back is instant again and the phone's own recent apps
+     * (opened behind Recent Apps to close them) is never what's left there.
+     */
+    private fun restoreUnder() {
+        if (!showing || leaving || root == null || waitFor != null) return
+        val over = openedOver ?: return
+        val ours = svc.packageName
+        val under = svc.topAppPackage()
+        if (!svc.isPhoneLauncher(under)) return // (the phone's recent apps isn't what's underneath)
+        val target = when {
+            over == ours -> ours
+            Recents.list(svc).any { it.first == over } -> over
+            svc.isPhoneLauncher(over) || over == "com.android.systemui" -> return // (opened over the phone's own recent apps)
+            else -> ours // the app you were in was closed: the home screen
+        }
+        val i = svc.packageManager.getLaunchIntentForPackage(target) ?: return
+        if (target == ours) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION).putExtra("fromApp", true)
+        else i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        restoring = target; openedOver = target
+        try { svc.startActivity(i) } catch (_: Exception) { restoring = null }
+    }
+
+    private val closesTimeout = Runnable {
+        val act = afterCloses ?: return@Runnable
+        afterCloses = null
+        if (root == null) return@Runnable
+        LockTrace.log(svc, "Recent Apps: didn't wait any longer for apps closing")
+        leaving = false; forceGo = true
+        try { svc.safeRun { act() } } finally { forceGo = false }
     }
 
     override fun explainOnce(after: (() -> Unit)?): Boolean {
@@ -335,5 +415,7 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
         private const val IDLE_MS = 120_000L
         /** How often it checks for a call or an alarm while it's up. */
         private const val GUARD_MS = 400L
+        /** The longest Recent Apps waits for apps closing underneath before carrying on. */
+        private const val CLOSE_WAIT_MAX = 2500L
     }
 }
