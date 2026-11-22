@@ -32,7 +32,7 @@ class NexusAccessibility : AccessibilityService() {
 
     companion object {
         /** Our own apps, which close completely when you leave them for NEXUS (others keep Android's usual behaviour). */
-        val OWN_APPS = setOf("com.zombiedots.app", "com.ashenvow.app", "com.synthpad.app")
+        val OWN_APPS = setOf("com.zombiedots.app", "com.ashenvow.app", "com.synthpad.app", "com.torquestreet.app")
 
         /** Asks one of our own apps to close itself completely, and takes it off Recent Apps. */
         fun closeOwnApp(c: Context, pkg: String) {

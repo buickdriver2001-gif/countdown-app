@@ -196,7 +196,7 @@ class SwitcherActivity : Activity(), SwitcherHost {
         NexusUi.panel(this, "Removed from NEXUS",
             "Android only lets the phone's own recent apps screen close other apps, so it's still listed there. " +
             "(Android also closes background apps by itself when it needs the memory.) NEXUS's own games, " +
-            "Ashen Vow, Zombie Dots and SynthPad, do close completely.\n\n" +
+            "Ashen Vow, Zombie Dots, SynthPad and Torque Street, do close completely.\n\n" +
             "To fully close other apps, open the phone's recent apps and swipe them away there. " +
             "The link is always at the bottom of NEXUS Recent Apps.", opts, cancel = null)
         return true

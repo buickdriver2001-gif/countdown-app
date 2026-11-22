@@ -1585,7 +1585,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 fill.color = Color.argb(al, 184, 134, 46); c.drawRect(cxm - 2.2f * u, cym + 1.6f * u, cxm + 2.2f * u, cym + 2.3f * u, fill)
                 fill.color = Color.argb(al, 90, 58, 30); c.drawRect(cxm - 0.4f * u, cym + 2.3f * u, cxm + 0.4f * u, cym + 4f * u, fill)
             }
-            else -> { // SynthPad: keys under a glowing wave
+            2 -> { // SynthPad: keys under a glowing wave
                 line.strokeWidth = 0.6f * u
                 line.color = Color.argb(al, 120, 220, 255)
                 path.reset()
@@ -1600,6 +1600,18 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 for (k in 0 until 6) c.drawRect(r.left + u + k * kw + 0.08f * u, cym + 0.8f * u, r.left + u + (k + 1) * kw - 0.08f * u, cym + 4f * u, fill)
                 fill.color = Color.argb(al, 20, 20, 28)
                 for (k in intArrayOf(1, 2, 4, 5)) c.drawRect(r.left + u + k * kw - 0.32f * kw, cym + 0.8f * u, r.left + u + k * kw + 0.32f * kw, cym + 2.6f * u, fill)
+            }
+            else -> { // Torque Street: a speedometer swept into the red, over the road
+                line.strokeWidth = 0.55f * u; line.strokeCap = Paint.Cap.ROUND
+                val rr = RectF(cxm - 3.4f * u, cym - 3.6f * u, cxm + 3.4f * u, cym + 3.2f * u)
+                line.color = Color.argb(al, 70, 84, 110); c.drawArc(rr, 150f, 240f, false, line)
+                line.color = Color.argb(al, 255, 106, 26); c.drawArc(rr, 300f, 90f, false, line)
+                fill.color = Color.argb(al, 255, 255, 255)
+                path.reset(); path.moveTo(cxm - 0.35f * u, cym - 0.1f * u); path.lineTo(cxm + 2.6f * u, cym - 2.2f * u); path.lineTo(cxm + 0.25f * u, cym + 0.35f * u); path.close()
+                c.drawPath(path, fill); c.drawCircle(cxm, cym, 0.55f * u, fill)
+                fill.color = Color.argb(al, 255, 201, 60)
+                c.drawRect(cxm - 0.35f * u, cym + 1.9f * u, cxm + 0.35f * u, cym + 2.8f * u, fill)
+                c.drawRect(cxm - 0.45f * u, cym + 3.3f * u, cxm + 0.45f * u, cym + 4.3f * u, fill)
             }
         }
     }

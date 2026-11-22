@@ -19,7 +19,8 @@ class MainActivity : Activity() {
     private val builtIn = listOf(
         GameEntry("Zombie Dots", "com.zombiedots.app", Color.rgb(255, 80, 80), 0),
         GameEntry("Ashen Vow", "com.ashenvow.app", Color.rgb(230, 150, 60), 1),
-        GameEntry("SynthPad", "com.synthpad.app", Color.rgb(120, 220, 255), 2)
+        GameEntry("SynthPad", "com.synthpad.app", Color.rgb(120, 220, 255), 2),
+        GameEntry("Torque Street", "com.torquestreet.app", Color.rgb(255, 122, 26), 3)
     )
     private lateinit var hub: HubView
     private lateinit var drawer: AppDrawer
@@ -904,7 +905,7 @@ class MainActivity : Activity() {
             return
         }
         // Not installed yet: open its download page
-        val tag = when (g.pkg) { "com.zombiedots.app" -> "zombie-build"; "com.ashenvow.app" -> "ashen-build"; else -> "synth-build" }
+        val tag = when (g.pkg) { "com.zombiedots.app" -> "zombie-build"; "com.ashenvow.app" -> "ashen-build"; "com.torquestreet.app" -> "racer-build"; else -> "synth-build" }
         try {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/buickdriver2001-gif/countdown-app/releases?q=$tag&expanded=true")))
         } catch (_: Exception) {
