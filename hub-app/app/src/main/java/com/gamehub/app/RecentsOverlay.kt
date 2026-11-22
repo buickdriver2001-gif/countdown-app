@@ -30,6 +30,11 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     private var sfxMade: Sfx? = null
     private val sfx: Sfx get() = sfxMade ?: Sfx().also { sfxMade = it }
     private var root: Root? = null
+    private var rootLp: WindowManager.LayoutParams? = null
+    /** The layer has been added to the screen (it stays, hidden, between uses: see [park]). */
+    private var attached = false
+    /** Recent Apps is on screen (showing, or fading out). */
+    private var up = false
     private var view: SwitcherView? = null
 
     /** Recent Apps is up (and not on its way out). */
@@ -97,8 +102,10 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
         if (svc.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true) return false
         if (svc.getSystemService(android.os.PowerManager::class.java)?.isInteractive != true) return false
         val wm = svc.getSystemService(WindowManager::class.java) ?: return false
-        dropNow()
-        val r = Root(svc)
+        // One layer, kept between uses (taking a layer off the screen can flash its last picture on some phones)
+        val r = root ?: Root(svc).also { root = it }
+        r.animate().cancel()
+        r.removeAllViews()
         val v = SwitcherView(this, sfx)
         r.addView(v)
         val order = NavBar.order(svc)
@@ -107,18 +114,27 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
             r.addView(nav, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, NavBar.heightPx(svc), android.view.Gravity.BOTTOM))
             v.navInset = NavBar.heightPx(svc).toFloat()
         }
-        val lp = WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+        val lp = rootLp ?: WindowManager.LayoutParams(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-            PixelFormat.TRANSLUCENT)
-        if (Build.VERSION.SDK_INT >= 30) lp.fitInsetsTypes = 0
-        if (Build.VERSION.SDK_INT >= 28) lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-        lp.title = "NEXUS Recent Apps"
+            PixelFormat.TRANSLUCENT).also {
+            if (Build.VERSION.SDK_INT >= 30) it.fitInsetsTypes = 0
+            if (Build.VERSION.SDK_INT >= 28) it.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            it.title = "NEXUS Recent Apps"
+            it.windowAnimations = 0
+            rootLp = it
+        }
+        // Takes touches and keys while it's up
+        lp.flags = lp.flags and (WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE).inv()
         openedOver = svc.topAppPackage()
         r.alpha = 0f
-        try { wm.addView(r, lp) } catch (t: Throwable) { LockTrace.log(svc, "Recent Apps layer couldn't open: " + t.javaClass.simpleName); return false }
-        root = r; view = v
+        r.visibility = View.VISIBLE
+        try {
+            if (!attached) { wm.addView(r, lp); attached = true } else wm.updateViewLayout(r, lp)
+        } catch (t: Throwable) { LockTrace.log(svc, "Recent Apps layer couldn't open: " + t.javaClass.simpleName); attached = false; return false }
+        up = true
+        view = v
         showing = true; leaving = false; waitFor = null
         v.load()
         // A quick fade over the app; the cards glide in at the same time
@@ -138,6 +154,7 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     /** The helper is stopping: Recent Apps goes, and its sounds are let go. */
     fun destroy() {
         hide(false)
+        detach()
         h.removeCallbacks(guard)
         sfxMade?.release(); sfxMade = null
     }
@@ -166,7 +183,7 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     private val guard = object : Runnable {
         override fun run() {
             svc.safeRun {
-                if (!showing || root == null) return@safeRun
+                if (!showing || !up) return@safeRun
                 val am = audio()
                 val mode = am?.mode ?: android.media.AudioManager.MODE_NORMAL
                 val callNow = mode != startMode && (mode == android.media.AudioManager.MODE_RINGTONE ||
@@ -188,18 +205,41 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     /** Fades Recent Apps away (or removes it at once). */
     fun hide(animated: Boolean = true) {
         val r = root ?: return
+        if (!up) return
         showing = false; leaving = false; waitFor = null; afterCloses = null
         h.removeCallbacks(waitRun); h.removeCallbacks(idleClose); h.removeCallbacks(guard); h.removeCallbacks(closesTimeout)
-        if (!animated) { remove(r); return }
+        // Touches go straight through from now on (to whatever is underneath), even while it fades
+        passThrough()
+        if (!animated) { park(); return }
         r.animate().cancel()
         r.animate().alpha(0f).setDuration(150).setInterpolator(android.view.animation.AccelerateInterpolator())
-            .withEndAction { remove(r) }.start()
+            .withEndAction { park() }.start()
     }
 
-    private fun dropNow() { root?.let { remove(it) } }
-    private fun remove(r: View) {
+    private fun passThrough() {
+        val r = root ?: return; val lp = rootLp ?: return
+        lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        try { svc.getSystemService(WindowManager::class.java)?.updateViewLayout(r, lp) } catch (_: Throwable) {}
+    }
+
+    /**
+     * Out of sight until next time: one clear frame first, then hidden (so it never shows anything old, now or
+     * when it comes back) - the layer itself stays, letting every touch through.
+     */
+    private fun park() {
+        val r = root ?: return
+        up = false
+        r.animate().cancel()
+        r.alpha = 0f
+        passThrough()
+        r.postOnAnimation { if (!up) { r.visibility = View.GONE; r.removeAllViews(); view = null } }
+    }
+
+    /** Really takes the layer off the screen (only when the helper stops). */
+    private fun detach() {
+        val r = root ?: return
         try { svc.getSystemService(WindowManager::class.java)?.removeView(r) } catch (_: Throwable) {}
-        if (root === r) { root = null; view = null }
+        root = null; rootLp = null; attached = false; up = false; view = null
     }
 
     private val idleClose = Runnable { svc.safeRun { if (showing && waitFor == null) hide(true) } }
@@ -317,7 +357,7 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
         val act = afterCloses ?: run { restoreUnder(); return }
         afterCloses = null
         h.removeCallbacks(closesTimeout)
-        if (root == null) return
+        if (!up) return
         leaving = false
         svc.safeRun { act() }
     }
@@ -331,7 +371,7 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
      * (opened behind Recent Apps to close them) is never what's left there.
      */
     private fun restoreUnder() {
-        if (!showing || leaving || root == null || waitFor != null) return
+        if (!showing || leaving || !up || waitFor != null) return
         val over = openedOver ?: return
         val ours = svc.packageName
         val under = svc.topAppPackage()
@@ -352,7 +392,7 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     private val closesTimeout = Runnable {
         val act = afterCloses ?: return@Runnable
         afterCloses = null
-        if (root == null) return@Runnable
+        if (!up) return@Runnable
         LockTrace.log(svc, "Recent Apps: didn't wait any longer for apps closing")
         leaving = false; forceGo = true
         try { svc.safeRun { act() } } finally { forceGo = false }
@@ -395,7 +435,7 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     private val waitRun = object : Runnable {
         override fun run() {
             svc.safeRun {
-                if (waitFor == null || root == null) return@safeRun
+                if (waitFor == null || !up) return@safeRun
                 val now = SystemClock.uptimeMillis()
                 if (seenAt == 0L) { val w = svc.topAppWindowId(); if (w != Int.MIN_VALUE && w != fromWin) seenAt = now }
                 when {
