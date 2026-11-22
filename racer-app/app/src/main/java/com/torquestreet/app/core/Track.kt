@@ -175,9 +175,9 @@ class Track(val info: TrackInfo, pts: FloatArray /* x, z, y triples along the lo
         const val STEP = 2f
 
         val all = listOf(
-            TrackInfo(0, "Downtown Loop", "City blocks, long straights and hard corners between the towers", Scene.CITY, 3),
-            TrackInfo(1, "Harbor Coast", "Sweeping coast road above the sea, with a bridge over the bay", Scene.COAST, 2),
-            TrackInfo(2, "Ridge Pass", "Mountain road: climbs, hairpins and a tunnel through the ridge", Scene.MOUNTAIN, 2))
+            TrackInfo(0, "Downtown Loop", "Long straights and hard corners between the towers", Scene.CITY, 3),
+            TrackInfo(1, "Harbor Coast", "Fast, sweeping road above the sea and over the bay", Scene.COAST, 2),
+            TrackInfo(2, "Ridge Pass", "Climbs, hairpins and a tunnel through the ridge", Scene.MOUNTAIN, 2))
 
         fun build(id: Int): Track = when (id) {
             0 -> city()

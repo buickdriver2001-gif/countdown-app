@@ -11,6 +11,7 @@ import android.graphics.Shader
 import android.graphics.Typeface
 import android.view.MotionEvent
 import android.view.View
+import kotlin.math.max
 import kotlin.math.min
 
 /** The game's look for text and buttons (shared by the menus, pause and results). */
@@ -64,22 +65,34 @@ class PanelView(c: Context) : View(c) {
 
     override fun onDraw(c: Canvas) {
         val w = width.toFloat(); val h = height.toFloat()
-        c.drawColor(Color.argb(170, 3, 5, 10))
+        c.drawColor(Color.argb(190, 3, 5, 10))
+        // Sized to fit: two columns of buttons when there isn't the height for one
+        val titleSize = min(40 * d, h * 0.1f)
+        val lineH = min(24 * d, h * 0.062f)
+        val bh = min(46 * d, h * 0.115f)
+        val gap = min(10 * d, h * 0.025f)
+        val oneCol = titleSize + 16 * d + lines.size * lineH + 14 * d + buttons.size * (bh + gap)
+        val cols = if (buttons.size > 2 && oneCol > h - 24 * d) 2 else 1
+        val rows = (buttons.size + cols - 1) / cols
+        val total = titleSize + 16 * d + lines.size * lineH + 14 * d + rows * (bh + gap) - gap
+        var y = max(12 * d, (h - total) / 2) + titleSize * 0.85f
         p.typeface = Ui.bold; p.textAlign = Paint.Align.CENTER
-        p.textSize = 40 * d; p.color = titleColor
-        var y = h * 0.2f + 20 * d
+        p.textSize = titleSize; p.color = titleColor
         c.drawText(title, w / 2, y, p)
-        p.typeface = Ui.reg; p.textSize = 16 * d; p.color = Color.argb(230, 220, 228, 245)
-        y += 34 * d
-        for (l in lines) { c.drawText(l, w / 2, y, p); y += 24 * d }
-        rects.clear()
-        val bw = min(300 * d, w * 0.4f); val bh = 46 * d
+        y += titleSize * 0.15f + 16 * d
+        p.typeface = Ui.reg; p.textSize = lineH * 0.66f; p.color = Color.argb(230, 220, 228, 245)
+        for (l in lines) { c.drawText(l, w / 2, y + lineH * 0.7f, p); y += lineH }
         y += 14 * d
+        rects.clear()
+        val bw = if (cols == 2) min(250 * d, w * 0.3f) else min(300 * d, w * 0.4f)
+        val rowW = cols * bw + (cols - 1) * 12 * d
         for ((i, b) in buttons.withIndex()) {
-            val r = RectF(w / 2 - bw / 2, y, w / 2 + bw / 2, y + bh)
+            val col = i % cols; val row = i / cols
+            val x = w / 2 - rowW / 2 + col * (bw + 12 * d)
+            val top = y + row * (bh + gap)
+            val r = RectF(x, top, x + bw, top + bh)
             rects.add(r)
             Ui.button(c, r, b.first, d, i == 0, i == pressed, p)
-            y += bh + 10 * d
         }
     }
 

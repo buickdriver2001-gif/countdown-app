@@ -208,6 +208,7 @@ class GameActivity : Activity(), SensorEventListener {
         if (endShown) return
         r.paused = true; sound.paused = true
         controls.gas = 0f; controls.brake = 0f; controls.nitro = false
+        hudView?.visibility = View.INVISIBLE
         panel.show("PAUSED", Color.WHITE, listOf(Track.all[prefs.track].name + "  ·  " + prefs.mode.label), listOf(
             "Resume" to { resume() },
             "Restart" to { recreate() },
@@ -220,6 +221,8 @@ class GameActivity : Activity(), SensorEventListener {
 
     private fun resume() {
         panel.hide()
+        hudView?.resetTouches()
+        hudView?.visibility = View.VISIBLE
         renderer?.paused = false; sound.paused = false
     }
 
@@ -255,6 +258,7 @@ class GameActivity : Activity(), SensorEventListener {
             else -> Triple("BUSTED", 0xFFFF4A4A.toInt(), listOf(if (race.mode == Mode.RACE) "The police stopped you mid-race" else "They caught you after " + Race.fmtTime(f.time), "Heat level ${f.heat}   ·   Top speed $top $units"))
         }
         renderer?.paused = true
+        hudView?.visibility = View.INVISIBLE
         val buttons = ArrayList<Pair<String, () -> Unit>>()
         buttons.add((if (race.mode == Mode.RACE) "Race again" else "Try again") to { recreate() })
         buttons.add("Change car or track" to { finish() })
@@ -263,6 +267,7 @@ class GameActivity : Activity(), SensorEventListener {
     }
 
     private fun showError(title: String, msg: String) {
+        hudView?.visibility = View.INVISIBLE
         panel.show(title, 0xFFFF6A50.toInt(), listOf(msg.take(90), "Please send a screenshot of this so it can be fixed."), listOf("Back to menu" to { finish() }))
     }
 

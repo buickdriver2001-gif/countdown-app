@@ -197,14 +197,23 @@ class MenuView(c: Context, private val prefs: Prefs, private val onStart: () -> 
         cv.drawRoundRect(rr, 14 * d, 14 * d, p); p.style = Paint.Style.FILL
     }
 
-    private fun wrap(cv: Canvas, s: String, x: Float, y: Float, maxW: Float, lh: Float, maxLines: Int = 3) {
+    /** Text in up to [maxLines] lines; if it doesn't fit, the last line ends with "…". */
+    private fun wrap(cv: Canvas, s: String, x: Float, y: Float, maxW: Float, lh: Float, maxLines: Int = 2) {
         val words = s.split(" ")
-        var line = ""; var yy = y; var n = 0
-        for (wd in words) {
-            val tryL = if (line.isEmpty()) wd else "$line $wd"
-            if (p.measureText(tryL) > maxW && line.isNotEmpty()) { cv.drawText(line, x, yy, p); yy += lh; line = wd; if (++n >= maxLines - 1) break } else line = tryL
+        val lines = ArrayList<String>()
+        var line = ""
+        var i = 0
+        while (i < words.size) {
+            val tryL = if (line.isEmpty()) words[i] else line + " " + words[i]
+            if (p.measureText(tryL) > maxW && line.isNotEmpty()) { lines.add(line); line = ""; if (lines.size == maxLines) break } else { line = tryL; i++ }
         }
-        if (line.isNotEmpty()) cv.drawText(line, x, yy, p)
+        if (line.isNotEmpty() && lines.size < maxLines) lines.add(line)
+        if (i < words.size && lines.isNotEmpty()) {
+            var last = lines[lines.size - 1]
+            while (last.isNotEmpty() && p.measureText("$last…") > maxW) last = last.dropLast(1)
+            lines[lines.size - 1] = last.trimEnd() + "…"
+        }
+        for ((k, l) in lines.withIndex()) cv.drawText(l, x, y + k * lh, p)
     }
 
     // ------------------------------------------------------------------ screens
@@ -230,30 +239,37 @@ class MenuView(c: Context, private val prefs: Prefs, private val onStart: () -> 
         heading(cv, "CHOOSE A TRACK")
         val w = width.toFloat(); val h = height.toFloat()
         val gap = 16 * d
-        val cw = (w - 56 * d - gap * 2) / 3; val ch = h - 170 * d
+        val cw = (w - 56 * d - gap * 2) / 3; val ch = h - 156 * d
         for (i in 0..2) {
-            val x = 28 * d + i * (cw + gap); val y = 74 * d
+            val x = 28 * d + i * (cw + gap); val y = 72 * d
             val rr = RectF(x, y, x + cw, y + ch)
             val sel = prefs.track == i
             card(cv, rr, sel)
             hits.add(Hit(RectF(rr)) { prefs.track = i; invalidate() })
-            // The track's shape
-            val tp = trackPaths.getOrPut(i) { shapePath(tracks[i], cw - 40 * d, ch * 0.45f) }
-            cv.save(); cv.translate(x + 20 * d, y + 16 * d)
-            p.style = Paint.Style.STROKE; p.strokeWidth = 4 * d; p.strokeJoin = Paint.Join.ROUND
-            p.color = if (sel) Ui.ORANGE else Color.argb(200, 220, 228, 245)
-            cv.drawPath(tp, p); p.style = Paint.Style.FILL
-            cv.restore()
             val info = Track.all[i]
-            p.typeface = Ui.bold; p.textSize = 20 * d; p.textAlign = Paint.Align.LEFT; p.color = Color.WHITE
-            cv.drawText(info.name.uppercase(), x + 16 * d, y + ch * 0.62f, p)
-            p.typeface = Ui.reg; p.textSize = 13 * d; p.color = Color.argb(200, 215, 222, 240)
-            wrap(cv, info.blurb, x + 16 * d, y + ch * 0.62f + 22 * d, cw - 32 * d, 17 * d)
-            p.color = Color.argb(220, 255, 200, 120)
+            // From the bottom: length and laps (and the record), the description, the name; the map fills the rest
+            val infoY = y + ch - 14 * d
+            val blurbY = infoY - 22 * d - 15 * d
+            val nameY = blurbY - 20 * d
+            val mapTop = y + 12 * d; val mapH = (nameY - 24 * d) - mapTop
+            if (mapH > 30 * d) {
+                val key = i * 10000 + (cw / 4).toInt() * 100 + (mapH / 4).toInt()
+                val tp = trackPaths.getOrPut(key) { shapePath(tracks[i], cw - 40 * d, mapH) }
+                cv.save(); cv.translate(x + 20 * d, mapTop)
+                p.style = Paint.Style.STROKE; p.strokeWidth = 4 * d; p.strokeJoin = Paint.Join.ROUND
+                p.color = if (sel) Ui.ORANGE else Color.argb(200, 220, 228, 245)
+                cv.drawPath(tp, p); p.style = Paint.Style.FILL
+                cv.restore()
+            }
+            p.typeface = Ui.bold; p.textSize = 19 * d; p.textAlign = Paint.Align.LEFT; p.color = Color.WHITE
+            cv.drawText(info.name.uppercase(), x + 16 * d, nameY, p)
+            p.typeface = Ui.reg; p.textSize = 12.5f * d; p.color = Color.argb(200, 215, 222, 240)
+            wrap(cv, info.blurb, x + 16 * d, blurbY, cw - 32 * d, 15 * d, 2)
+            p.textSize = 12.5f * d; p.color = Color.argb(220, 255, 200, 120)
             val len = "%.1f km".format(tracks[i].length / 1000f)
+            cv.drawText(if (prefs.mode == Mode.RACE) "$len  ·  ${info.laps} laps" else "$len loop", x + 16 * d, infoY, p)
             val best = prefs.best(i, prefs.mode)
-            cv.drawText(if (prefs.mode == Mode.RACE) "$len  ·  ${info.laps} laps" else "$len loop", x + 16 * d, y + ch - 30 * d, p)
-            if (best > 0f) { p.color = Color.argb(200, 150, 210, 255); cv.drawText("Record " + Race.fmtTime(best), x + 16 * d, y + ch - 12 * d, p) }
+            if (best > 0f) { p.textAlign = Paint.Align.RIGHT; p.color = Color.argb(200, 150, 210, 255); cv.drawText("Record " + Race.fmtTime(best), x + cw - 16 * d, infoY, p); p.textAlign = Paint.Align.LEFT }
         }
         navButtons(cv, "NEXT") { go(Screen.CAR) }
     }
@@ -275,53 +291,64 @@ class MenuView(c: Context, private val prefs: Prefs, private val onStart: () -> 
         heading(cv, "CHOOSE YOUR CAR")
         val w = width.toFloat(); val h = height.toFloat()
         val gap = 16 * d
-        val cw = (w - 56 * d - gap * 2) / 3; val ch = h - 170 * d
+        val cw = (w - 56 * d - gap * 2) / 3; val ch = h - 156 * d
         for (i in 0..2) {
             val spec = Cars.player[i]
-            val x = 28 * d + i * (cw + gap); val y = 74 * d
+            val x = 28 * d + i * (cw + gap); val y = 72 * d
             val rr = RectF(x, y, x + cw, y + ch)
             val sel = prefs.car == i
             card(cv, rr, sel)
             hits.add(Hit(RectF(rr)) { if (prefs.car != i) { prefs.car = i; prefs.paint = 0 }; invalidate() })
+            // From the bottom: the ratings, the description, the name; the car fills the space above
+            val rowH = 16 * d
+            val stat0 = y + ch - 14 * d - 2 * rowH
+            val blurbY = stat0 - 22 * d - 15 * d
+            val nameY = blurbY - 20 * d
+            val carTop = y + 10 * d; val carBottom = nameY - 24 * d
             val paint = spec.paints[if (sel) prefs.paint.coerceIn(0, spec.paints.size - 1) else 0]
-            drawCar(cv, spec.shape, x + cw / 2, y + ch * 0.3f, cw * 0.82f, paint)
-            p.typeface = Ui.bold; p.textSize = 19 * d; p.textAlign = Paint.Align.LEFT; p.color = Color.WHITE
-            cv.drawText(spec.name.uppercase(), x + 16 * d, y + ch * 0.47f, p)
-            p.typeface = Ui.reg; p.textSize = 12 * d; p.color = Color.argb(200, 215, 222, 240)
-            wrap(cv, spec.blurb, x + 16 * d, y + ch * 0.47f + 18 * d, cw - 32 * d, 15 * d, 2)
+            drawCar(cv, spec.shape, x + cw / 2, carTop, carBottom, cw * 0.8f, paint)
+            p.typeface = Ui.bold; p.textSize = 18 * d; p.textAlign = Paint.Align.LEFT; p.color = Color.WHITE
+            cv.drawText(spec.name.uppercase(), x + 16 * d, nameY, p)
+            p.typeface = Ui.reg; p.textSize = 12.5f * d; p.color = Color.argb(200, 215, 222, 240)
+            wrap(cv, spec.blurb, x + 16 * d, blurbY, cw - 32 * d, 15 * d, 2)
             val stats = listOf("SPEED" to spec.speedRating, "ACCEL" to spec.accelRating, "HANDLING" to spec.handlingRating)
-            var sy = y + ch * 0.47f + 56 * d
-            for ((name, v) in stats) {
-                p.textSize = 11 * d; p.color = Color.argb(190, 200, 210, 230); cv.drawText(name, x + 16 * d, sy, p)
+            for ((k, st) in stats.withIndex()) {
+                val sy = stat0 + k * rowH
+                p.textSize = 11 * d; p.color = Color.argb(190, 200, 210, 230); cv.drawText(st.first, x + 16 * d, sy, p)
                 val bx = x + 86 * d; val bw = cw - 104 * d
                 p.color = Color.argb(60, 255, 255, 255); r.set(bx, sy - 8 * d, bx + bw, sy - 2 * d); cv.drawRoundRect(r, 3 * d, 3 * d, p)
-                p.color = if (sel) Ui.ORANGE else Color.argb(220, 200, 210, 230); r.set(bx, sy - 8 * d, bx + bw * v / 10f, sy - 2 * d); cv.drawRoundRect(r, 3 * d, 3 * d, p)
-                sy += 18 * d
+                p.color = if (sel) Ui.ORANGE else Color.argb(220, 200, 210, 230); r.set(bx, sy - 8 * d, bx + bw * st.second / 10f, sy - 2 * d); cv.drawRoundRect(r, 3 * d, 3 * d, p)
             }
-            if (sel) {
-                // Paint choices
-                val n = spec.paints.size
-                val sw = 22 * d
-                var px = x + cw / 2 - (n * sw + (n - 1) * 8 * d) / 2
-                val py = y + ch - 30 * d
-                for ((k, col) in spec.paints.withIndex()) {
-                    p.color = Color.rgb((col[0] * 255).toInt(), (col[1] * 255).toInt(), (col[2] * 255).toInt())
-                    cv.drawCircle(px + sw / 2, py, sw / 2, p)
-                    if (k == prefs.paint) { p.style = Paint.Style.STROKE; p.strokeWidth = 2.5f * d; p.color = Color.WHITE; cv.drawCircle(px + sw / 2, py, sw / 2 + 4 * d, p); p.style = Paint.Style.FILL }
-                    val kk = k
-                    hits.add(Hit(RectF(px - 3 * d, py - sw, px + sw + 3 * d, py + sw)) { prefs.paint = kk; invalidate() })
-                    px += sw + 8 * d
-                }
-            }
+        }
+        // Paint for the chosen car: a row of colours in the bottom bar, between Back and Next
+        val spec = Cars.player[prefs.car]
+        val n = spec.paints.size
+        val sw = 26 * d; val sg = 12 * d
+        val cy = h - 20 * d - 23 * d
+        var px = w / 2 - (n * sw + (n - 1) * sg) / 2 + 30 * d
+        p.typeface = Ui.bold; p.textSize = 13 * d; p.textAlign = Paint.Align.RIGHT; p.color = Color.argb(200, 220, 228, 245)
+        cv.drawText("PAINT", px - 14 * d, cy + 5 * d, p)
+        for ((k, col) in spec.paints.withIndex()) {
+            p.color = Color.rgb((col[0] * 255).toInt(), (col[1] * 255).toInt(), (col[2] * 255).toInt())
+            cv.drawCircle(px + sw / 2, cy, sw / 2, p)
+            p.style = Paint.Style.STROKE
+            if (k == prefs.paint) { p.strokeWidth = 2.5f * d; p.color = Color.WHITE; cv.drawCircle(px + sw / 2, cy, sw / 2 + 4 * d, p) }
+            else { p.strokeWidth = 1f * d; p.color = Color.argb(120, 255, 255, 255); cv.drawCircle(px + sw / 2, cy, sw / 2, p) }
+            p.style = Paint.Style.FILL
+            val kk = k
+            hits.add(Hit(RectF(px - sg / 2, cy - sw, px + sw + sg / 2, cy + sw)) { prefs.paint = kk; invalidate() })
+            px += sw + sg
         }
         navButtons(cv, "NEXT") { go(Screen.CONDITIONS) }
     }
 
-    /** A side view of a car from its proportions, in its paint. */
-    private fun drawCar(cv: Canvas, s: CarShape, cx: Float, cy: Float, width: Float, col: FloatArray) {
-        val k = width / s.length
+    /** A side view of a car from its proportions, in its paint, fitted between [top] and [bottom]. */
+    private fun drawCar(cv: Canvas, s: CarShape, cx: Float, top: Float, bottom: Float, maxW: Float, col: FloatArray) {
+        val k = min(maxW / s.length, (bottom - top) / (s.roof + 0.06f))
+        if (k <= 0f) return
+        val ground = bottom
         fun X(z: Float) = cx + z * k
-        fun Y(y: Float) = cy + (0.7f - y) * k
+        fun Y(y: Float) = ground - y * k
         val hl = s.length / 2
         path.reset()
         path.moveTo(X(-hl), Y(s.clearance + 0.12f))
@@ -335,8 +362,13 @@ class MenuView(c: Context, private val prefs: Prefs, private val onStart: () -> 
         path.lineTo(X(hl), Y(s.belt - s.noseDrop - 0.08f))
         path.lineTo(X(hl), Y(s.clearance + 0.1f))
         path.close()
-        p.shader = LinearGradient(0f, Y(s.roof), 0f, Y(s.clearance), Color.rgb(min(255, (col[0] * 300).toInt()), min(255, (col[1] * 300).toInt()), min(255, (col[2] * 300).toInt())),
-            Color.rgb((col[0] * 150).toInt(), (col[1] * 150).toInt(), (col[2] * 150).toInt()), Shader.TileMode.CLAMP)
+        // The paint as it is, a little lighter along the top and a little darker underneath
+        fun c(v: Float, m: Float, add: Float) = (min(1f, v * m + add) * 255).toInt()
+        p.shader = LinearGradient(0f, Y(s.roof), 0f, Y(s.clearance),
+            intArrayOf(Color.rgb(c(col[0], 1.05f, 0.12f), c(col[1], 1.05f, 0.12f), c(col[2], 1.05f, 0.12f)),
+                Color.rgb(c(col[0], 1f, 0f), c(col[1], 1f, 0f), c(col[2], 1f, 0f)),
+                Color.rgb(c(col[0], 0.62f, 0f), c(col[1], 0.62f, 0f), c(col[2], 0.62f, 0f))),
+            floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
         cv.drawPath(path, p); p.shader = null
         // Windows
         path.reset()

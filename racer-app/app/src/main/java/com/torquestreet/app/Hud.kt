@@ -82,26 +82,43 @@ class HudView(c: Context, private val prefs: Prefs, private val hud: HudState, p
 
     init { isClickable = true }
 
+    // Where things go (worked out for the screen's size, so nothing overlaps on short, wide screens)
+    private val mapRect = RectF()
+    private var speedCx = 0f; private var speedCy = 0f; private var speedR = 58f
+
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         val s = min(w, h).toFloat()
         val b = s * 0.2f
-        val m = 18 * d
+        val m = 16 * d
+        val nb = b * 0.72f
         if (prefs.tilt) {
-            // Tilt: brake on the left, gas on the right
-            brake.set(m, h - m - b * 1.15f, m + b * 1.1f, h - m.toFloat())
-            gas.set(w - m - b * 1.1f, h - m - b * 1.15f, w - m.toFloat(), h - m.toFloat())
+            // Tilt: brake on the left; gas on the right with nitro beside it
+            brake.set(m, h - m - b * 1.15f, m + b * 1.1f, h - m)
+            gas.set(w - m - b * 1.1f, h - m - b * 1.15f, w - m, h - m)
+            nitroBtn.set(gas.left - 12 * d - nb, h - m - nb, gas.left - 12 * d, h - m)
             left.setEmpty(); right.setEmpty()
         } else {
-            left.set(m, h - m - b, m + b, h - m.toFloat())
-            right.set(m + b + 12 * d, h - m - b, m + 2 * b + 12 * d, h - m.toFloat())
-            gas.set(w - m - b, h - m - b * 1.15f, w - m.toFloat(), h - m.toFloat())
-            brake.set(w - m - 2 * b - 12 * d, h - m - b * 0.85f, w - m - b - 12 * d, h - m.toFloat())
+            // Buttons: steering on the left; nitro, brake and gas along the bottom right
+            left.set(m, h - m - b, m + b, h - m)
+            right.set(m + b + 12 * d, h - m - b, m + 2 * b + 12 * d, h - m)
+            gas.set(w - m - b, h - m - b * 1.15f, w - m, h - m)
+            brake.set(w - m - 2 * b - 12 * d, h - m - b * 0.85f, w - m - b - 12 * d, h - m)
+            nitroBtn.set(brake.left - 12 * d - nb, h - m - nb, brake.left - 12 * d, h - m)
         }
-        val nb = b * 0.72f
-        nitroBtn.set(gas.centerX() - nb / 2, gas.top - nb - 14 * d, gas.centerX() + nb / 2, gas.top - 14 * d)
+        // Map in the top right corner; the speedometer between it and the gas pedal
+        val ms = s * 0.3f
+        mapRect.set(w - ms - 14 * d, 10 * d, w - 14 * d, 10 * d + ms)
+        val top = mapRect.bottom + 6 * d; val bottom = gas.top - 6 * d
+        speedR = min(58 * d, (bottom - top) / 2 - 12 * d).coerceAtLeast(30 * d)
+        speedCx = w - 14 * d - speedR - 12 * d
+        speedCy = top + 12 * d + speedR
         pauseBtn.set(w / 2f - 22 * d, 8 * d, w / 2f + 22 * d, 52 * d)
         camBtn.set(w / 2f + 30 * d, 8 * d, w / 2f + 74 * d, 52 * d)
+        mapScale = 0f
     }
+
+    /** Lets go of every touch (after a pause, so nothing stays pressed). */
+    fun resetTouches() { pointers.clear(); applyControls() }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
@@ -223,8 +240,8 @@ class HudView(c: Context, private val prefs: Prefs, private val hud: HudState, p
     private var mapScale = 0f; private var mapCx = 0f; private var mapCz = 0f
     private val mapPath = Path()
     private fun drawMinimap(cv: Canvas, w: Float) {
-        val size = 118 * d
-        val ox = w - size - 14 * d; val oy = 12 * d
+        val size = mapRect.width()
+        val ox = mapRect.left; val oy = mapRect.top
         if (mapScale == 0f) {
             val span = max(track.maxX - track.minX - 800f, track.maxZ - track.minZ - 800f)
             mapScale = (size - 16 * d) / span
@@ -262,28 +279,27 @@ class HudView(c: Context, private val prefs: Prefs, private val hud: HudState, p
     }
 
     private fun drawSpeedo(cv: Canvas, w: Float, h: Float) {
-        // Above the gas pedal on the right
-        val cx = w - 100 * d; val cy = gas.top - 96 * d
-        val rad = 58 * d
-        // Rev arc
-        fill.color = Color.argb(110, 0, 4, 12); cv.drawCircle(cx, cy, rad + 10 * d, fill)
-        line.strokeWidth = 6 * d; line.color = Color.argb(70, 255, 255, 255)
-        r.set(cx - rad, cy - rad, cx + rad, cy + rad); cv.drawArc(r, 140f, 260f, false, line)
+        val cx = speedCx; val cy = speedCy; val rad = speedR
+        val k = rad / (58 * d)
+        // Rev arc round the top, nitro in the gap at the bottom
+        fill.color = Color.argb(110, 0, 4, 12); cv.drawCircle(cx, cy, rad + 9 * d * k, fill)
+        line.strokeWidth = 6 * d * k; line.color = Color.argb(70, 255, 255, 255)
+        r.set(cx - rad, cy - rad, cx + rad, cy + rad); cv.drawArc(r, 150f, 240f, false, line)
         val rpm = f.rpm.coerceIn(0f, 1f)
         line.color = if (rpm > 0.88f) Color.rgb(255, 70, 50) else Color.rgb(255, 160, 40)
-        cv.drawArc(r, 140f, 260f * rpm, false, line)
+        cv.drawArc(r, 150f, 240f * rpm, false, line)
+        line.strokeWidth = 5 * d * k; line.color = Color.argb(60, 120, 190, 255)
+        cv.drawArc(r, 125f, -70f, false, line)
+        line.color = if (f.nitroOn) Color.rgb(150, 235, 255) else Color.rgb(60, 150, 255)
+        val nk = f.nitro.coerceIn(0f, 1f)
+        if (nk > 0.01f) cv.drawArc(r, 125f, -70f * nk, false, line)
         val kmh = f.speed * 3.6f
         val shown = if (prefs.mph) kmh * 0.6214f else kmh
-        shadowText(cv, "%d".format(shown.toInt()), cx, cy + 12 * d, 38 * d, Color.WHITE, Paint.Align.CENTER)
-        shadowText(cv, if (prefs.mph) "MPH" else "KM/H", cx, cy + 30 * d, 11 * d, Color.argb(200, 220, 230, 255), Paint.Align.CENTER, reg)
-        shadowText(cv, "${f.gear}", cx, cy - 22 * d, 16 * d, Color.argb(230, 255, 210, 120), Paint.Align.CENTER)
-        // Nitro bar
-        val bw = 110 * d; val bx = cx - bw / 2; val by = cy + rad + 16 * d
-        fill.color = Color.argb(120, 0, 0, 0); r.set(bx, by, bx + bw, by + 8 * d); cv.drawRoundRect(r, 4 * d, 4 * d, fill)
-        fill.shader = LinearGradient(bx, 0f, bx + bw, 0f, Color.rgb(40, 120, 255), Color.rgb(120, 230, 255), Shader.TileMode.CLAMP)
-        r.set(bx, by, bx + bw * f.nitro.coerceIn(0f, 1f), by + 8 * d); cv.drawRoundRect(r, 4 * d, 4 * d, fill); fill.shader = null
-        shadowText(cv, "NITRO", bx, by - 4 * d, 10 * d, Color.argb(200, 150, 210, 255), tf = reg)
-        if (f.style.isNotEmpty()) shadowText(cv, f.style, cx, by + 26 * d, 14 * d, Color.rgb(120, 230, 255), Paint.Align.CENTER)
+        shadowText(cv, "%d".format(shown.toInt()), cx, cy + 13 * d * k, 38 * d * k, Color.WHITE, Paint.Align.CENTER)
+        shadowText(cv, if (prefs.mph) "MPH" else "KM/H", cx, cy + 29 * d * k, 11 * d * k, Color.argb(200, 220, 230, 255), Paint.Align.CENTER, reg)
+        shadowText(cv, "${f.gear}", cx, cy - 22 * d * k, 16 * d * k, Color.argb(230, 255, 210, 120), Paint.Align.CENTER)
+        shadowText(cv, "N2O", cx, cy + rad + 4 * d * k, 9 * d * k, Color.argb(200, 150, 210, 255), Paint.Align.CENTER, reg)
+        if (f.style.isNotEmpty()) shadowText(cv, f.style, cx - rad - 16 * d, cy + rad * 0.2f, 14 * d, Color.rgb(120, 230, 255), Paint.Align.RIGHT)
     }
 
     private fun drawPursuit(cv: Canvas, w: Float) {
@@ -322,7 +338,7 @@ class HudView(c: Context, private val prefs: Prefs, private val hud: HudState, p
             shadowText(cv, "$n", w / 2, h * 0.42f, size, Color.argb((255 * min(1f, frac * 3f + 0.3f)).toInt(), 255, 220, 120), Paint.Align.CENTER)
             return
         }
-        var y = h * 0.34f
+        var y = max(h * 0.4f, 150 * d)
         for (i in 0 until f.msgN) {
             val t = f.msgT[i]
             val a = (min(1f, t / 0.4f) * 255).toInt().coerceIn(0, 255)

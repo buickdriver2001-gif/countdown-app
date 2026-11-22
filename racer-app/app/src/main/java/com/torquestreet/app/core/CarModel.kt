@@ -37,11 +37,11 @@ object Cars {
     val TRUCK = CarShape(7.0f, 2.3f, 1.25f, 2.6f, 0.3f, 0.7f, 0.8f, 2.6f, 3.1f, 0.15f, 0f, 0.45f, 4.2f, boxTruck = true)
 
     val player = listOf(
-        CarSpec(0, "Vanta GT", "Balanced coupe: quick, sure-footed, a strong top speed", 83f, 9.6f, 15.2f, 16f, 1400f, VANTA,
+        CarSpec(0, "Vanta GT", "Balanced: quick, sure-footed and fast flat out", 83f, 9.6f, 15.2f, 16f, 1400f, VANTA,
             listOf(c(20, 60, 170), c(200, 20, 30), c(235, 235, 240), c(20, 20, 22), c(255, 150, 0))),
-        CarSpec(1, "Kestrel R", "Light and nimble: the best grip and pickup, a little less top speed", 77f, 10.8f, 17.2f, 17f, 1150f, KESTREL,
+        CarSpec(1, "Kestrel R", "Light and nimble: the best grip and pickup", 77f, 10.8f, 17.2f, 17f, 1150f, KESTREL,
             listOf(c(250, 200, 0), c(0, 170, 120), c(120, 30, 170), c(235, 235, 240), c(255, 60, 120))),
-        CarSpec(2, "Bruiser V8", "Heavy muscle: the highest top speed, a handful in the corners", 87f, 9.0f, 13.6f, 14.5f, 1650f, BRUISER,
+        CarSpec(2, "Bruiser V8", "Muscle: the top speed, but a handful in corners", 87f, 9.0f, 13.6f, 14.5f, 1650f, BRUISER,
             listOf(c(150, 15, 20), c(25, 25, 28), c(15, 90, 50), c(200, 200, 205), c(30, 110, 200))))
 
     val rivalPaints = listOf(c(230, 90, 0), c(10, 140, 200), c(180, 180, 40), c(140, 20, 120), c(220, 220, 230), c(40, 160, 60))
