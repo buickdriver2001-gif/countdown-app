@@ -72,6 +72,11 @@ class NexusAccessibility : AccessibilityService() {
         fun closeNow(returnToSwitcher: Boolean): Boolean = instance?.beginClose(returnToSwitcher) ?: false
         /** NEXUS's opening fade is up right now (the home screen skips its own fade-in meanwhile). */
         val veiling: Boolean get() = (instance?.veilKind ?: 0) != 0
+        /**
+         * NEXUS's cover is hiding the screen right now (a screen change, or apps being closed): screens underneath
+         * pause their animation meanwhile, so the phone puts everything into the app opening or closing.
+         */
+        val coverBusy: Boolean get() = instance?.let { it.veilKind != 0 || it.closeJob != null } ?: false
 
         /** Kinds of screen change NEXUS's quick fade covers. */
         const val FADE_APP = 1
@@ -84,8 +89,8 @@ class NexusAccessibility : AccessibilityService() {
         /** NEXUS is closing apps under its cover right now (the home screen skips its fade-in meanwhile). */
         val busyClosing: Boolean get() = instance?.closeJob != null
 
-        /** NEXUS's buttons in place of the phone's own while you use other apps (NEXUS settings). Off unless switched on. */
-        fun appButtonsOn(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("appButtons", false)
+        /** NEXUS's buttons in place of the phone's own while you use other apps (Settings; on unless switched off). */
+        fun appButtonsOn(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("appButtons", true)
         fun setAppButtons(c: Context, on: Boolean) {
             c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit().putBoolean("appButtons", on).apply()
             instance?.refreshAppButtons()
@@ -1115,9 +1120,10 @@ class NexusAccessibility : AccessibilityService() {
     /** Safety: if the buttons ever keep flicking on and off, they step aside for a while (the phone's own show). */
     private fun noteToggle() {
         val now = SystemClock.uptimeMillis()
+        // Only real flicker counts (8 changes inside about a second): switching apps quickly never gets near that
         toggleTimes.addLast(now)
-        while (toggleTimes.isNotEmpty() && now - toggleTimes.first() > 4000) toggleTimes.removeFirst()
-        if (toggleTimes.size > 12) {
+        while (toggleTimes.isNotEmpty() && now - toggleTimes.first() > 1200) toggleTimes.removeFirst()
+        if (toggleTimes.size >= 8) {
             toggleTimes.clear()
             // The first time for 15 seconds; if it happens again, until the helper next starts
             buttonsPauses++

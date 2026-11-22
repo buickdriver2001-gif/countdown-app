@@ -685,7 +685,13 @@ class LockView(private val a: LockActivity) : View(a) {
         if (!dragging && dragY > 0f) dragY = max(0f, dragY - dt * h * 2.5f)
         // Fade in from black
         if (intro < 1f) { fill.color = Color.argb(((1f - intro) * 255).toInt(), 0, 0, 0); c.drawRect(0f, 0f, w, h, fill) }
-        postInvalidateOnAnimation()
+        // Unlocking under NEXUS's fade: hold this frame (the phone puts everything into showing your app)
+        if (NexusAccessibility.coverBusy && !previewing) { removeCallbacks(resumeAfterCover); postDelayed(resumeAfterCover, 50) }
+        else postInvalidateOnAnimation()
+    }
+
+    private val resumeAfterCover = object : Runnable {
+        override fun run() { if (NexusAccessibility.coverBusy) postDelayed(this, 50) else invalidate() }
     }
 
     private val bolt = android.graphics.Path()

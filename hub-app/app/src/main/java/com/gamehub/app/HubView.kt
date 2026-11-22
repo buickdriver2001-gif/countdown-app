@@ -226,7 +226,16 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         }
         // Fade in from black at start-up
         if (intro < 1f) { fill.color = Color.argb(((1f - intro) * 255).toInt(), 0, 0, 0); c.drawRect(0f, 0f, w, h, fill) }
-        if (!covered) postInvalidateOnAnimation()
+        if (!covered) {
+            // Under NEXUS's cover (an app opening or closing, apps being closed): hold this frame and pause, so the
+            // phone puts everything into the change; carry on the moment the cover starts to lift
+            if (NexusAccessibility.coverBusy && launchFlash <= 0f) { removeCallbacks(resumeAfterCover); postDelayed(resumeAfterCover, 50) }
+            else postInvalidateOnAnimation()
+        }
+    }
+
+    private val resumeAfterCover = object : Runnable {
+        override fun run() { if (NexusAccessibility.coverBusy) postDelayed(this, 50) else invalidate() }
     }
 
     /**
