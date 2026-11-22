@@ -111,7 +111,7 @@ class NexusAccessibility : AccessibilityService() {
     }
 
     private fun handleScreen(c: Context, i: Intent) {
-        if (i.action == Intent.ACTION_SCREEN_OFF) hideButtons("screen off") else queueButtons(0)
+        if (i.action == Intent.ACTION_SCREEN_OFF) { hideButtons("screen off"); veilPkg = null; h.removeCallbacks(veilRun) } else queueButtons(0)
         if (i.action == Intent.ACTION_SCREEN_OFF) leftByScreenOff = true
         closeJob?.let { endClose(it, "the screen turned off", goHome = false) }
         val kmT = getSystemService(KeyguardManager::class.java)
@@ -680,7 +680,9 @@ class NexusAccessibility : AccessibilityService() {
         if (pkg != packageName && pkg != "com.android.systemui" && pkg != "android" && pkg !in homePkgs &&
             "inputmethod" !in pkg && "keyboard" !in pkg) {
             val pm = getSystemService(android.os.PowerManager::class.java)
-            if (pm?.isInteractive == true) removeCover() else otherAppSinceOff = true
+            // (Except while an app you just opened is appearing under NEXUS's opening fade: that fades away itself)
+            if (veilPkg != null) { if (veilSeenAt == 0L) { veilSeenAt = SystemClock.uptimeMillis(); h.removeCallbacks(veilRun); h.postDelayed(veilRun, VEIL_HOLD) } }
+            else if (pm?.isInteractive == true) removeCover() else otherAppSinceOff = true
         }
         // The phone's own recent-apps screen opened (square button): swap in NEXUS Recent Apps
         // Only the system's dedicated recent-apps screen counts (e.g. ...quickstep.RecentsActivity or
@@ -799,6 +801,84 @@ class NexusAccessibility : AccessibilityService() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 .putExtra("fromSquare", true).putExtra("zoom", shot != null), SwitcherActivity.noIconSplash(this))
         } catch (_: Exception) { removeCover() }
+    }
+
+    // ------------------------------------------------------------------ opening apps: NEXUS's own quick fade
+    // When a launcher opens another app, Android plays the phone's own slide-in (it ignores the launcher's choice
+    // of animation there). So NEXUS covers that moment itself, quickly: a fade to the NEXUS dark (or, from Recent
+    // Apps, the app's card), the app opens underneath, then the cover fades away to show it. It never takes
+    // touches and never stays more than a moment.
+
+    private var veilPkg: String? = null
+    private var veilAt = 0L
+    private var veilSeenAt = 0L
+    private var veilsLogged = 0
+    private val veilRun = Runnable { safe { stepVeil() } }
+    /** After the app appears underneath, before the fade (the phone's slide-in is all but done by then). */
+    private val VEIL_HOLD = 170L
+    /** Going to NEXUS's own home screen (there's no other app to watch for). */
+    private val VEIL_HOME = 360L
+    /** Never longer than this before fading away, however long the app takes. */
+    private val VEIL_MAX = 1100L
+
+    /**
+     * Covers the opening of [pkg]: with [picture] (its card, from Recent Apps; or the home screen) shown at once,
+     * or the NEXUS dark faded in over [fadeInMs]. Returns false if it can't (the app then opens as usual).
+     */
+    fun veilForLaunch(pkg: String, picture: Bitmap?, fadeInMs: Long): Boolean {
+        if (closeJob != null || talkBackOn()) return false
+        if (getSystemService(PowerManager::class.java)?.isInteractive != true) return false
+        if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return false
+        ensureCover(force = true)
+        val v = cover ?: return false
+        coverToken++
+        if (picture != null) v.showStill(picture) else v.showVeil()
+        setCover(true)
+        if (fadeInMs > 0) {
+            v.alpha = 0f
+            v.animate().alpha(1f).setDuration(fadeInMs).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+        }
+        veilPkg = pkg; veilAt = SystemClock.uptimeMillis(); veilSeenAt = 0L
+        armSafety(VEIL_MAX + 600, "opening an app: cover lifted by the fallback")
+        h.removeCallbacks(veilRun); h.postDelayed(veilRun, if (pkg == packageName) VEIL_HOME else 40L)
+        return true
+    }
+
+    /** The app couldn't be opened after all: fade back. */
+    fun cancelVeil() = liftVeil()
+
+    private fun stepVeil() {
+        val pkg = veilPkg ?: return
+        val now = SystemClock.uptimeMillis()
+        if (pkg == packageName) { liftVeil(); return }
+        if (veilSeenAt == 0L && otherAppInFront()) veilSeenAt = now
+        when {
+            veilSeenAt != 0L && now - veilSeenAt >= VEIL_HOLD -> liftVeil()
+            now - veilAt >= VEIL_MAX -> liftVeil()
+            veilSeenAt != 0L -> h.postDelayed(veilRun, VEIL_HOLD - (now - veilSeenAt))
+            else -> h.postDelayed(veilRun, 40L)
+        }
+    }
+
+    /** Has the app appeared underneath (the top app window is no longer NEXUS's: it's the app, or its starting screen)? */
+    private fun otherAppInFront(): Boolean {
+        val ws = try { windows } catch (_: Throwable) { return false }
+        val top = ws.filter { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }.maxByOrNull { it.layer } ?: return false
+        val p = try { top.root?.packageName?.toString() } catch (_: Throwable) { null }
+        return p != packageName
+    }
+
+    private fun liftVeil() {
+        if (veilPkg == null) return
+        val now = SystemClock.uptimeMillis()
+        // The first few each time the helper starts are noted (how quickly apps appear), so it can be tuned
+        if (veilsLogged < 3) {
+            veilsLogged++
+            LockTrace.log(this, "opening an app: " + (if (veilSeenAt != 0L) "appeared after ${veilSeenAt - veilAt}ms, " else "") + "faded in after ${now - veilAt}ms")
+        }
+        veilPkg = null
+        h.removeCallbacks(veilRun)
+        fadeCover()
     }
 
     // ------------------------------------------------------------------ NEXUS buttons in your apps

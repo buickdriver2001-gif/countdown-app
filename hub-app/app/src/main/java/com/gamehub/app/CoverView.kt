@@ -73,6 +73,10 @@ class CoverView(c: Context) : FrameLayout(c) {
      */
     private var quietClose = false
     private var still: Bitmap? = null
+    /** Opening an app: the plain NEXUS dark, while the app opens underneath. */
+    private var veil = false
+
+    fun showVeil() { showBlack(); veil = true; back.invalidate() }
 
     /** Words shown on the backdrop (while NEXUS closes apps), or null. */
     private var label: String? = null
@@ -95,6 +99,7 @@ class CoverView(c: Context) : FrameLayout(c) {
             }
             val st = still
             if (st != null) { canvas.drawColor(Color.BLACK); canvas.drawBitmap(st, 0f, 0f, null); return }
+            if (veil) { canvas.drawColor(Color.rgb(2, 4, 14)); return }
             if (!recents) { canvas.drawColor(Color.BLACK); return }
             val cur = bg
             val b = if (cur != null && cur.width == width && cur.height == height) cur else backdrop(width, height, d).also { bg = it }
@@ -146,7 +151,7 @@ class CoverView(c: Context) : FrameLayout(c) {
     }
 
     fun showRecents(s: Bitmap?) {
-        recents = true; start = 0L; label = null; closeCube.stop(); picture = null; quietClose = false; still = null
+        recents = true; start = 0L; label = null; closeCube.stop(); picture = null; quietClose = false; still = null; veil = false
         resetCard()
         card.shot = s
         card.visibility = if (s != null) VISIBLE else GONE
@@ -165,7 +170,7 @@ class CoverView(c: Context) : FrameLayout(c) {
     /** Back to plain black (ready for the screen turning off). */
     /** The NEXUS backdrop with the closing cube: [apps] are the apps being closed (their icons go on the cube). */
     fun showClosing(apps: List<Pair<String, android.graphics.drawable.Drawable?>>) {
-        recents = true; start = 0L; label = null; quietClose = false; still = null
+        recents = true; start = 0L; label = null; quietClose = false; still = null; veil = false
         resetCard()
         card.shot = null; card.visibility = GONE
         closeCube.start(apps)
@@ -175,7 +180,7 @@ class CoverView(c: Context) : FrameLayout(c) {
     fun showStill(b: Bitmap?) {
         recents = true; start = 0L; label = null; picture = null; closeCube.stop()
         resetCard(); card.shot = null; card.visibility = GONE
-        quietClose = true; still = b
+        quietClose = true; still = b; veil = false
         back.invalidate()
     }
 
@@ -189,7 +194,7 @@ class CoverView(c: Context) : FrameLayout(c) {
 
     fun showBlack() {
         if (picture != null) { picture = null; back.invalidate() }
-        if (quietClose || still != null) { quietClose = false; still = null; back.invalidate() }
+        if (quietClose || still != null || veil) { quietClose = false; still = null; veil = false; back.invalidate() }
         if (!recents && card.visibility == GONE) return
         recents = false; start = 0L; label = null; closeCube.stop()
         resetCard()

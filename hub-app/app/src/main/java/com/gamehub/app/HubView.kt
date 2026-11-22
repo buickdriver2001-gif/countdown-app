@@ -1777,7 +1777,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     /** Tile tap → the screen settles into the dark (then the app rises out of it). */
     private val LAUNCH_LEN = 0.34f
     /** How far into the launch glow the app is asked to open. */
-    private val LAUNCH_START = 0.28f
+    private val LAUNCH_START = 0f
     /** Coming back from an app: a short fade up from the dark. */
     private val ENTER_LEN = 0.32f
 }

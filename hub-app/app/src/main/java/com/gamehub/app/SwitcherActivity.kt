@@ -101,14 +101,17 @@ class SwitcherActivity : Activity() {
     override fun onStop() { super.onStop(); if (!isFinishing) finish() }
 
     /** Opens an app. [revealed]: its card has already grown to fill the screen, so it just comes alive. */
-    fun openApp(pkg: String, revealed: Boolean = false): Boolean {
+    fun openApp(pkg: String, revealed: Boolean = false, picture: android.graphics.Bitmap? = null): Boolean {
         val i = packageManager.getLaunchIntentForPackage(pkg) ?: return false
+        // NEXUS's own quick fade covers the opening (instead of the phone's slide-in): the app fades in over its
+        // card, or out of the NEXUS dark
+        val veiled = NexusAccessibility.instance?.veilForLaunch(pkg, picture, if (picture != null) 0L else 90L) == true
         return try {
             val v = window.decorView
             startActivity(i, if (revealed) Transitions.reveal(v) else Transitions.app(v))
             finish()
             true
-        } catch (_: Exception) { false }
+        } catch (_: Exception) { if (veiled) NexusAccessibility.instance?.cancelVeil(); false }
     }
 
     /** The NEXUS home screen, underneath the cover while apps close (no animation: it isn't seen). */
@@ -127,7 +130,8 @@ class SwitcherActivity : Activity() {
         val i = packageManager.getLaunchIntentForPackage(packageName) ?: return
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         i.putExtra("fromApp", true)
-        // (Recent Apps is its own task, so the home screen gets an opening Android honours between tasks)
+        // The home screen shows at once (a still picture of it on NEXUS's cover) while it comes up underneath
+        MainActivity.homeStill()?.let { NexusAccessibility.instance?.veilForLaunch(packageName, it, 0L) }
         startActivity(i, Transitions.app(window.decorView))
         finish()
     }
@@ -423,9 +427,11 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
     private var opened = false
     private val openFrom = RectF()
     private val openRect = RectF()
-    private val OPEN_LEN = 0.34f
-    /** How far into the card's growth the app is asked to open (it finishes growing underneath as the app appears). */
-    private val OPEN_START = 0.6f
+    private val OPEN_LEN = 0.26f
+    /** The app is asked to open once its card fills the screen (then it fades in over the card). */
+    private val OPEN_START = 1f
+    /** The full-screen card, made while it grows, for NEXUS's cover to hold as the app opens underneath. */
+    @Volatile private var openPic: Bitmap? = null
 
     /** Opens [pkg]: if its card is the one in the middle, the card grows into the app first. */
     fun openWithZoom(pkg: String) {
@@ -435,6 +441,9 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         if (card == null || card.pkg != pkg || card.rect.isEmpty) { a.openApp(pkg); return }
         opening = card; openT = 0f; opened = false
         openFrom.set(card.rect)
+        openPic = null
+        val w = width; val h = height; val icon = card.icon; val p = card.pkg
+        if (w > 0 && h > 0) Bg.thread { val b = CardArt.withIcon(p, icon, w, h); post { if (opening === card) openPic = b } }.start()
         invalidate()
     }
 
@@ -460,7 +469,8 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
             opened = true
             // With its card filling the screen the app just fades in over it; without one it rises in.
             // If it can't be opened (e.g. it was just uninstalled), put the cards back.
-            if (!a.openApp(card.pkg, revealed = shot != null)) { opening = null; opened = false }
+            val pic = openPic ?: if (width > 0 && height > 0) CardArt.withIcon(card.pkg, card.icon, width, height) else null
+            if (!a.openApp(card.pkg, revealed = shot != null, picture = pic)) { opening = null; opened = false }
         }
     }
 

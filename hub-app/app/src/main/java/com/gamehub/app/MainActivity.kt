@@ -155,7 +155,10 @@ class MainActivity : Activity() {
         val opts = if (v != null && v.isAttachedToWindow) Transitions.grow(v, android.graphics.RectF(0f, 0f, v.width.toFloat(), v.height.toFloat()))
                    else Transitions.app(window.decorView)
         drawer.lastTapped = null
+        // NEXUS's own quick fade covers the opening (instead of the phone's slide-in)
+        val veiled = NexusAccessibility.instance?.veilForLaunch(item.pkg, null, 90L) == true
         if (AppActions.open(this, item.pkg, item.component, opts)) leftForApp = true
+        else if (veiled) NexusAccessibility.instance?.cancelVeil()
     }
 
     private fun removeGame(g: GameEntry) {
@@ -803,7 +806,10 @@ class MainActivity : Activity() {
             // The app opens out of the tile that was tapped
             val opts = if (!hub.launchRect.isEmpty) Transitions.grow(hub, hub.launchRect) else Transitions.app(hub)
             hub.launchRect.setEmpty()
+            // NEXUS's own quick fade covers the opening (instead of the phone's slide-in)
+            val veiled = NexusAccessibility.instance?.veilForLaunch(g.pkg, null, 90L) == true
             if (AppActions.open(this, g.pkg, null, opts)) leftForApp = true
+            else if (veiled) NexusAccessibility.instance?.cancelVeil()
             return
         }
         // Not installed yet: open its download page
