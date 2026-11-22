@@ -127,6 +127,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private val emberGlow = RadialGradient(0f, 0f, 1f, Color.argb(110, 255, 140, 50), Color.TRANSPARENT, Shader.TileMode.CLAMP)
     private val topFade = LinearGradient(0f, 0f, 0f, 1f, Color.rgb(4, 8, 24), Color.TRANSPARENT, Shader.TileMode.CLAMP)
     private val bottomFade = LinearGradient(0f, 0f, 0f, 1f, Color.TRANSPARENT, Color.rgb(2, 4, 12), Shader.TileMode.CLAMP)
+    /** PS2 menu: a soft dark band behind the menu, so names stand out from the world behind. */
+    private val menuScrim = LinearGradient(0f, 0f, 0f, 1f,
+        intArrayOf(Color.TRANSPARENT, Color.argb(120, 2, 4, 14), Color.argb(120, 2, 4, 14), Color.TRANSPARENT),
+        floatArrayOf(0f, 0.18f, 0.82f, 1f), Shader.TileMode.CLAMP)
 
     // Date and clock text, worked out once a second rather than every frame
     private var clockSec = -1L
@@ -197,7 +201,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
         drawHaze(c, dt, intro)
         world.quality = quality
-        world.draw(c, width, height, dt, intro, 0.6f, 0.8f)
+        world.draw(c, width, height, dt, intro, 0.6f, if (ps2Menu) 0.62f else 0.8f)
         drawMenu(c, intro, dt)
 
         if (launchFlash > 0f) {
@@ -785,6 +789,13 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 lastCentred = centred
             }
         }
+        if (list) {
+            val top = listTop - 40 * d; val bot = listBottom + 30 * d
+            c.save(); c.translate(0f, top); c.scale(1f, bot - top)
+            fill.color = Color.WHITE; fill.alpha = (255 * a).toInt().coerceIn(0, 255); fill.shader = menuScrim
+            c.drawRect(0f, 0f, w, 1f, fill); fill.shader = null
+            c.restore()
+        }
         val startY = listTop + listPad - scroll
         if (anim.size != games.size) anim = Array(games.size) { RectF(Float.NaN, 0f, 0f, 0f) }
         val k = min(1f, dt * 14f)
@@ -815,7 +826,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             else ar.set(ar.left + (tr.left - ar.left) * k, ar.top + (tr.top - ar.top) * k, ar.right + (tr.right - ar.right) * k, ar.bottom + (tr.bottom - ar.bottom) * k)
             if (idx != moveIndex && ar.bottom > listTop - 10 * d && ar.top < listBottom + 10 * d) {
                 if (list) drawListItem(c, games[idx], ar, idx == downRow && !dragging && moveIndex < 0 && !longFired, a,
-                    if (idx == launchIdx && launchFlash > 0f) 1f - launchFlash / LAUNCH_LEN else -1f)
+                    if (idx == launchIdx && launchFlash > 0f) 1f - launchFlash / LAUNCH_LEN else -1f, idx == selected && moveIndex < 0)
                 else drawTile(c, games[idx], ar, idx == selected && moveIndex < 0, a)
             }
         }
@@ -830,7 +841,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             val tw = min(g.tileW, cols) * stepX - gap; val th = rowsFor(g, cols) * stepY - gap
             val r = RectF(lastX - grabFx * tw, moveY - grabFy * th, lastX - grabFx * tw + tw, moveY - grabFy * th + th)
             c.save(); c.scale(1.05f, 1.05f, r.centerX(), r.centerY())
-            if (list) drawListItem(c, g, r, false, a, -1f)
+            if (list) drawListItem(c, g, r, false, a, -1f, false)
             else {
                 glow(c, r.centerX(), r.centerY(), max(r.width(), r.height()) * 0.9f, 150)
                 fill.color = Color.argb(210, 6, 12, 30); c.drawRoundRect(r, 8 * d, 8 * d, fill)
@@ -1419,9 +1430,18 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
      * One line of the PS2-style menu: the app's name in big soft letters with its icon. The line in the middle
      * (or the one being pressed) shines: brighter, a little bigger, a glow behind it and thin rules of light.
      */
-    private fun drawListItem(c: Canvas, g: GameEntry, r: RectF, pressed: Boolean, a0: Float, launching: Float) {
-        val k = if (launching >= 0f) 1f else listFocus(r)
+    private fun drawListItem(c: Canvas, g: GameEntry, r: RectF, pressed: Boolean, a0: Float, launching: Float, chosen: Boolean) {
+        val k = if (launching >= 0f || chosen) 1f else listFocus(r)
         val a = a0 * listFade(r)
+        // Selected (tapped once - tap again to open): a frame of light that breathes around the line
+        if (chosen && launching < 0f) {
+            val p = 0.5f + 0.5f * sin(t * 4.5f)
+            glow(c, r.centerX(), r.centerY(), r.width() * 0.42f, ((70 + 60 * p) * a0).toInt())
+            line.strokeWidth = 1.4f * d
+            line.color = Color.argb(((120 + 100 * p) * a0).toInt(), 170, 210, 255)
+            tmpRect.set(r.left + r.width() * 0.08f, r.top + 1 * d, r.right - r.width() * 0.08f, r.bottom - 1 * d)
+            c.drawRoundRect(tmpRect, r.height() / 2, r.height() / 2, line)
+        }
         // Finger down: the line presses in a little. Chosen: it flashes white, grows, and a ring of light bursts out.
         val scale = when { launching >= 0f -> 1f + 0.08f * launching; pressed -> 0.95f; else -> 1f }
         c.save()
@@ -1464,15 +1484,23 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         drawIcon(c, g, tmpRect, a * (0.35f + 0.65f * k))
         val dim = if (launching >= 0f || pressed) 0f else 1f - k
         text.color = if (launching >= 0f) Color.argb((255 * a).toInt(), 255, 255, 255)
-                     else Color.argb((255 * a).toInt(), (240 - 90 * dim).toInt(), (246 - 70 * dim).toInt(), (255 - 30 * dim).toInt())
-        if (k > 0.05f) text.setShadowLayer(2 * d + 12 * d * k + (if (launching >= 0f) 8 * d else 0f), 0f, 0f,
-            if (launching >= 0f) Color.argb((255 * a).toInt(), 150, 200, 255) else Color.argb((220 * k * a).toInt(), 70, 140, 255))
-        c.drawText(name, tmpRect.right + 12 * d, cy + size * 0.35f, text)
+                     else Color.argb((255 * a).toInt(), (242 - 55 * dim).toInt(), (247 - 45 * dim).toInt(), (255 - 20 * dim).toInt())
+        val tx = tmpRect.right + 12 * d; val ty = cy + size * 0.35f
+        // A dark outline first, so the name reads clearly in front of the towers and lights
+        text.setShadowLayer(5 * d, 0f, 1 * d, Color.argb((230 * a).toInt(), 0, 2, 8))
+        c.drawText(name, tx, ty, text)
+        if (k > 0.05f) {
+            text.setShadowLayer(2 * d + 12 * d * k + (if (launching >= 0f) 8 * d else 0f), 0f, 0f,
+                if (launching >= 0f) Color.argb((255 * a).toInt(), 150, 200, 255) else Color.argb((220 * k * a).toInt(), 70, 140, 255))
+            c.drawText(name, tx, ty, text)
+        }
         text.setShadowLayer(0f, 0f, 0f, 0)
         if (sub.isNotEmpty()) {
             cdPaint.textAlign = Paint.Align.CENTER; cdPaint.textSize = 11 * d; cdPaint.letterSpacing = 0.2f
-            cdPaint.color = Color.argb(((120 + 90 * k) * a).toInt(), 165, 195, 240)
+            cdPaint.color = Color.argb(((150 + 80 * k) * a).toInt(), 175, 205, 245)
+            cdPaint.setShadowLayer(4 * d, 0f, 1 * d, Color.argb((220 * a).toInt(), 0, 2, 8))
             c.drawText(sub, r.centerX(), cy + size * 0.35f + 17 * d, cdPaint)
+            cdPaint.setShadowLayer(0f, 0f, 0f, 0)
         }
         text.textAlign = Paint.Align.CENTER
         c.restore()
@@ -1483,8 +1511,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val k = listFocus(r)
         val a = a0 * listFade(r) * (if (pressed) 1.15f else 1f).coerceAtMost(1f)
         text.textAlign = Paint.Align.CENTER; text.textSize = (13f + 2f * k) * d; text.letterSpacing = 0.32f
-        text.color = Color.argb(((110 + 120 * k) * a).toInt(), 160, 195, 245)
-        if (k > 0.05f) text.setShadowLayer(10 * d * k, 0f, 0f, Color.argb((180 * k * a).toInt(), 70, 140, 255))
+        text.color = Color.argb(((150 + 100 * k) * a).toInt(), 170, 205, 250)
+        text.setShadowLayer(4 * d + 6 * d * k, 0f, 0f, if (k > 0.05f) Color.argb((200 * k * a).toInt(), 70, 140, 255) else Color.argb((220 * a).toInt(), 0, 2, 8))
         c.drawText("+  ADD AN APP", r.centerX(), r.centerY() + 5 * d, text)
         text.setShadowLayer(0f, 0f, 0f, 0)
     }
@@ -1821,6 +1849,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 if (!dragging && maxTravel > slop) {
                     dragging = true
                     removeCallbacks(longPress)
+                    if (ps2Menu) selected = -1
                 }
                 if (dragging && !swipedUp) {
                     var dy = lastY - e.y
@@ -1880,10 +1909,14 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 } else if (!longFired && !caught && launchFlash <= 0f && t > readyT) {
                     val r = rowAt(e.x, e.y)
                     if (r >= 0 && r == downRow && ps2Menu) {
-                        // PS2 menu: a line away from the middle glides to the middle; the one in the middle opens
+                        // PS2 menu: tap once to select (it comes to the middle), tap it again to open
                         val target = (r * listStep).coerceIn(0f, maxScroll)
-                        if (kotlin.math.abs(target - scroll) > listStep * 0.45f) {
+                        if (r != selected) {
+                            selected = r
                             snapTo = target // (it ticks as each app passes the middle on the way)
+                            if (kotlin.math.abs(target - scroll) <= listStep * 0.45f) {
+                                sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                            }
                         } else {
                             snapTo = target
                             sfx.confirm()
