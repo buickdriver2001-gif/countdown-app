@@ -306,6 +306,8 @@ class MainActivity : Activity() {
     }
 
     private fun openSwitcher() {
+        // Recent Apps in NEXUS's own layer: at once, nothing for Android to open
+        if (NexusAccessibility.showRecents()) return
         NexusAccessibility.instance?.fadeFor(NexusAccessibility.FADE_RECENTS, null, 90L)
         // (Under NEXUS's fade, with no slide of the phone's own: the cards glide in as the fade lifts)
         startActivity(Intent(this, SwitcherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION), Transitions.app(window.decorView, solidSplash = true))
@@ -738,6 +740,7 @@ class MainActivity : Activity() {
             if (!HomeMode.isOn(this) && HomeMode.goNormalHome(this)) return
             leftForApp = android.os.SystemClock.uptimeMillis() - pausedAt > 700
             // Home pressed from an app: apps swiped away in Recent Apps earlier get closed fully now
+            NexusAccessibility.hideRecents()
             if (leftForApp) NexusAccessibility.closeWhenHome()
             goHome(onScreen = !leftForApp)
             // Back from an app with the phone's own Home button: the home screen shows at once on NEXUS's cover
@@ -760,7 +763,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         // (No fade-in while NEXUS closes apps under its cover: the cover is already showing this screen)
-        if (::hub.isInitialized) { refresh(); hub.resumed(leftForApp && !NexusAccessibility.busyClosing && !NexusAccessibility.veiling) }
+        if (::hub.isInitialized) { refresh(); hub.resumed(leftForApp && !NexusAccessibility.busyClosing && !NexusAccessibility.veiling && !NexusAccessibility.recentsShowing) }
         loadCountdown()
         leftForApp = false
         hideBars()

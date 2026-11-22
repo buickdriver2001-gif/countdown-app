@@ -233,13 +233,13 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         if (!covered) {
             // Under NEXUS's cover (an app opening or closing, apps being closed): hold this frame and pause, so the
             // phone puts everything into the change; carry on the moment the cover starts to lift
-            if (NexusAccessibility.coverBusy && launchFlash <= 0f) { removeCallbacks(resumeAfterCover); postDelayed(resumeAfterCover, 50) }
+            if (NexusAccessibility.homeHidden && launchFlash <= 0f) { removeCallbacks(resumeAfterCover); postDelayed(resumeAfterCover, 50) }
             else postInvalidateOnAnimation()
         }
     }
 
     private val resumeAfterCover = object : Runnable {
-        override fun run() { if (NexusAccessibility.coverBusy) postDelayed(this, 50) else invalidate() }
+        override fun run() { if (NexusAccessibility.homeHidden) postDelayed(this, 50) else invalidate() }
     }
 
     /**

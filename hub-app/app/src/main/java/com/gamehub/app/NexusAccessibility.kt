@@ -77,6 +77,14 @@ class NexusAccessibility : AccessibilityService() {
          * pause their animation meanwhile, so the phone puts everything into the app opening or closing.
          */
         val coverBusy: Boolean get() = instance?.let { it.veilKind != 0 || it.closeJob != null } ?: false
+        /** Recent Apps (NEXUS's layer) is up. */
+        val recentsShowing: Boolean get() = instance?.recents?.showing == true
+        /** The home screen is hidden behind NEXUS's cover or Recent Apps right now (it pauses its animation). */
+        val homeHidden: Boolean get() = coverBusy || recentsShowing
+        /** Opens Recent Apps in NEXUS's layer (false: not possible now, e.g. with TalkBack). */
+        fun showRecents(): Boolean = instance?.let { !it.talkBackOn() && it.recents.show() } ?: false
+        /** The phone's own Home was pressed while Recent Apps was up: it fades away. */
+        fun hideRecents() { instance?.recents?.let { if (it.showing && !it.gone()) it.hide(true) } }
 
         /** The colour of the lock screen's bottom edge (where the phone's buttons would be). */
         val LOCK_BOTTOM = android.graphics.Color.rgb(1, 2, 8)
@@ -131,13 +139,24 @@ class NexusAccessibility : AccessibilityService() {
      * Runs a piece of the helper so that if something ever goes wrong in it, only that piece is skipped:
      * the problem is noted for "Report a problem" in NEXUS settings, and NEXUS (your home screen) keeps running.
      */
+    /** NEXUS Recent Apps in NEXUS's own layer, over the app you're in. */
+    val recents by lazy { RecentsOverlay(this) }
+    /** For NEXUS's own parts (Recent Apps layer): runs [block], noting a problem instead of stopping the helper. */
+    fun safeRun(block: () -> Unit) = safe(block)
+    /** The app window in front (its id), and its app. */
+    fun topAppWindowId(): Int = topAppWindow()
+    fun topAppPackage(): String? = try {
+        windows.filter { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }.maxByOrNull { it.layer }
+            ?.root?.packageName?.toString()
+    } catch (_: Throwable) { null }
+
     private fun safe(block: () -> Unit) {
         try { block() } catch (t: Throwable) { App.saveHelperError(this, t) }
     }
 
     private fun handleScreen(c: Context, i: Intent) {
         if (i.action == Intent.ACTION_USER_PRESENT) { h.postDelayed({ safe { recheckFront() } }, 600); return }
-        if (i.action == Intent.ACTION_SCREEN_OFF) { hideButtons("screen off"); veilKind = 0; h.removeCallbacks(veilRun) } else queueButtons(0)
+        if (i.action == Intent.ACTION_SCREEN_OFF) { hideButtons("screen off"); veilKind = 0; h.removeCallbacks(veilRun); recents.hide(false) } else queueButtons(0)
         if (i.action == Intent.ACTION_SCREEN_OFF) leftByScreenOff = true
         closeJob?.let { endClose(it, "the screen turned off", goHome = false) }
         val kmT = getSystemService(KeyguardManager::class.java)
@@ -789,6 +808,8 @@ class NexusAccessibility : AccessibilityService() {
         if (pkg == packageName && !cls.startsWith("$packageName.")) { queueButtons(); return }
         if (pkg != "com.android.systemui" && pkg != "android" && "inputmethod" !in pkg && "keyboard" !in pkg) { frontPkg = pkg; frontCls = cls }
         queueButtons()
+        // Recent Apps (NEXUS's layer) steps aside for a call, an alarm or any app that comes in front
+        recents.onWindowEvent(pkg, pkg in homePkgs)
         // Under NEXUS's fade: the new screen has announced itself (the home screen, or the app being opened)
         if (veilKind != 0 && veilSeenAt == 0L && pkg != "com.android.systemui" && "inputmethod" !in pkg && "keyboard" !in pkg &&
             ((veilKind == FADE_HOME && cls == MainActivity::class.java.name) ||
@@ -897,6 +918,8 @@ class NexusAccessibility : AccessibilityService() {
         if (now - lastSwitcher <= 800) return
         lastSwitcher = now
         current = null
+        // NEXUS's own layer, over the app you're in: at once, nothing for Android to open
+        if (!talkBackOn() && recents.show()) { LockTrace.log(this, "$by: NEXUS Recent Apps (over the app)"); return }
         // (After the phone's own square button the phone has already begun its own animation: a quicker fade)
         val faded = fadeFor(FADE_RECENTS, null, if (by == "Recent button") 110L else 70L)
         LockTrace.log(this, "$by: opening NEXUS Recent Apps")

@@ -26,8 +26,32 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
+/**
+ * What NEXUS Recent Apps needs from whatever is showing it: NEXUS's own layer over the app you're in
+ * ([RecentsOverlay], instant), or this screen of its own ([SwitcherActivity], used with TalkBack or without
+ * the helper).
+ */
+interface SwitcherHost {
+    val ctx: Context
+    var coverPending: Boolean
+    var zoomHandover: Boolean
+    /** Recent Apps is going away (or gone). */
+    fun gone(): Boolean
+    fun focused(): Boolean
+    fun goNexus()
+    fun openApp(pkg: String, revealed: Boolean = false, picture: Bitmap? = null): Boolean
+    fun closeApp(pkg: String, queue: Boolean = true): Boolean
+    fun explainOnce(after: (() -> Unit)? = null): Boolean
+    fun openSetting(action: String)
+    fun openAppInfo()
+    fun openPhoneRecents()
+}
+
 /** NEXUS Recent Apps: swipe through cards of recent apps (each with art made from its icon), tap to jump back in. */
-class SwitcherActivity : Activity() {
+class SwitcherActivity : Activity(), SwitcherHost {
+    override val ctx: Context get() = this
+    override fun gone() = isFinishing
+    override fun focused() = hasWindowFocus()
     companion object {
         /** Start options with a plain colour splash (no app icon) and no opening animation. */
         fun noIconSplash(c: Context): Bundle {
@@ -41,9 +65,9 @@ class SwitcherActivity : Activity() {
     private val sfx by lazy { Sfx() }
 
     /** Opened from the square button: the helper's cover is up until this screen is ready. */
-    var coverPending = false
+    override var coverPending = false
     /** The cover is shrinking the app you were in into its card: start with that card already in place. */
-    var zoomHandover = false
+    override var zoomHandover = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,7 +125,7 @@ class SwitcherActivity : Activity() {
     override fun onStop() { super.onStop(); if (!isFinishing) finish() }
 
     /** Opens an app. [revealed]: its card has already grown to fill the screen, so it just comes alive. */
-    fun openApp(pkg: String, revealed: Boolean = false, picture: android.graphics.Bitmap? = null): Boolean {
+    override fun openApp(pkg: String, revealed: Boolean, picture: android.graphics.Bitmap?): Boolean {
         val i = packageManager.getLaunchIntentForPackage(pkg) ?: return false
         // NEXUS's own quick fade covers the opening (instead of the phone's slide-in): the app fades in over its
         // card, or out of the NEXUS dark
@@ -123,7 +147,7 @@ class SwitcherActivity : Activity() {
         @Suppress("DEPRECATION") overridePendingTransition(0, 0)
     }
 
-    fun goNexus() {
+    override fun goNexus() {
         // Apps you swiped away here get closed fully on the way: the cover shows the home screen straight away
         // (or the closing cube after Clear all) while they close underneath
         if (NexusAccessibility.closeNow(returnToSwitcher = false)) { homeUnderCover(); return }
@@ -136,9 +160,9 @@ class SwitcherActivity : Activity() {
         finish()
     }
 
-    fun openSetting(action: String) { try { startActivity(Intent(action)) } catch (_: Exception) {} }
+    override fun openSetting(action: String) { try { startActivity(Intent(action)) } catch (_: Exception) {} }
 
-    fun openAppInfo() {
+    override fun openAppInfo() {
         try { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName"))) } catch (_: Exception) {}
     }
 
@@ -147,7 +171,7 @@ class SwitcherActivity : Activity() {
      * close other apps (only the phone's own recent-apps screen can), so those just leave NEXUS's list.
      * Returns true if the app was fully closed.
      */
-    fun closeApp(pkg: String, queue: Boolean = true): Boolean {
+    override fun closeApp(pkg: String, queue: Boolean): Boolean {
         val own = pkg in NexusAccessibility.OWN_APPS
         if (own) NexusAccessibility.closeOwnApp(this, pkg)
         // (Only has an effect on older Android versions, and only for apps already in the background)
@@ -162,7 +186,7 @@ class SwitcherActivity : Activity() {
      * The first time an app other than NEXUS's own games is swiped away, say plainly what that does and
      * how to close apps fully. Returns true if the note was shown ([after] runs when it's closed with OK).
      */
-    fun explainOnce(after: (() -> Unit)? = null): Boolean {
+    override fun explainOnce(after: (() -> Unit)?): Boolean {
         val p = getSharedPreferences("hub", MODE_PRIVATE)
         if (p.getBoolean("closeNoteSeen", false)) return false
         p.edit().putBoolean("closeNoteSeen", true).apply()
@@ -179,14 +203,14 @@ class SwitcherActivity : Activity() {
     }
 
     /** Opens the phone's own recent apps screen (where swiping an app away really closes it), via the NEXUS home screen. */
-    fun openPhoneRecents() {
+    override fun openPhoneRecents() {
         if (NexusAccessibility.openPhoneRecentsViaHome()) goNexus()
         else android.widget.Toast.makeText(this, "Turn on the Recent Apps helper in NEXUS settings first", android.widget.Toast.LENGTH_SHORT).show()
     }
 }
 
 @SuppressLint("ViewConstructor")
-class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View(a) {
+class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.ctx) {
     private val d = resources.displayMetrics.density
 
     private class Card(val pkg: String, val label: String, val icon: Drawable?, var shot: Bitmap?, val used: Long) {
@@ -243,8 +267,8 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
     /** Builds the cards (names and icons are cached, so this is quick), then makes their art in the background. */
     fun load() {
         val list = ArrayList<Card>()
-        for ((pkg, used) in Recents.list(a)) {
-            val info = AppCache.get(a, pkg) ?: continue
+        for ((pkg, used) in Recents.list(a.ctx)) {
+            val info = AppCache.get(a.ctx, pkg) ?: continue
             list.add(Card(pkg, info.label, info.icon, null, used))
         }
         cards = list
@@ -256,7 +280,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         list.firstOrNull()?.let { cd -> cd.shot = CardArt.get(cd.pkg, cd.icon, aspect); cd.shotFade = 1f }
         invalidate()
         // Then, in the background: drop any app that was uninstalled since, and make the other cards' art
-        val pm = a.packageManager
+        val pm = a.ctx.packageManager
         Bg.thread {
             for (cd in list) {
                 if (pm.getLaunchIntentForPackage(cd.pkg) == null) {
@@ -264,7 +288,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
                     // (an app being updated can't be opened for a moment, and should come back)
                     val uninstalled = try { pm.getApplicationInfo(cd.pkg, 0); false } catch (_: android.content.pm.PackageManager.NameNotFoundException) { true } catch (_: Exception) { false }
                     AppCache.forget(cd.pkg)
-                    post { if (!cd.flying) { cd.gone = true; if (uninstalled) Recents.remove(a, cd.pkg) } }
+                    post { if (!cd.flying) { cd.gone = true; if (uninstalled) Recents.remove(a.ctx, cd.pkg) } }
                     continue
                 }
                 if (cd.shot != null) continue
@@ -298,7 +322,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         val w = width.toFloat(); val h = height.toFloat()
         // Drawn and in front: let the helper fade its cover away. When the cover was shrinking the app
         // into its card, that card is already here in the same spot; otherwise the cards fade in now.
-        if (a.coverPending && a.hasWindowFocus()) {
+        if (a.coverPending && a.focused()) {
             a.coverPending = false
             if (!a.zoomHandover) enter = 0f
             a.zoomHandover = false
@@ -338,7 +362,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
             if (card.lift > h) card.gone = true
         }
         if (live.isEmpty() && cards.none { it.flying && !it.gone }) {
-            val on = Recents.serviceOn(a)
+            val on = Recents.serviceOn(a.ctx)
             text.textSize = 16 * d; text.letterSpacing = 0.05f; text.color = Color.argb(220, 200, 220, 250)
             c.drawText(if (on) "No recent apps yet" else "The NEXUS helper is off", w / 2, h * 0.36f, text)
             text.textSize = 12.5f * d; text.color = Color.argb(170, 170, 195, 235)
@@ -531,7 +555,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
     private var downX = 0f; private var downY = 0f; private var lastX = 0f
     private var mode = 0 // 0 = undecided, 1 = sliding the carousel, 2 = swiping a card up
     private var tracker: VelocityTracker? = null
-    private val slop = android.view.ViewConfiguration.get(a).scaledTouchSlop.toFloat()
+    private val slop = android.view.ViewConfiguration.get(a.ctx).scaledTouchSlop.toFloat()
 
     private val liveList = ArrayList<Card>()
     /** Cards still in the carousel (reuses one list rather than making a new one every frame). */
@@ -588,7 +612,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
                                 val explained = !a.closeApp(card.pkg) && a.explainOnce()
                                 pos = pos.coerceAtMost((live().size - 1).coerceAtLeast(0).toFloat())
                                 // The last one gone: home, once it's flown off (as the phone's own recent apps does)
-                                if (live().isEmpty() && !explained) postDelayed({ if (!a.isFinishing) a.goNexus() }, 320)
+                                if (live().isEmpty() && !explained) postDelayed({ if (!a.gone()) a.goNexus() }, 320)
                             }
                         }
                     }
@@ -607,7 +631,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
             val queued = l.any { it.pkg !in NexusAccessibility.OWN_APPS } && NexusAccessibility.closeFully(l.map { it.pkg }, all = true)
             var anyOther = false
             for (c in l) if (!a.closeApp(c.pkg, queue = false)) anyOther = true
-            Recents.clear(a)
+            Recents.clear(a.ctx)
             if (anyOther && !queued && a.explainOnce { a.goNexus() }) return
             a.goNexus(); return
         }
