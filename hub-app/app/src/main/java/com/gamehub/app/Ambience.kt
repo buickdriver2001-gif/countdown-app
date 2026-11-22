@@ -11,11 +11,12 @@ import android.os.Looper
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.pow
 import kotlin.math.sin
 
 /**
- * The home screen's background sound: a soft, airy wash, slow swells of filtered noise over a low, quiet hum,
+ * The home screen's background sound: a deep, slowly breathing drone with a soft low wash swelling under it,
  * in the spirit of an old console menu (made up on the phone from scratch: no recordings). It loops seamlessly
  * and costs almost nothing to play (the phone loops it by itself).
  *
@@ -144,51 +145,46 @@ class Ambience(private val c: Context) {
         private const val RATE = 22050
         private const val LOOP_S = 16
         /** How loud, at most (of the media volume). */
-        private const val GAIN = 0.32f
+        private const val GAIN = 0.42f
         @Volatile private var pcm: ShortArray? = null
 
         fun enabled(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("ambience", true)
         fun setEnabled(c: Context, on: Boolean) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit().putBoolean("ambience", on).apply()
 
         /**
-         * Makes the loop: two slow swells of band-passed noise sweeping up and down (the wash), a little airy
-         * hiss riding on them, a soft rumble, and a faint low hum (110 Hz with its fifth and octave). Every slow
-         * movement repeats exactly every 16 s, and the end is blended into the start, so it loops without a seam.
+         * Makes the loop: a deep drone (a low tone of 55 Hz with its harmonics, played twice a quarter of a
+         * hertz apart so it slowly beats and breathes), a soft pad an octave and a fifth above it, and a gentle
+         * low wash of filtered noise that swells and recedes twice a loop. Every movement repeats exactly
+         * every 16 s and the end is blended into the start, so it loops without a seam.
          */
         fun synth(): ShortArray {
             val n = RATE * LOOP_S
             val x = RATE * 2
             val out = FloatArray(n + x)
             val rnd = java.util.Random(7)
-            var brown = 0f
-            var low = 0f; var band = 0f
-            var low2 = 0f; var band2 = 0f
-            var lastW = 0f
+            val lut = FloatArray(8192) { sin(it * 2.0 * PI / 8192).toFloat() }
+            // A sine by cycles (not radians): one table look-up
+            fun sn(cycles: Double): Float { val f = cycles - kotlin.math.floor(cycles); return lut[(f * 8192).toInt() and 8191] }
+            val harm = FloatArray(9) { if (it == 0) 0f else 1f / it.toFloat().pow(1.25f) }
+            var lp = 0f; var lp2 = 0f; var brown = 0f
             val tau = 2.0 * PI
             for (i in 0 until n + x) {
                 val t = i.toDouble() / RATE
                 val ph = (t % LOOP_S) / LOOP_S
+                // The drone
+                var drone = 0f
+                for (k in 1..8) drone += harm[k] * (sn(k * 55.0 * t + k * 0.11) + sn(k * 55.25 * t + k * 0.3)) * 0.5f
+                val trem = (0.8 + 0.2 * sin(tau * ph * 2 + 0.3)).toFloat()
+                // The pad
+                val pad = 0.4f * (sn(110.0 * t) + sn(110.25 * t + 0.16)) * 0.5f + 0.28f * (sn(165.0 * t + 0.06) + sn(165.25 * t + 0.35)) * 0.5f
+                // The wash: noise through a soft low-pass that opens (to ~650 Hz) and closes slowly
                 val w = rnd.nextFloat() * 2f - 1f
-                // Soft rumble
-                brown = (brown + 0.03f * w) * 0.985f
-                // The wash: noise through a band-pass filter whose centre sweeps slowly up and back (twice a loop)
-                val sweep = 0.5 - 0.5 * cos(tau * ph * 2)
-                val fc = 280.0 + 1100.0 * sweep
-                val f = (2.0 * sin(PI * fc / RATE)).toFloat()
-                val hp = w - low - 0.55f * band
-                band += f * hp; low += f * band
-                // A second, slower and lower band, out of step with the first, for depth
-                val fc2 = 160.0 + 420.0 * (0.5 - 0.5 * cos(tau * ph + 2.2))
-                val f2 = (2.0 * sin(PI * fc2 / RATE)).toFloat()
-                val hp2 = w - low2 - 0.7f * band2
-                band2 += f2 * hp2; low2 += f2 * band2
-                val swell = (0.1 + 0.9 * (0.5 - 0.5 * cos(tau * ph * 2 - 0.5)).pow(1.6)).toFloat()
-                // Airy hiss on the swells
-                val air = (w - lastW) * 0.5f; lastW = w
-                // Faint low hum (whole numbers of cycles per loop, so it loops cleanly), breathing slowly
-                val trem = (0.75 + 0.25 * sin(tau * ph * 4)).toFloat()
-                val hum = (0.5 * sin(tau * 110.0 * t) + 0.3 * sin(tau * 165.0 * t + 1.1) + 0.18 * sin(tau * 220.0 * t + 2.0)).toFloat() * trem
-                out[i] = band * 0.8f * swell + band2 * 0.4f * (1.1f - swell * 0.5f) + brown * 0.6f + air * 0.04f * swell + hum * 0.03f
+                val cut = 250.0 + 400.0 * (0.5 - 0.5 * cos(tau * ph * 2))
+                val a = (1.0 - exp(-tau * cut / RATE)).toFloat()
+                lp += a * (w - lp); lp2 += a * (lp - lp2)
+                val swell = (0.25 + 0.75 * (0.5 - 0.5 * cos(tau * ph * 2 - 0.5)).pow(1.5)).toFloat()
+                brown = (brown + 0.02f * w) * 0.995f
+                out[i] = drone * 0.55f * trem + pad * 0.35f + lp2 * 1.6f * swell + brown * 0.5f
             }
             // Blend the extra two seconds back over the start (equal power), so the loop has no seam
             for (i in 0 until x) {

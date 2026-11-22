@@ -100,9 +100,9 @@ class Crystals(context: Context) {
         if (k <= 0.01f || w <= 0 || h <= 0) return
         t += dt
         val turn = t * 0.11f
-        val rx = w * 0.40f; val ry = h * 0.37f
+        val rx = w * 0.41f; val ry = h * 0.42f
         val cx = w / 2f; val cy = h * 0.5f
-        val unit0 = min(w, h) * 0.07f
+        val unit0 = min(w, h) * 0.085f
         for (i in 0 until COUNT) {
             val a = crystals[i].a0 + turn
             ox[i] = cx + cos(a) * rx; oy[i] = cy + sin(a) * ry
@@ -128,10 +128,10 @@ class Crystals(context: Context) {
                 val p = 1f / (1f + z1 * 0.08f)
                 sx[v] = px0 + x2 * unit * p; sy[v] = py0 - y2 * unit * p
             }
-            val bright = (0.4f + 0.6f * nk) * k
+            val bright = (0.55f + 0.45f * nk) * k
             // Its glow
             val gr = unit * 2.4f
-            glowPaint.alpha = (140 * bright).toInt().coerceIn(0, 255)
+            glowPaint.alpha = (175 * bright).toInt().coerceIn(0, 255)
             glowDst.set(px0 - gr, py0 - gr * 1.35f, px0 + gr, py0 + gr * 1.35f)
             c.drawBitmap(glowBmp, null, glowDst, glowPaint)
             // Faces: the far side faint (seen through the glass), the near side shaded by the light

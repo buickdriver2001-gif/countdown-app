@@ -25,7 +25,8 @@ object NexusUi {
 
     fun glass(d: Float, radius: Float = 8f, strong: Boolean = false) = GradientDrawable().apply {
         cornerRadius = radius * d
-        colors = intArrayOf(Color.argb(if (strong) 240 else 225, 10, 18, 44), Color.argb(if (strong) 240 else 225, 4, 8, 22))
+        // (A little see-through, so the crystals behind a panel show faintly through it)
+        colors = intArrayOf(Color.argb(if (strong) 212 else 205, 10, 18, 44), Color.argb(if (strong) 212 else 205, 4, 8, 22))
         orientation = GradientDrawable.Orientation.TOP_BOTTOM
         setStroke((1 * d).toInt().coerceAtLeast(1), Color.argb(if (strong) 200 else 110, 140, 190, 255))
     }
@@ -49,7 +50,8 @@ object NexusUi {
     fun panel(a: Activity, title: String, message: String? = null, options: List<Option>, cancel: String? = "Cancel",
               input: String? = null, onSelect: Boolean = true, back: (() -> Unit)? = null): EditText? {
         val d = a.resources.displayMetrics.density
-        val dialog = Dialog(a)
+        // A full-screen layer: a dimmed backdrop with the crystals turning on it, and the panel in the middle
+        val dialog = Dialog(a, android.R.style.Theme_Translucent_NoTitleBar)
         dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         val col = LinearLayout(a).apply {
             orientation = LinearLayout.VERTICAL
@@ -80,17 +82,60 @@ object NexusUi {
             else code == android.view.KeyEvent.KEYCODE_BACK
         }
         col.addView(ScrollView(a).apply { addView(list) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        dialog.setContentView(col)
-        dialog.window?.setLayout((minOf(a.resources.displayMetrics.widthPixels - (40 * d).toInt(), (420 * d).toInt())), ViewGroup.LayoutParams.WRAP_CONTENT)
-        // (Light enough that what's behind - the home screen's crystals - still shows)
-        dialog.window?.setDimAmount(0.4f)
-        dialog.window?.attributes?.windowAnimations = android.R.style.Animation_Dialog
-        if (field != null) dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        // Going from one page of a menu to the next: the backdrop stays as it is (no fading out and in again)
+        val switching = System.currentTimeMillis() - lastClosedAt < 450
+        val root = android.widget.FrameLayout(a)
+        root.addView(CrystalBackdrop(a, if (switching) 1f else 0f) { dialog.cancel() },
+            android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        val pw = minOf(a.resources.displayMetrics.widthPixels - (40 * d).toInt(), (420 * d).toInt())
+        root.addView(col, android.widget.FrameLayout.LayoutParams(pw, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply {
+            topMargin = (28 * d).toInt(); bottomMargin = (28 * d).toInt()
+        })
+        dialog.setContentView(root)
+        dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        dialog.window?.attributes?.windowAnimations = 0
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+            (if (field != null) WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE else 0))
+        // The panel itself comes in with a quick fade and a slight grow
+        col.alpha = 0f; col.scaleX = 0.96f; col.scaleY = 0.96f
+        col.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(if (switching) 120 else 180)
+            .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
         showing.add(dialog)
-        dialog.setOnDismissListener { showing.remove(dialog); onPanels?.invoke(a, anyShowing(a)) }
+        dialog.setOnDismissListener { showing.remove(dialog); lastClosedAt = System.currentTimeMillis(); onPanels?.invoke(a, anyShowing(a)) }
         dialog.show()
         onPanels?.invoke(a, true)
         return field
+    }
+
+    private var lastClosedAt = 0L
+    /** The crystals behind the panels (one set, so they carry on turning from one page of a menu to the next). */
+    private var crystals: Crystals? = null
+
+    /**
+     * Behind a panel: the screen dims and glass crystals orbit slowly around the middle (PS2-style, an
+     * original design). Tapping anywhere outside the panel closes it.
+     */
+    private class CrystalBackdrop(c: android.content.Context, startK: Float, private val onTap: () -> Unit) : View(c) {
+        private var k = startK
+        private var last = 0L
+        private val dim = android.graphics.Paint()
+        override fun onDraw(cv: android.graphics.Canvas) {
+            val now = System.nanoTime()
+            val dt = if (last == 0L) 0f else minOf(0.05f, (now - last) / 1e9f)
+            last = now
+            k = minOf(1f, k + dt * 4f)
+            dim.color = Color.argb((120 * k).toInt(), 0, 2, 8)
+            cv.drawRect(0f, 0f, width.toFloat(), height.toFloat(), dim)
+            val cr = crystals ?: Crystals(context.applicationContext).also { crystals = it }
+            cr.draw(cv, width, height, dt, k)
+            postInvalidateOnAnimation()
+        }
+        @android.annotation.SuppressLint("ClickableViewAccessibility")
+        override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
+            if (e.actionMasked == android.view.MotionEvent.ACTION_UP) onTap()
+            return true
+        }
     }
 
     /** Panels on screen right now (so pressing Home can tidy them away, like other launchers do). */

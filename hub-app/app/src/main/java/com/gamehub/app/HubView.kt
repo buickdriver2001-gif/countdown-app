@@ -81,7 +81,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     var panelOpen = false
         set(v) { field = v; invalidate() }
     private var crystalK = 0f
-    private val crystals by lazy { Crystals(context) }
     /** Start-up animation clock (the hub appears when it finishes). */
     private var bootT = 0f
     var booting = true
@@ -207,8 +206,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         drawHaze(c, dt, intro)
         world.quality = quality
         world.draw(c, width, height, dt, intro, 0.6f, if (ps2Menu) 0.62f else 0.8f)
+        // (A panel open: the menu steps back; the panel's own layer shows the crystals)
         crystalK = if (panelOpen) min(1f, crystalK + dt * 2.5f) else max(0f, crystalK - dt * 3f)
-        if (crystalK > 0f) crystals.draw(c, width, height, dt, crystalK)
         drawMenu(c, intro, dt)
 
         if (launchFlash > 0f) {
