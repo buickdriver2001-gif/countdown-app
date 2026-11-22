@@ -8,17 +8,24 @@ import kotlin.math.exp
 import kotlin.math.sin
 import kotlin.random.Random
 
-/** Menu sounds, generated in code: a soft glassy tick for moving, a rising chime for opening. */
+/**
+ * Menu sounds, generated in code: a soft glassy tick for moving, a rising chime for opening. They play on a
+ * thread of their own (never holding up the screen), and quick ticks overlap instead of cutting each other off.
+ */
 class Sfx {
     private val rate = 22050
-    private var tick: AudioTrack? = null
-    private var confirm: AudioTrack? = null
+    @Volatile private var ticks: Array<AudioTrack?> = emptyArray()
+    private var nextTick = 0
+    @Volatile private var confirm: AudioTrack? = null
+    private val thread = android.os.HandlerThread("nexus-sounds").apply { start() }
+    private val h = android.os.Handler(thread.looper)
 
     init {
-        Thread {
-            tick = make(buildTick())
+        h.post {
+            val data = buildTick()
+            ticks = Array(3) { make(data) }
             confirm = make(buildConfirm())
-        }.start()
+        }
     }
 
     private fun buildTick(): ShortArray {
@@ -69,8 +76,15 @@ class Sfx {
         } catch (_: Exception) {}
     }
 
-    fun tick() = play(tick)
-    fun confirm() = play(confirm)
+    fun tick() {
+        h.post {
+            val pool = ticks
+            if (pool.isEmpty()) return@post
+            nextTick = (nextTick + 1) % pool.size
+            play(pool[nextTick])
+        }
+    }
+    fun confirm() { h.post { play(confirm) } }
 
-    fun release() { tick?.release(); confirm?.release() }
+    fun release() { h.post { ticks.forEach { it?.release() }; confirm?.release(); thread.quitSafely() } }
 }

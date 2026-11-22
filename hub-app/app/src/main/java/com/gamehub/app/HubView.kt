@@ -645,6 +645,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private var snapTo = Float.NaN
     /** PS2 menu: the line that was chosen and is opening (its confirm flash plays), or -1. */
     private var launchIdx = -1
+    /** PS2 menu: the line in the middle last frame (a tick plays each time another one comes to the middle). */
+    private var lastCentred = -1
+    private var lastTickAt = 0L
 
     /** The style was switched: back to the top, laid out afresh. */
     fun styleChanged() { scroll = 0f; scrollVel = 0f; selected = -1; packSig = -1; homing = false; invalidate() }
@@ -758,6 +761,19 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     scroll += (target - scroll) * min(1f, dt * 12f)
                     if (kotlin.math.abs(target - scroll) < 0.5f) scroll = target
                 }
+            }
+        }
+        // PS2 menu: a soft tick (and the lightest buzz) each time another app comes to the middle, like turning
+        // a wheel - at most about 20 a second on a fast flick
+        if (list && listStep > 0f && moveIndex < 0) {
+            val centred = kotlin.math.round(scroll / listStep).toInt().coerceIn(0, games.size)
+            if (centred != lastCentred) {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (lastCentred >= 0 && a > 0.5f && now - lastTickAt > 48) {
+                    lastTickAt = now
+                    sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                }
+                lastCentred = centred
             }
         }
         val startY = listTop + listPad - scroll
@@ -1858,8 +1874,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                         // PS2 menu: a line away from the middle glides to the middle; the one in the middle opens
                         val target = (r * listStep).coerceIn(0f, maxScroll)
                         if (kotlin.math.abs(target - scroll) > listStep * 0.45f) {
-                            snapTo = target
-                            sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                            snapTo = target // (it ticks as each app passes the middle on the way)
                         } else {
                             snapTo = target
                             sfx.confirm()
