@@ -64,6 +64,8 @@ class LockActivity : Activity() {
         // A black layer on top, see-through until the lock screen is left alone (then it fades it out)
         shade = View(this).apply { setBackgroundColor(Color.BLACK); alpha = 0f }
         setContentView(android.widget.FrameLayout(this).apply { addView(view); addView(shade) })
+        // The lock screen paints the whole screen itself: no need to paint the window under it too
+        window.setBackgroundDrawable(null)
         hideBars()
         val f = IntentFilter(Intent.ACTION_USER_PRESENT)
         if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(unlocked, f, Context.RECEIVER_NOT_EXPORTED) else registerReceiver(unlocked, f)
@@ -478,7 +480,7 @@ class LockView(private val a: LockActivity) : View(a) {
     @Volatile private var faces: List<Bitmap> = emptyList()
 
     private fun loadFaces() {
-        Thread {
+        Bg.thread {
             val pm = a.packageManager
             // The apps that are open right now, newest first (the same list as Recent Apps). Each app appears once.
             val pkgs = Recents.list(a).map { it.first }.distinct()

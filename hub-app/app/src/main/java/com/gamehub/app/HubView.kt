@@ -1068,7 +1068,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val pkgs = games.filter { it.tileH >= 2 }.map { it.pkg }
         if (pkgs.isEmpty()) return
         val known = HashMap(liveStamp)
-        Thread {
+        Bg.thread {
             for (p in pkgs) {
                 val f = NexusAccessibility.snapFile(context, p)
                 if (!f.exists()) { post { liveShots.remove(p); liveStamp.remove(p) }; continue }

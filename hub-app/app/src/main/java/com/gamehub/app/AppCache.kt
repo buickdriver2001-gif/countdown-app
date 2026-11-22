@@ -32,7 +32,7 @@ object AppCache {
         val todo = pkgs.filter { !infos.containsKey(it) }
         if (todo.isEmpty()) return
         val app = c.applicationContext
-        Thread { for (p in todo) load(app, p) }.start()
+        Bg.thread { for (p in todo) load(app, p) }.start()
     }
 
     /** Forget an app (it was uninstalled or updated). */

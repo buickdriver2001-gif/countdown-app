@@ -31,7 +31,10 @@ android {
             signingConfig = signingConfigs.getByName("shared")
         }
         release {
-            isMinifyEnabled = false
+            // The build that's installed: Android runs it at full speed (a debug build runs in a slower,
+            // debuggable mode) and R8 optimises the code. Same signing key, so it installs over earlier builds.
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("shared")
         }
     }

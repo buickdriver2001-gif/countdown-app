@@ -68,6 +68,8 @@ class SwitcherActivity : Activity() {
             view.navInset = NavBar.heightPx(this).toFloat()
         }
         setContentView(root)
+        // Recent Apps paints the whole screen itself: no need to paint the window under it too
+        window.setBackgroundDrawable(null)
         if (android.os.Build.VERSION.SDK_INT >= 30) window.decorView.post {
             try {
                 window.insetsController?.hide(android.view.WindowInsets.Type.systemBars())
@@ -249,7 +251,7 @@ class SwitcherView(private val a: SwitcherActivity, private val sfx: Sfx) : View
         invalidate()
         // Then, in the background: drop any app that was uninstalled since, and make the other cards' art
         val pm = a.packageManager
-        Thread {
+        Bg.thread {
             for (cd in list) {
                 if (pm.getLaunchIntentForPackage(cd.pkg) == null) {
                     // Can't be opened right now: hide it. Only forget it for good if it's really uninstalled

@@ -22,6 +22,7 @@ class App : Application() {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             val onScreen = screensInFront > 0
+            LockTrace.saveNow(this) // the last notes before a crash matter most
             saveCrash(this, "thread ${thread.name}" + (if (onScreen) ", on screen" else ", in the background"), error)
             try {
                 // On screen: open the error screen (in its own process) instead of "keeps stopping".

@@ -344,7 +344,7 @@ class NexusAccessibility : AccessibilityService() {
         safe { ensureCover() }
         safe { setupAppButtons() }
         // NEXUS no longer takes pictures of your screen: remove any it saved before
-        Thread { try { snapDir(this).listFiles()?.forEach { it.delete() } } catch (_: Throwable) {} }.start()
+        Bg.thread { try { snapDir(this).listFiles()?.forEach { it.delete() } } catch (_: Throwable) {} }.start()
         // Have names and icons ready for Recent Apps
         safe { AppCache.warm(this, Recents.list(this).map { it.first }) }
     }

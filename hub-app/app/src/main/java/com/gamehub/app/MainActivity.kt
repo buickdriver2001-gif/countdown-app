@@ -197,6 +197,8 @@ class MainActivity : Activity() {
         }).apply { visibility = android.view.View.GONE }
         root.addView(tutorial)
         setContentView(root)
+        // The home screen paints the whole screen itself every frame: no need to paint the window under it too
+        window.setBackgroundDrawable(null)
         home = java.lang.ref.WeakReference(this)
         dropOldDescriptions()
         addCountdownTileOnce()
@@ -559,7 +561,7 @@ class MainActivity : Activity() {
     private fun setNexusWallpaper(lock: Boolean) {
         val dm = resources.displayMetrics
         val w = dm.widthPixels.coerceAtLeast(720); val h = dm.heightPixels.coerceAtLeast(1280)
-        Thread {
+        Bg.thread {
             val ok = try {
                 val b = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
                 val c = android.graphics.Canvas(b)
@@ -677,7 +679,7 @@ class MainActivity : Activity() {
 
     /** Reads your countdown from the Countdown app (in the background), for its live tile. */
     private fun loadCountdown() {
-        Thread {
+        Bg.thread {
             val info = CountdownLink.read(applicationContext)
             runOnUiThread { if (::hub.isInitialized) hub.countdown = info }
         }.start()

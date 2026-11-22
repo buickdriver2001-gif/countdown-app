@@ -138,7 +138,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
     /** Reads every app icon on the phone, the way launchers do (in the background; icons too). */
     fun load() {
         val gen = ++loadGen
-        Thread {
+        Bg.thread {
             val list = try { readLauncherApps() } catch (_: Exception) { null } ?: try { readByIntent() } catch (_: Exception) { null }
             val sig = list?.joinToString("\n") { "${it.component}|${it.label}|${it.stamp}" }?.hashCode()
             post {
