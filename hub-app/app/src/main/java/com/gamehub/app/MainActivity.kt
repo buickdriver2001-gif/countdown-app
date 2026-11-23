@@ -355,11 +355,23 @@ class MainActivity : Activity(), NexusUi.NavHost {
             prefs.edit().putBoolean("fullClose", !full).apply()
             openAppsSettings()
         })
+        if (on && helperRunning() && full) opts.add(NexusUi.Option("Close every open app now") { askCloseEverything() })
         opts.add(NexusUi.Option("Show Recent Apps now") { openSwitcher() })
         NexusUi.panel(this, "Recent apps helper", "$status\n\nThe helper runs NEXUS Recent Apps, the NEXUS lock screen and NEXUS's buttons in apps.\n\n" +
             "To turn it on: in Accessibility, choose NEXUS Recent Apps and switch it on. If Android says \"Restricted setting\", open App info, tap ⋮ at the top right, choose Allow restricted settings, then try again.\n\n" +
-            "Fully closing apps: Android only lets its own recent apps screen close other apps, so when you swipe an app away in NEXUS Recent Apps, NEXUS opens that screen behind Recent Apps and presses Close for you. It only reads that screen, only while closing apps. Nothing is ever sent anywhere.",
+            "Fully closing apps: Android only lets its own recent apps screen close other apps, so when you swipe an app away in NEXUS Recent Apps, NEXUS opens that screen behind Recent Apps and presses Close for you. While it's there, it also closes any app still open in the phone that NEXUS Recent Apps doesn't show, so the two always match. It only reads that screen, only while closing apps. Nothing is ever sent anywhere.",
             opts, cancel = "Back", back = { homeSettings() })
+    }
+
+    /** Settings → Recent apps helper → Close every open app: everything open in the phone closes, with the closing cube. */
+    private fun askCloseEverything() {
+        NexusUi.panel(this, "Close every open app?",
+            "Every app open on your phone is closed, including any that NEXUS Recent Apps doesn't show. Apps keep " +
+                "whatever they've saved, as when you swipe them away. It takes a few seconds.",
+            listOf(NexusUi.Option("Close them all", primary = true) {
+                NexusUi.dismissAll(this)
+                if (!NexusAccessibility.closeEverything(this)) NexusUi.note(this, "Couldn't start: the Recent Apps helper isn't running, or NEXUS is busy")
+            }), cancel = "Back", back = { openAppsSettings() })
     }
 
     /** Closing NEXUS on purpose: NEXUS mode off until it's opened again from its icon. */

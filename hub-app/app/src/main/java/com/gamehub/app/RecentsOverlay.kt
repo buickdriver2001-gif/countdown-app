@@ -103,6 +103,8 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
         if (svc.getSystemService(android.os.PowerManager::class.java)?.isInteractive != true) return false
         // No apps open: an empty Recent Apps is no use, so the home screen instead
         if (!SwitcherView.anyOpen(svc)) { nothingOpen(); return true }
+        // (Every app's name, to keep the phone's recent apps in step when closing: re-read now and then)
+        svc.refreshAppNames()
         val wm = svc.getSystemService(WindowManager::class.java) ?: return false
         // One layer, kept between uses (taking a layer off the screen can flash its last picture on some phones)
         val r = root ?: Root(svc).also { root = it }

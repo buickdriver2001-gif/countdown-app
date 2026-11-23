@@ -71,6 +71,20 @@ class NexusAccessibility : AccessibilityService() {
          * home screen. Returns true if it started (the caller then heads to the NEXUS home screen underneath).
          */
         fun closeNow(returnToSwitcher: Boolean): Boolean = instance?.beginClose(returnToSwitcher) ?: false
+
+        /**
+         * Settings → Recent apps helper → Close every open app: everything in the phone's own recent apps is closed
+         * (with the closing cube), and NEXUS Recent Apps is cleared. False if the helper isn't running.
+         */
+        fun closeEverything(c: Context): Boolean {
+            val s = instance ?: return false
+            val pkgs = Recents.list(c).map { it.first }
+            for (p in pkgs) closeOwnApp(c, p)
+            s.toClose.addAll(pkgs.filter { it !in OWN_APPS && it != c.packageName }); s.closeAllPending = true; s.saveQueue()
+            if (!s.beginClose(returnToSwitcher = false)) return false
+            Recents.clear(c)
+            return true
+        }
         /** NEXUS's opening fade is up right now (the home screen skips its own fade-in meanwhile). */
         val veiling: Boolean get() = (instance?.veilKind ?: 0) != 0
         /**
@@ -402,8 +416,9 @@ class NexusAccessibility : AccessibilityService() {
         safe { setupAppButtons() }
         // NEXUS no longer takes pictures of your screen: remove any it saved before
         Bg.thread { try { snapDir(this).listFiles()?.forEach { it.delete() } } catch (_: Throwable) {} }.start()
-        // Have names and icons ready for Recent Apps
+        // Have names and icons ready for Recent Apps, and every app's name (to keep the phone's recent apps in step)
         safe { AppCache.warm(this, Recents.list(this).map { it.first }) }
+        safe { refreshAppNames(force = true) }
     }
 
     override fun onDestroy() {
@@ -479,6 +494,10 @@ class NexusAccessibility : AccessibilityService() {
         var reveals = 0
         /** Cards without a name pressed Close on (Clear all: every card goes, named or not). */
         var unnamedClosed = 0
+        /** Tidying up: apps still open in the phone that aren't in NEXUS Recent Apps (see closeStrays). */
+        var strays = false
+        var strayClosed = 0
+        val strayTried = HashSet<String>()
     }
     private var closeJob: CloseJob? = null
 
@@ -740,6 +759,12 @@ class NexusAccessibility : AccessibilityService() {
         }
         val pkg = left.removeFirstOrNull()
         if (pkg == null) {
+            // Then apps still open in the phone that NEXUS Recent Apps doesn't show (e.g. left over from before)
+            if (!j.strays && !j.all && !j.clearRest) {
+                j.strays = true; j.revealed.clear(); j.reveals = 0
+                h.postDelayed({ safe { closeStrays(j, 0) } }, if (j.under && recents.hurry) 60L else 150L)
+                return
+            }
             // (Sooner if you've already pressed Home or an app in Recent Apps and it's waiting for this)
             h.postDelayed({ safe { verifyThenHome(j) } }, if (j.under && recents.hurry) 60L else 150L)
             return
@@ -791,6 +816,77 @@ class NexusAccessibility : AccessibilityService() {
         h.postDelayed({ safe { closeNext(j, left) } }, 420)
     }
 
+    /**
+     * Keeping the phone in step with NEXUS: while the phone's recent apps is open anyway (closing what you swiped
+     * away), any app still open there that NEXUS Recent Apps doesn't show is closed too, so the two always match
+     * (apps left open by older versions of NEXUS, or opened some other way). A card counts only if its name is
+     * exactly the name of an app on the phone that isn't in NEXUS Recent Apps: a card with any other name, or none,
+     * is left alone. It stops at once if you've pressed something in Recent Apps, and never runs long.
+     */
+    private fun closeStrays(j: CloseJob, round: Int) {
+        if (closeJob !== j) return
+        val root = recentsRoot(j)
+        if (root == null || round >= 12 || j.outOfTime() || (j.under && recents.hurry)) { verifyThenHome(j); return }
+        val keep = HashSet<String>().apply { addAll(Recents.list(this@NexusAccessibility).map { it.first }); add(packageName) }
+        val map = appNames
+        // A card for an app that isn't in NEXUS Recent Apps: close it
+        val q = ArrayDeque<AccessibilityNodeInfo>(); q.add(root)
+        var seen = 0
+        while (q.isNotEmpty() && seen++ < 3000) {
+            val n = q.removeFirst()
+            val act = closeAction(n)
+            if (act != null) {
+                val name = namesOf(n).firstOrNull()?.substringBefore(',')?.trim()
+                val pkgs = name?.let { map[it] }
+                if (name != null && pkgs != null && pkgs.none { it in keep } && j.strayTried.add(name)) {
+                    if (n.performAction(act)) {
+                        j.strayClosed++
+                        LockTrace.log(this, "  closed ${label(pkgs.first())} (still open in the phone, not in NEXUS Recent Apps)")
+                        h.postDelayed({ safe { closeStrays(j, round + 1) } }, 420)
+                        return
+                    }
+                }
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        // Cards without a name yet (not on screen yet): bring the next one into view and look again
+        if (j.reveals < 8) {
+            val next = unnamedCards(root).firstOrNull { it.second !in j.revealed }
+            if (next != null) {
+                j.revealed.add(next.second); j.reveals++
+                if (next.first.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id)) {
+                    h.postDelayed({ safe { closeStrays(j, round) } }, 280)
+                    return
+                }
+            }
+        }
+        verifyThenHome(j)
+    }
+
+    /** Every app on the phone by its name as it appears on cards (lower case), read in the background. */
+    @Volatile private var appNames: Map<String, Set<String>> = emptyMap()
+    private var appNamesAt = 0L
+
+    /** Reads the names of the apps on the phone again, if it's been a while (or never). */
+    fun refreshAppNames(force: Boolean = false) {
+        val now = SystemClock.uptimeMillis()
+        if (!force && appNamesAt != 0L && now - appNamesAt < 5 * 60_000L) return
+        appNamesAt = now
+        Bg.thread {
+            try {
+                val pm = packageManager
+                val out = HashMap<String, MutableSet<String>>()
+                fun add(name: CharSequence?, pkg: String) { name?.toString()?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { out.getOrPut(it) { HashSet() }.add(pkg) } }
+                for (r in pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)) {
+                    val pkg = r.activityInfo.packageName
+                    add(r.loadLabel(pm), pkg)
+                    add(r.activityInfo.applicationInfo.loadLabel(pm), pkg)
+                }
+                appNames = out
+            } catch (_: Throwable) {}
+        }.start()
+    }
+
     /** A last look at the phone's recent apps: any app still there gets one more press, then home. */
     private fun verifyThenHome(j: CloseJob) {
         if (closeJob !== j) return
@@ -805,6 +901,7 @@ class NexusAccessibility : AccessibilityService() {
             return
         }
         val note = "closed ${j.closed}" + (if (j.missed > 0) ", ${j.missed} not found" else "") +
+            (if (j.strayClosed > 0) ", and ${j.strayClosed} left open from before" else "") +
             (if (stuck.isNotEmpty()) ", still open: " + stuck.joinToString { label(it) } else "")
         goHomeAfterClose(j, note)
     }
