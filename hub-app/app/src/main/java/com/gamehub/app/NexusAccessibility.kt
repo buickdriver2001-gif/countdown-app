@@ -1165,6 +1165,9 @@ class NexusAccessibility : AccessibilityService() {
             return
         }
         if (isRecents && takeOverRecents() && HomeMode.isOn(this) && HomeMode.isDefault(this) && !talkBackOn()) {
+            // A late signal from the phone's own recent apps (opened behind Recent Apps to close apps) just after Recent
+            // Apps went away isn't you pressing the square button: don't bring Recent Apps back for a flash
+            if (SystemClock.uptimeMillis() - recents.hiddenAt < 1200L) { LockTrace.log(this, "phone's recent apps signalled just after Recent Apps closed: left alone"); return }
             openNexusRecents("square button")
             return
         }
@@ -1283,6 +1286,7 @@ class NexusAccessibility : AccessibilityService() {
      * (going home), the real one takes over now, exactly where the picture is.
      */
     fun homeSettled() {
+        recents.homeSettled()
         if (veilKind != FADE_HOME || !veilHomePic || homeSettledAt != 0L) return
         homeSettledAt = SystemClock.uptimeMillis()
         h.removeCallbacks(veilRun); h.post(veilRun)

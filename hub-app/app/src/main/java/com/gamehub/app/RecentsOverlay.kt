@@ -222,7 +222,7 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     fun hide(animated: Boolean = true) {
         val r = root ?: return
         if (!up) return
-        showing = false; leaving = false; waitFor = null; afterCloses = null
+        showing = false; leaving = false; waitFor = null; afterCloses = null; hiddenAt = SystemClock.uptimeMillis()
         h.removeCallbacks(waitRun); h.removeCallbacks(idleClose); h.removeCallbacks(guard); h.removeCallbacks(closesTimeout); h.removeCallbacks(restoreCheck)
         // Touches go straight through from now on (to whatever is underneath), even while it fades
         passThrough()
@@ -510,9 +510,25 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
 
     private fun awaitThenFade(target: String) {
         leaving = true
-        waitFor = target; waitAt = SystemClock.uptimeMillis(); seenAt = 0L
+        waitFor = target; waitAt = SystemClock.uptimeMillis(); seenAt = 0L; settledAt = 0L
         h.removeCallbacks(waitRun); h.postDelayed(waitRun, 40)
     }
+
+    /**
+     * Going home: when Android says it has finished bringing the home screen in. Until then, whatever was behind
+     * Recent Apps (often the phone's own recent apps, opened there to close apps) may still be on its way out, so
+     * Recent Apps (showing the home screen's picture) stays until this.
+     */
+    private var settledAt = 0L
+    fun homeSettled() {
+        if (waitFor != svc.packageName || settledAt != 0L) return
+        settledAt = SystemClock.uptimeMillis()
+        h.removeCallbacks(waitRun); h.post(waitRun)
+    }
+
+    /** When Recent Apps last went away (a late signal from the phone's own recent apps then isn't the square button). */
+    var hiddenAt = 0L
+        private set
 
     private fun seen() {
         if (seenAt != 0L) return
@@ -529,6 +545,15 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
                 if (waitFor == null || !up) return@safeRun
                 val now = SystemClock.uptimeMillis()
                 if (seenAt == 0L) { val w = svc.topAppWindowId(); if (w != Int.MIN_VALUE && w != fromWin) seenAt = now }
+                // Going home: only once Android has finished bringing it in (see homeSettled), never later than a moment
+                if (waitFor == svc.packageName && homePic != null) {
+                    when {
+                        (settledAt != 0L && seenAt != 0L) || (seenAt != 0L && now - seenAt >= 450L) ||
+                            now - waitAt >= NexusAccessibility.VEIL_MAX -> hide(true)
+                        else -> h.postDelayed(this, 40)
+                    }
+                    return@safeRun
+                }
                 when {
                     seenAt != 0L && now - seenAt >= hold() -> hide(true)
                     seenAt == 0L && now - waitAt >= NexusAccessibility.VEIL_MAX -> hide(true)
