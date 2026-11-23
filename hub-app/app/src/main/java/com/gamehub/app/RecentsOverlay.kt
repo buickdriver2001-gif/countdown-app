@@ -107,7 +107,7 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
         // One layer, kept between uses (taking a layer off the screen can flash its last picture on some phones)
         val r = root ?: Root(svc).also { root = it }
         r.animate().cancel()
-        r.removeAllViews()
+        r.removeAllViews(); homePic = null
         val v = SwitcherView(this, sfx)
         r.addView(v)
         val order = NavBar.order(svc)
@@ -209,7 +209,7 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
         val r = root ?: return
         if (!up) return
         showing = false; leaving = false; waitFor = null; afterCloses = null
-        h.removeCallbacks(waitRun); h.removeCallbacks(idleClose); h.removeCallbacks(guard); h.removeCallbacks(closesTimeout)
+        h.removeCallbacks(waitRun); h.removeCallbacks(idleClose); h.removeCallbacks(guard); h.removeCallbacks(closesTimeout); h.removeCallbacks(restoreCheck)
         // Touches go straight through from now on (to whatever is underneath), even while it fades
         passThrough()
         if (!animated) { park(); return }
@@ -234,7 +234,7 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
         r.animate().cancel()
         r.alpha = 0f
         passThrough()
-        r.postOnAnimation { if (!up) { r.visibility = View.GONE; r.removeAllViews(); view = null } }
+        r.postOnAnimation { if (!up) { r.visibility = View.GONE; r.removeAllViews(); view = null; homePic = null } }
     }
 
     /** Really takes the layer off the screen (only when the helper stops). */
@@ -322,8 +322,9 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION).putExtra("fromApp", true)
         // Apps swiped away that haven't started closing yet: close them now, underneath, then go home
         if (!forceGo && !NexusAccessibility.closingUnder && !NexusAccessibility.clearAllPending) NexusAccessibility.closeUnder()
-        // Still closing underneath: the cards fade away, and home comes the moment they're done
-        if (whenClosed { goNexus() }) { view?.leavingOut = true; return }
+        // Still closing underneath: the home screen shows at once (a picture of it), and the real one takes its
+        // place the moment they're done
+        if (whenClosed { goNexus() }) { if (!showHomePicture()) view?.leavingOut = true; return }
         // Clear all: the closing cube takes over at once (the home screen comes up under it)
         if (NexusAccessibility.closeNow(returnToSwitcher = false)) {
             try { svc.startActivity(i) } catch (_: Exception) {}
@@ -334,10 +335,67 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
         // All apps or Phone settings that was open underneath closes, as Home does)
         if (openedOver == svc.packageName && svc.topAppPackage() == svc.packageName) { MainActivity.showHome(); hide(true); return }
         try {
+            // The home screen shows at once (a picture of it) while the real one comes up underneath
+            showHomePicture()
             fromWin = svc.topAppWindowId()
             svc.startActivity(i)
             awaitThenFade(svc.packageName)
         } catch (_: Exception) { hide(true) }
+    }
+
+    /** The picture of the home screen over Recent Apps while the real one comes up (null when not showing). */
+    private var homePic: View? = null
+
+    /**
+     * Home pressed: a picture of the NEXUS home screen fades in over Recent Apps straight away, so Home feels
+     * instant, and the real home screen (exactly the same) takes over underneath a moment later. False if no
+     * picture could be had (then Recent Apps fades away as before).
+     */
+    private fun showHomePicture(): Boolean {
+        if (homePic != null) return true
+        val r = root ?: return false
+        if (!up || r.width <= 0 || r.height <= 0) return false
+        val pic = MainActivity.homeStill() ?: return false
+        // (Only if it matches the screen exactly)
+        if (kotlin.math.abs(pic.width - r.width) > 2 || kotlin.math.abs(pic.height - r.height) > 2) return false
+        val iv = android.widget.ImageView(svc).apply {
+            setImageBitmap(pic); scaleType = android.widget.ImageView.ScaleType.FIT_XY
+            // Takes any tap meanwhile, so nothing under it (cards, buttons) gets pressed by accident
+            isClickable = true
+            alpha = 0f
+        }
+        r.addView(iv, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        iv.animate().alpha(1f).setDuration(160).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+        homePic = iv
+        return true
+    }
+
+    /** Something you pressed (Home, an app) is waiting for apps closing underneath. */
+    val hurry: Boolean get() = afterCloses != null
+
+    // ------------------------------------------------------------------ getting closing ready while you swipe
+
+    /** A card is on its way up: the phone's own recent apps opens behind, ready to close it the moment it's swiped away. */
+    override fun aboutToClose(pkg: String) {
+        h.removeCallbacks(restoreCheck)
+        svc.prepareUnder(pkg)
+    }
+
+    /** The card was let go: once nothing is closing, what you were in goes back underneath (so Back is instant). */
+    override fun closeCancelled() {
+        restoreTries = 0
+        h.removeCallbacks(restoreCheck); h.postDelayed(restoreCheck, 350)
+    }
+
+    private var restoreTries = 0
+    private val restoreCheck = object : Runnable {
+        override fun run() {
+            svc.safeRun {
+                if (!showing || leaving || waitFor != null || NexusAccessibility.closingUnder) return@safeRun
+                if (svc.isPhoneLauncher(svc.topAppPackage())) restoreUnder()
+                else if (++restoreTries < 4) h.postDelayed(this, 300) // (the phone's recent apps may still be on its way)
+            }
+        }
     }
 
     override fun closeApp(pkg: String, queue: Boolean): Boolean {
@@ -445,8 +503,11 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     private fun seen() {
         if (seenAt != 0L) return
         seenAt = SystemClock.uptimeMillis()
-        h.removeCallbacks(waitRun); h.postDelayed(waitRun, HOLD)
+        h.removeCallbacks(waitRun); h.postDelayed(waitRun, hold())
     }
+
+    /** How long to wait once the new screen is in place: less behind the home screen's picture (it already matches). */
+    private fun hold() = if (homePic != null) HOLD_PICTURE else HOLD
 
     private val waitRun = object : Runnable {
         override fun run() {
@@ -455,9 +516,9 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
                 val now = SystemClock.uptimeMillis()
                 if (seenAt == 0L) { val w = svc.topAppWindowId(); if (w != Int.MIN_VALUE && w != fromWin) seenAt = now }
                 when {
-                    seenAt != 0L && now - seenAt >= HOLD -> hide(true)
+                    seenAt != 0L && now - seenAt >= hold() -> hide(true)
                     seenAt == 0L && now - waitAt >= NexusAccessibility.VEIL_MAX -> hide(true)
-                    seenAt != 0L -> h.postDelayed(this, HOLD - (now - seenAt))
+                    seenAt != 0L -> h.postDelayed(this, hold() - (now - seenAt))
                     else -> h.postDelayed(this, 40)
                 }
             }
@@ -467,6 +528,7 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     companion object {
         /** After the new screen is in place, before fading away (the phone's own slide underneath is all but done). */
         private const val HOLD = 170L
+        private const val HOLD_PICTURE = 90L
         /** Left untouched this long, Recent Apps closes itself. */
         private const val IDLE_MS = 120_000L
         /** How often it checks for a call or an alarm while it's up. */

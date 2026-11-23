@@ -440,6 +440,9 @@ class NexusAccessibility : AccessibilityService() {
 
     private var phoneRecentsAskedUntil = 0L
     private var phoneRecentsOpen = false
+    /** When the phone's own recent apps last appeared (it settles for a moment before NEXUS presses anything). */
+    private var phoneRecentsSeenAt = 0L
+    private val RECENTS_SETTLE_MS = 220L
 
     // ------------------------------------------------------------------ closing apps fully
     // Android only lets the phone's own recent-apps screen close other apps. So for apps swiped away in NEXUS
@@ -497,21 +500,45 @@ class NexusAccessibility : AccessibilityService() {
         toClose.clear(); saveQueue()
         closeJob = j
         LockTrace.log(this, "closing apps fully (under Recent Apps): " + j.pkgs.joinToString() + if (clearRest) " and anything else left open" else "")
-        // The phone's own recent apps, behind NEXUS Recent Apps: already there (still open from the last ones), or opened now
-        val f = frontPkg
-        val already = f != null && f in homePkgs && f != packageName && frontCls.contains("Recents", ignoreCase = true) && !frontCls.contains("Launcher", ignoreCase = true)
-        if (already) { j.recentsPkg = f!!; if (recentsRoot(j) == null) j.recentsPkg = "" }
+        // The phone's own recent apps, behind NEXUS Recent Apps: already there (opened as you began swiping, or still
+        // open from the last ones), on its way, or opened now
+        if (phoneRecentsBehind()) { j.recentsPkg = frontPkg!!; if (recentsRoot(j) == null) j.recentsPkg = "" }
         if (j.recentsPkg.isNotEmpty()) {
             j.stage = 2; phoneRecentsOpen = true
-            h.postDelayed({ safe { runCloses(j) } }, 40)
+            // (If it's only just appeared, it settles first, as below)
+            val settle = (RECENTS_SETTLE_MS - (SystemClock.uptimeMillis() - phoneRecentsSeenAt)).coerceIn(40L, RECENTS_SETTLE_MS)
+            h.postDelayed({ safe { runCloses(j) } }, settle)
         } else {
             j.stage = 1
-            if (!askPhoneRecents()) { endClose(j, "couldn't open the phone's recent apps", goHome = false); return false }
+            val onItsWay = SystemClock.uptimeMillis() < phoneRecentsAskedUntil
+            if (!onItsWay && !askPhoneRecents()) { endClose(j, "couldn't open the phone's recent apps", goHome = false); return false }
             h.postDelayed({ safe { if (closeJob === j && j.stage == 1) endClose(j, "the phone's recent apps didn't open", goHome = false) } }, 1800)
         }
         // Whatever happens, it never takes more than a few seconds
         h.postDelayed({ safe { if (closeJob === j) endClose(j, "took too long", goHome = false) } }, 6500)
         return true
+    }
+
+    /** Is the phone's own recent-apps screen what's in front (behind NEXUS Recent Apps)? */
+    private fun phoneRecentsBehind(): Boolean {
+        val f = frontPkg ?: return false
+        return f in homePkgs && f != packageName && frontCls.contains("Recents", ignoreCase = true) && !frontCls.contains("Launcher", ignoreCase = true)
+    }
+
+    /**
+     * A card is on its way up in NEXUS Recent Apps: the phone's own recent apps opens behind it already, so if it's
+     * swiped away the app closes straight away (nothing left to wait for when you then press Home). If the card
+     * is let go instead, Recent Apps puts back what was underneath.
+     */
+    fun prepareUnder(pkg: String) {
+        if (closeJob != null || !recents.showing || !fullCloseOn(this) || Build.VERSION.SDK_INT < 26) return
+        if (pkg in OWN_APPS || pkg == packageName) return // (NEXUS's own games close by themselves)
+        // (Already there or on its way: asking again would close it, as the square button does)
+        if (phoneRecentsOpen || phoneRecentsBehind() || SystemClock.uptimeMillis() < phoneRecentsAskedUntil) return
+        val pm = getSystemService(PowerManager::class.java)
+        val km = getSystemService(KeyguardManager::class.java)
+        if (pm?.isInteractive != true || km?.isKeyguardLocked == true) return
+        askPhoneRecents()
     }
 
     /** Done closing underneath Recent Apps: more swiped away meanwhile are closed straight after, then Recent Apps is told. */
@@ -670,7 +697,8 @@ class NexusAccessibility : AccessibilityService() {
         }
         val pkg = left.removeFirstOrNull()
         if (pkg == null) {
-            h.postDelayed({ safe { verifyThenHome(j) } }, 150)
+            // (Sooner if you've already pressed Home or an app in Recent Apps and it's waiting for this)
+            h.postDelayed({ safe { verifyThenHome(j) } }, if (j.under && recents.hurry) 60L else 150L)
             return
         }
         val name = label(pkg)
@@ -911,10 +939,10 @@ class NexusAccessibility : AccessibilityService() {
         // until you go back to NEXUS or into an app
         if (phoneRecentsOpen && !isRecents && leftPhoneRecents(pkg, cls)) phoneRecentsOpen = false
         if (isRecents && (phoneRecentsOpen || SystemClock.uptimeMillis() < phoneRecentsAskedUntil)) {
-            if (!phoneRecentsOpen) LockTrace.log(this, "phone's own recent apps open (asked for)")
+            if (!phoneRecentsOpen) { LockTrace.log(this, "phone's own recent apps open (asked for)"); phoneRecentsSeenAt = SystemClock.uptimeMillis() }
             phoneRecentsOpen = true; phoneRecentsAskedUntil = 0L
             // NEXUS opened it to close apps: let it settle, then press Close on their cards
-            closeJob?.let { j -> if (j.stage == 1) { j.stage = 2; j.recentsPkg = pkg; h.postDelayed({ safe { runCloses(j) } }, 220) } }
+            closeJob?.let { j -> if (j.stage == 1) { j.stage = 2; j.recentsPkg = pkg; h.postDelayed({ safe { runCloses(j) } }, RECENTS_SETTLE_MS) } }
             return
         }
         if (isRecents && takeOverRecents() && HomeMode.isOn(this) && HomeMode.isDefault(this) && !talkBackOn()) {

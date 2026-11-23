@@ -45,6 +45,10 @@ interface SwitcherHost {
     fun openSetting(action: String)
     fun openAppInfo()
     fun openPhoneRecents()
+    /** A card is being swiped up (the app may be about to close): a chance to get closing ready. */
+    fun aboutToClose(pkg: String) {}
+    /** That card was let go without closing it. */
+    fun closeCancelled() {}
 }
 
 /** NEXUS Recent Apps: swipe through cards of recent apps (each with art made from its icon), tap to jump back in. */
@@ -605,7 +609,11 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
             MotionEvent.ACTION_MOVE -> {
                 if (mode == 0) {
                     if (abs(e.x - downX) > slop) mode = 1
-                    else if (downY - e.y > slop && l.isNotEmpty()) mode = 2
+                    else if (downY - e.y > slop && l.isNotEmpty()) {
+                        mode = 2
+                        // A card on its way up (it may be swiped away): closing gets ready meanwhile
+                        l.getOrNull(pos.roundToInt())?.let { a.aboutToClose(it.pkg) }
+                    }
                 }
                 if (mode == 1) pos -= (e.x - lastX) / (cw * 0.78f)
                 if (mode == 2) l.getOrNull(pos.roundToInt())?.lift = max(0f, downY - e.y)
@@ -638,14 +646,14 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
                                 val explained = !a.closeApp(card.pkg) && a.explainOnce(home)
                                 pos = pos.coerceAtMost((live().size - 1).coerceAtLeast(0).toFloat())
                                 if (last) { emptyHandled = true; if (!explained) postDelayed({ if (!a.gone()) a.goNexus() }, 320) }
-                            }
-                        }
+                            } else a.closeCancelled()
+                        } else a.closeCancelled()
                     }
                     else -> tap(e.x, e.y, l)
                 }
                 tracker?.recycle(); tracker = null
             }
-            MotionEvent.ACTION_CANCEL -> { dragging = false; l.forEach { it.lift = 0f }; tracker?.recycle(); tracker = null }
+            MotionEvent.ACTION_CANCEL -> { if (mode == 2) a.closeCancelled(); dragging = false; l.forEach { it.lift = 0f }; tracker?.recycle(); tracker = null }
         }
         return true
     }
