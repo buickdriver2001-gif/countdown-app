@@ -722,7 +722,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
                 "• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n" +
                 "• Tap ADD APP to add apps to NEXUS: tick as many as you like, then tap ADD.\n" +
                 "• Swipe down on the list to see your notifications.\n" +
-                "• Recent Apps (RECENT, or the square button once the helper is on): tap a card to switch to that app, or swipe it up to close the app. With no apps open, it takes you to the home screen. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent apps helper).\n" +
+                "• Recent Apps (the square button, once the helper is on): tap a card to switch to that app, or swipe it up to close the app. With no apps open, it takes you to the home screen. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent apps helper).\n" +
                 "• Buttons in apps: NEXUS's Back, Home and Recent buttons in place of the phone's own (needs 3-button navigation).\n" +
                 "• Close NEXUS (in Settings) and Home goes to your normal home screen; open NEXUS from its icon to make it your home again.\n\n" +
                 "To stop using NEXUS as Home completely, choose your old home screen in the phone's Settings → Apps → Default apps → Home app.",
@@ -935,7 +935,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
             if (!m.isDestroyed) m.goHome(onScreen = false)
         }
 
-        /** NEXUS Recent Apps, from a NEXUS screen (RECENT, or the Recent button). */
+        /** NEXUS Recent Apps, from a NEXUS screen (the Recent button). */
         fun openRecents(a: Activity) {
             // In NEXUS's own layer: at once, nothing for Android to open
             if (NexusAccessibility.showRecents()) return

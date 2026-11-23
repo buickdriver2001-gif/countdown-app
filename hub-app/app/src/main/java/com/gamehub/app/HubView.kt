@@ -918,27 +918,25 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.textAlign = Paint.Align.CENTER
         text.textSize = 10.5f * d; text.letterSpacing = 0.12f
         text.color = Color.argb((110 * a).toInt(), 160, 185, 230)
-        // Bottom bar: RECENT · ADD APP · ALL APPS
+        // Bottom bar: ADD APP · ALL APPS (Recent Apps is the square button)
         val gapB = 12 * d
-        val pw = min(142 * d, (w - 48 * d - gapB * 2) / 3f)
-        val bx0 = w / 2 - (pw * 3 + gapB * 2) / 2
+        val pw = min(142 * d, (w - 48 * d - gapB) / 2f)
+        val bx0 = w / 2 - (pw * 2 + gapB) / 2
         val barTop = h - 54 * d - navInset; val barBottom = h - 18 * d - navInset
-        recentRect.set(bx0, barTop, bx0 + pw, barBottom)
-        addRect.set(bx0 + pw + gapB, barTop, bx0 + pw * 2 + gapB, barBottom)
-        allAppsRect.set(bx0 + (pw + gapB) * 2, barTop, bx0 + pw * 3 + gapB * 2, barBottom)
+        recentRect.setEmpty()
+        addRect.set(bx0, barTop, bx0 + pw, barBottom)
+        allAppsRect.set(bx0 + pw + gapB, barTop, bx0 + pw * 2 + gapB, barBottom)
         systemRect.setEmpty()
-        bottomPill(c, recentRect, "RECENT", 0, a)
         bottomPill(c, addRect, "ADD APP", 3, a)
         bottomPill(c, allAppsRect, "ALL APPS", 2, a)
-        // RECENT with no apps open stays here: say so briefly, just above RECENT
+        // Recent Apps asked for with no apps open stays here: say so briefly, just above the bottom bar
         val since = android.os.SystemClock.uptimeMillis() - nothingOpenAt
         if (since in 0 until NOTE_MS) {
             val f = since / NOTE_MS.toFloat()
             val nk = min(1f, f * 8f) * min(1f, (1f - f) * 4f)
             text.textAlign = Paint.Align.CENTER; text.textSize = 12 * d; text.letterSpacing = 0.1f
             text.color = Color.argb((230 * nk * a).toInt(), 220, 235, 255)
-            val nx = max(text.measureText(NOTE) / 2 + 12 * d, recentRect.centerX())
-            c.drawText(NOTE, nx, barTop - 10 * d - (1f - nk) * 4 * d, text)
+            c.drawText(NOTE, w / 2, barTop - 10 * d - (1f - nk) * 4 * d, text)
         }
         text.textAlign = Paint.Align.CENTER
     }
@@ -947,7 +945,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         private const val NOTE = "No open apps"
         private const val NOTE_MS = 2200L
         @Volatile private var nothingOpenAt = -NOTE_MS
-        /** RECENT was pressed with no apps open: the home screen says so for a moment. */
+        /** Recent Apps was asked for with no apps open: the home screen says so for a moment. */
         fun noteNothingOpen() { nothingOpenAt = android.os.SystemClock.uptimeMillis() }
     }
 
@@ -1728,7 +1726,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val out = ArrayList<Int>()
         if (booting) return out
         for (i in games.indices) if (i < rows.size) out.add(i)
-        out.add(A11Y_RECENT); out.add(A11Y_ADD); out.add(A11Y_ALL); out.add(A11Y_GEAR)
+        out.add(A11Y_ADD); out.add(A11Y_ALL); out.add(A11Y_GEAR)
         return out
     }
 
