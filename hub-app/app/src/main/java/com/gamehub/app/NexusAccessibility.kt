@@ -546,6 +546,53 @@ class NexusAccessibility : AccessibilityService() {
         return true
     }
 
+    /** Windows already looked at for the screenshot preview (by id: true = it's the preview). */
+    private val shotWins = HashMap<Int, Boolean>()
+
+    /**
+     * Is the phone's screenshot preview on screen (the picture that shrinks into a corner after a screenshot, with
+     * its Edit and Share buttons)? NEXUS Recent Apps would hide it (Android puts NEXUS's layer above it), so Recent
+     * Apps steps aside for it. Going by the window's name, or the words on it (each window looked at only once).
+     */
+    fun screenshotShowing(): Boolean {
+        val ws = try { windows } catch (_: Throwable) { return false }
+        val r = android.graphics.Rect()
+        val tall = resources.displayMetrics.heightPixels * 0.12f
+        for (w in ws) {
+            val type = w.type
+            if (type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION ||
+                type == android.view.accessibility.AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY ||
+                type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD) continue
+            // (Never the status bar or the button bar, whose little icons can mention a screenshot notification)
+            w.getBoundsInScreen(r)
+            if (r.height() < tall) continue
+            if (w.title?.toString()?.contains("screenshot", ignoreCase = true) == true) return true
+            val known = shotWins[w.id]
+            if (known == true) return true
+            if (known == false) continue
+            val root = try { w.root } catch (_: Throwable) { null } ?: continue
+            if (root.packageName?.toString() != "com.android.systemui") { shotWins[w.id] = false; continue }
+            val shot = mentionsScreenshot(root)
+            // (Only settled once it has something on it: a window just appearing may not have its contents yet)
+            if (shot || root.childCount > 0) { if (shotWins.size > 40) shotWins.clear(); shotWins[w.id] = shot }
+            if (shot) return true
+        }
+        return false
+    }
+
+    private fun mentionsScreenshot(root: AccessibilityNodeInfo): Boolean {
+        val q = ArrayDeque<AccessibilityNodeInfo>(); q.add(root)
+        var seen = 0
+        while (q.isNotEmpty() && seen++ < 40) {
+            val n = q.removeFirst()
+            if (n.viewIdResourceName?.contains("screenshot", ignoreCase = true) == true) return true
+            if (n.contentDescription?.toString()?.contains("screenshot", ignoreCase = true) == true) return true
+            if (n.text?.toString()?.contains("screenshot", ignoreCase = true) == true) return true
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        return false
+    }
+
     /** Is the phone's own recent-apps screen what's in front (behind NEXUS Recent Apps)? */
     private fun phoneRecentsBehind(): Boolean {
         val f = frontPkg ?: return false
@@ -1074,7 +1121,7 @@ class NexusAccessibility : AccessibilityService() {
     private fun handleEvent(e: AccessibilityEvent?) {
         if (e == null) return
         // Windows changed (e.g. the phone's own button bar showed or hid): NEXUS's buttons follow it
-        if (e.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) { queueButtons(); return }
+        if (e.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) { if (recents.showing) recents.checkScreenshot(); queueButtons(); return }
         if (e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = e.packageName?.toString() ?: return
         val cls = e.className?.toString() ?: ""
@@ -1083,7 +1130,9 @@ class NexusAccessibility : AccessibilityService() {
         if (pkg == packageName && !cls.startsWith("$packageName.")) { queueButtons(); return }
         if (pkg != "com.android.systemui" && pkg != "android" && "inputmethod" !in pkg && "keyboard" !in pkg) { frontPkg = pkg; frontCls = cls }
         queueButtons()
-        // Recent Apps (NEXUS's layer) steps aside for a call, an alarm or any app that comes in front
+        // Recent Apps (NEXUS's layer) steps aside for a call, an alarm or any app that comes in front, and for the
+        // phone's screenshot preview
+        if (pkg == "com.android.systemui" && recents.showing) recents.checkScreenshot()
         recents.onWindowEvent(pkg, cls, pkg in homePkgs)
         // Under NEXUS's fade: the new screen has announced itself (the home screen, or the app being opened)
         if (veilKind != 0 && veilSeenAt == 0L && pkg != "com.android.systemui" && "inputmethod" !in pkg && "keyboard" !in pkg &&

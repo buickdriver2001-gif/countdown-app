@@ -446,8 +446,6 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
                 r.set(x - cwS / 2, top, x + cwS / 2, top + chS)
                 card.rect.set(r)
                 val fade = ((1f - min(1f, abs(off)) * 0.45f) * (1f - min(1f, card.lift / (h * 0.5f)))).coerceIn(0f, 1f)
-                // Its reflection in the glassy floor (mirrored at the bottom edge of an unlifted card)
-                drawReflection(c, card, r, cy + chS / 2 + 3 * d, fade * vis * enter)
                 drawCard(c, card, r, fade * vis, abs(off) < 0.5f)
             }
             // Name and time under the centre card
@@ -542,40 +540,6 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
     private val world = Ps2World(context)
     private val TITLE = "RECENT APPS"
     private val titleGlow by lazy { TextGlow(text.typeface ?: Typeface.DEFAULT, 20 * d, 0.4f, max = 2) }
-
-    // The cards' reflections: drawn into a small layer, then faded out downwards with one reused gradient
-    private val reflPaint = Paint(Paint.FILTER_BITMAP_FLAG)
-    private val reflGrad = LinearGradient(0f, 0f, 0f, 1f, Color.WHITE, Color.TRANSPARENT, Shader.TileMode.CLAMP)
-    private val reflMatrix = android.graphics.Matrix()
-    private val reflMask = Paint().apply { xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN); shader = reflGrad }
-    private val reflRect = RectF()
-
-    /** A card's reflection under it, as in a dark glass floor: its lower part upside down, fading away. */
-    private fun drawReflection(c: Canvas, card: Card, rr: RectF, floorY: Float, fade: Float) {
-        if (fade <= 0.02f) return
-        val top = 2 * floorY - rr.bottom
-        val depth = rr.height() * 0.24f
-        if (top >= height || top + depth <= 0f) return
-        reflRect.set(rr.left - 2 * d, top, rr.right + 2 * d, top + depth)
-        val saved = c.saveLayer(reflRect, null)
-        c.save()
-        c.translate(0f, 2 * floorY); c.scale(1f, -1f)
-        val rad = 16 * d
-        clip.reset(); clip.addRoundRect(rr, rad, rad, Path.Direction.CW)
-        c.save(); c.clipPath(clip)
-        fill.color = Color.rgb(10, 16, 34); c.drawRect(rr, fill)
-        card.shot?.let { reflPaint.alpha = 255; c.drawBitmap(it, null, rr, reflPaint) }
-        c.restore()
-        line.strokeWidth = 1.2f * d; line.color = Color.argb(200, 150, 195, 255)
-        c.drawRoundRect(rr, rad, rad, line)
-        c.restore()
-        // Faint at the top, gone at the bottom
-        reflMatrix.setScale(1f, depth); reflMatrix.postTranslate(0f, top)
-        reflGrad.setLocalMatrix(reflMatrix)
-        reflMask.alpha = (75 * fade).toInt().coerceIn(0, 255)
-        c.drawRect(reflRect, reflMask)
-        c.restoreToCount(saved)
-    }
 
     private fun drawCard(c: Canvas, card: Card, rr: RectF, fade: Float, centre: Boolean) {
         val rad = 16 * d

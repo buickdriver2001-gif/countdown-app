@@ -200,10 +200,22 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
                     hide(false)
                     return@safeRun
                 }
+                if (checkScreenshot()) return@safeRun
                 startMode = mode
                 h.postDelayed(this, GUARD_MS)
             }
         }
+    }
+
+    /**
+     * A screenshot was just taken (it already has Recent Apps in it): Recent Apps fades away so the phone's own
+     * screenshot preview, which Android puts underneath NEXUS's layer, can be seen and used. True if it stepped aside.
+     */
+    fun checkScreenshot(): Boolean {
+        if (!showing || leaving || !svc.screenshotShowing()) return false
+        LockTrace.log(svc, "Recent Apps stepped aside: screenshot preview")
+        hide(true)
+        return true
     }
 
     /** Fades Recent Apps away (or removes it at once). */
