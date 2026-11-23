@@ -8,7 +8,6 @@ import android.content.pm.LauncherApps
 import android.content.pm.ShortcutInfo
 import android.net.Uri
 import android.os.Process
-import android.widget.Toast
 
 /**
  * The things a launcher does with an app: open it, show its shortcuts, uninstall it.
@@ -31,7 +30,7 @@ object AppActions {
     }
 
     private fun cantOpen(a: Activity, pkg: String): Boolean {
-        Toast.makeText(a, "Couldn't open ${label(a, pkg)} right now", Toast.LENGTH_SHORT).show()
+        NexusUi.note(a, "Couldn't open ${label(a, pkg)} right now")
         return false
     }
 
@@ -59,7 +58,7 @@ object AppActions {
                         NexusAccessibility.instance?.veilForLaunch(s.`package`, null, 90L)
                         la.startShortcut(s, null, Transitions.app(a.window.decorView))
                     }
-                    catch (_: Exception) { Toast.makeText(a, "That shortcut isn't available right now", Toast.LENGTH_SHORT).show() }
+                    catch (_: Exception) { NexusUi.note(a, "That shortcut isn't available right now") }
                 }
             }
     }
@@ -75,7 +74,7 @@ object AppActions {
         if (info.flags and ApplicationInfo.FLAG_SYSTEM != 0 || pkg == a.packageName) return null
         return NexusUi.Option("Uninstall", danger = true) {
             try { a.startActivity(Intent(Intent.ACTION_DELETE, Uri.fromParts("package", pkg, null))) }
-            catch (_: Exception) { Toast.makeText(a, "Couldn't open uninstall", Toast.LENGTH_SHORT).show() }
+            catch (_: Exception) { NexusUi.note(a, "Couldn't open uninstall") }
         }
     }
 }

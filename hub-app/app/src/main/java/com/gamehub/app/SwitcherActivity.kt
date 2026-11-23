@@ -209,7 +209,7 @@ class SwitcherActivity : Activity(), SwitcherHost {
     /** Opens the phone's own recent apps screen (where swiping an app away really closes it), via the NEXUS home screen. */
     override fun openPhoneRecents() {
         if (NexusAccessibility.openPhoneRecentsViaHome()) goNexus()
-        else android.widget.Toast.makeText(this, "Turn on the Recent Apps helper in NEXUS settings first", android.widget.Toast.LENGTH_SHORT).show()
+        else NexusUi.note(this, "Turn on the Recent Apps helper in NEXUS settings first")
     }
 }
 

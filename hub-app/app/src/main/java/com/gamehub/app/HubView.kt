@@ -249,8 +249,35 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             // Under NEXUS's cover (an app opening or closing, apps being closed): hold this frame and pause, so the
             // phone puts everything into the change; carry on the moment the cover starts to lift
             if (NexusAccessibility.homeHidden && launchFlash <= 0f) { removeCallbacks(resumeAfterCover); postDelayed(resumeAfterCover, 50) }
+            // Nothing moving but the slow background, on a screen faster than 60 Hz: every other frame (it looks the
+            // same, for about half the work); a touch brings back every frame at once
+            else if (idle(intro)) {
+                // (One frame waiting at a time, so an extra redraw from elsewhere can't start a second chain)
+                val now = android.os.SystemClock.uptimeMillis()
+                if (!framePosted || now - framePostedAt > 100L) { framePosted = true; framePostedAt = now; postOnAnimation(nextFrame) }
+            }
             else postInvalidateOnAnimation()
         }
+    }
+
+    private var framePosted = false
+    private var framePostedAt = 0L
+    private val nextFrame = Runnable { framePosted = false; postInvalidateOnAnimation() }
+    /** When the screen was last touched. */
+    private var touchedAt = 0L
+    private var refreshHz = 60f
+    private var refreshAt = 0L
+
+    /** Only the slow background is moving (no touch for a moment, no scrolling or animations of the menu itself). */
+    private fun idle(intro: Float): Boolean {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - refreshAt > 2000L) { refreshAt = now; refreshHz = try { display?.refreshRate ?: 60f } catch (_: Throwable) { 60f } }
+        if (refreshHz < 75f || now - touchedAt < 2500L) return false
+        if (intro < 1f || dragging || moveIndex >= 0 || scrollVel != 0f || homing || !snapTo.isNaN() || settling) return false
+        if (launchFlash > 0f || enterFade > 0f || settle > 0f || pending != null) return false
+        if (crystalK != 0f && crystalK != 1f) return false
+        if (ps2Menu && homeCrystalK != 0f && homeCrystalK != 1f) return false
+        return now - nothingOpenAt > NOTE_MS
     }
 
     private val resumeAfterCover = object : Runnable {
@@ -1853,6 +1880,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        touchedAt = android.os.SystemClock.uptimeMillis()
         if (tracker == null) tracker = android.view.VelocityTracker.obtain()
         tracker?.addMovement(e)
         when (e.actionMasked) {

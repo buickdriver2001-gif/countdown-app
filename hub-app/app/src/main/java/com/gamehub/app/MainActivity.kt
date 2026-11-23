@@ -8,7 +8,6 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.net.Uri
 import android.os.Bundle
-import android.widget.Toast
 import kotlin.math.PI
 import kotlin.math.exp
 import kotlin.math.min
@@ -107,8 +106,9 @@ class MainActivity : Activity(), NexusUi.NavHost {
             NexusUi.Option((if (k == cur) "✓  " else "     ") + label, primary = k == cur) {
                 prefs.edit().putString("grid", k).apply()
                 refresh()
+                homeScreenSettings()
             }
-        })
+        }, cancel = "Back", back = { homeScreenSettings() })
     }
 
     /** Saves a new position for an app (the order is kept by package name). */
@@ -147,7 +147,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         prefs.edit().putString("custom", (customPkgs() + fresh.map { it.pkg }).joinToString(",")).apply()
         refresh()
         val msg = if (fresh.size == 1) "${fresh[0].label} added to NEXUS" else "${fresh.size} apps added to NEXUS"
-        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        NexusUi.note(this, msg)
     }
 
     /** Opens any app from All Apps (that exact icon, if the app has more than one), with the same smooth fade. */
@@ -408,17 +408,18 @@ class MainActivity : Activity(), NexusUi.NavHost {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQ_HOME) return
-        if (HomeMode.isDefault(this)) { Toast.makeText(this, "NEXUS is now your home screen", Toast.LENGTH_SHORT).show(); return }
+        if (HomeMode.isDefault(this)) { NexusUi.note(this, "NEXUS is now your home screen"); return }
         // Answered instantly = Android has stopped asking (it was declined before): open the setting instead
         if (android.os.SystemClock.uptimeMillis() - homeAskedAt < 700) homeAppSetting()
     }
 
     private fun chooseNormalHome() {
         val homes = HomeMode.otherHomes(this)
-        if (homes.isEmpty()) { Toast.makeText(this, "No other home screen found", Toast.LENGTH_SHORT).show(); return }
+        if (homes.isEmpty()) { NexusUi.note(this, "No other home screen found"); return }
         val current = HomeMode.normalHome(this)
         NexusUi.panel(this, "Your normal home screen", "Where NEXUS takes you when you close it.",
-            homes.map { h -> NexusUi.Option((if (h.second == current) "✓  " else "     ") + h.first, primary = h.second == current) { HomeMode.setNormalHome(this, h.second) } })
+            homes.map { h -> NexusUi.Option((if (h.second == current) "✓  " else "     ") + h.first, primary = h.second == current) { HomeMode.setNormalHome(this, h.second); homeScreenSettings() } },
+            cancel = "Back", back = { homeScreenSettings() })
     }
 
     /**
@@ -431,7 +432,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
                 "This sets your wallpaper to NEXUS's deep blue so those moments look like NEXUS too.\n\n" +
                 "You can pick a different wallpaper any time in your phone's wallpaper settings.",
             listOf(NexusUi.Option("Home screen only", primary = true) { setNexusWallpaper(lock = false) },
-                NexusUi.Option("Home and lock screen") { setNexusWallpaper(lock = true) }), cancel = "Not now")
+                NexusUi.Option("Home and lock screen") { setNexusWallpaper(lock = true) }), cancel = "Back", back = { homeScreenSettings() })
     }
 
     /** Something went wrong inside the Recent Apps helper (NEXUS kept running): show the details to copy. */
@@ -448,11 +449,11 @@ class MainActivity : Activity(), NexusUi.NavHost {
         opts.add(NexusUi.Option("Copy the details", primary = true) {
             val cm = getSystemService(android.content.ClipboardManager::class.java)
             cm?.setPrimaryClip(android.content.ClipData.newPlainText("NEXUS problem", text))
-            Toast.makeText(this, "Copied: paste it to Claude", Toast.LENGTH_SHORT).show()
+            NexusUi.note(this, "Copied. Paste it to Claude.")
         })
-        if (problems.isNotBlank()) opts.add(NexusUi.Option("Clear noted problems") { f.delete(); Toast.makeText(this, "Cleared", Toast.LENGTH_SHORT).show() })
+        if (problems.isNotBlank()) opts.add(NexusUi.Option("Clear noted problems") { f.delete(); NexusUi.note(this, "Noted problems cleared") })
         NexusUi.panel(this, "Report a problem", "If something isn't working (for example the lock screen), copy these details " +
-            "and send them to Claude so it can be fixed. They only list what NEXUS did and when; nothing personal.", opts, cancel = "Close")
+            "and send them to Claude so it can be fixed. They only list what NEXUS did and when; nothing personal.", opts, cancel = "Back", back = { helpSettings() })
     }
 
     /** NEXUS lock screen: explanation and on/off. */
@@ -466,13 +467,14 @@ class MainActivity : Activity(), NexusUi.NavHost {
             "Notifications: NEXUS can show them on its lock screen too (tap one, unlock, and it opens). It follows the same " +
             "privacy rules as your phone's lock screen: apps set to stay off the lock screen never appear, and with " +
             "\"Hide sensitive content\" private notifications only show the app's name. Nothing is stored or sent anywhere." +
-            (if (!helper) "\n\nNeeds the Recent Apps helper switched on (Gear icon → Recent apps)." else "")
+            (if (!helper) "\n\nNeeds the Recent Apps helper switched on (Settings → Recent apps helper)." else "")
         val opts = ArrayList<NexusUi.Option>()
         if (!helper) opts.add(NexusUi.Option("Turn on helper first", primary = true) { openAppsSettings() })
         opts.add(NexusUi.Option(if (on) "Turn NEXUS lock screen OFF" else "Turn NEXUS lock screen ON", primary = helper && !on) {
             prefs.edit().putBoolean("lockScreen", !on).apply()
             NexusAccessibility.instance?.refreshCover()
-            Toast.makeText(this, if (!on) "NEXUS lock screen on. Turn your screen off and on to see it." else "NEXUS lock screen off", Toast.LENGTH_SHORT).show()
+            lockSettings()
+            NexusUi.note(this, if (!on) "NEXUS lock screen on. Turn your screen off and on to see it." else "NEXUS lock screen off", long = !on)
         })
         // Left alone, it fades out and the screen turns off
         val off = LockActivity.offAfterSec(this)
@@ -488,7 +490,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         })
         // Notifications on the NEXUS lock screen
         if (!NexusNotifications.granted(this)) {
-            opts.add(NexusUi.Option("Show notifications here: allow access") { openNotificationAccess() })
+            opts.add(NexusUi.Option("Show notifications here: allow access") { askNotificationAccess() })
         } else {
             val mode = NexusNotifications.mode(this)
             val name = when (mode) { "content" -> "Show all content"; "private" -> "Hide sensitive content"; else -> "Off" }
@@ -539,7 +541,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
                 lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
             })
         } catch (_: Exception) {}
-        Toast.makeText(this, "A test notification arrives in 5 seconds. Turn your screen off now to see it on the NEXUS lock screen.", Toast.LENGTH_LONG).show()
+        NexusUi.note(this, "A test notification arrives in 5 seconds. Turn your screen off now to see it on the NEXUS lock screen.", long = true)
         val app = applicationContext
         android.os.Handler(mainLooper).postDelayed({
             try {
@@ -562,7 +564,18 @@ class MainActivity : Activity(), NexusUi.NavHost {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQ_NOTIFY) return
         if (grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) sendTestNotification()
-        else Toast.makeText(this, "NEXUS needs permission to send notifications for the test", Toast.LENGTH_SHORT).show()
+        else NexusUi.note(this, "NEXUS needs permission to send notifications for the test")
+    }
+
+    /** Says what to do on Android's Notification access page before going there (it can't be explained once you're there). */
+    private fun askNotificationAccess() {
+        NexusUi.panel(this, "Notifications on the lock screen",
+            "On the next screen, switch on NEXUS lock screen notifications, then come back.\n\n" +
+                "If Android says \"Restricted setting\", open NEXUS's App info below, tap ⋮ at the top right, choose " +
+                "Allow restricted settings, then try again.",
+            listOf(NexusUi.Option("Continue", primary = true) { openNotificationAccess() },
+                NexusUi.Option("Open App info") { openAppInfo() }),
+            cancel = "Back", back = { lockSettings() })
     }
 
     /** Android's Notification access page for NEXUS (where it can be allowed or taken away). */
@@ -576,7 +589,6 @@ class MainActivity : Activity(), NexusUi.NavHost {
         } catch (_: Exception) {
             try { startActivity(Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } catch (_: Exception) {}
         }
-        Toast.makeText(this, "Switch on NEXUS lock screen notifications. If Android says \"Restricted setting\", allow restricted settings in NEXUS's App info first.", Toast.LENGTH_LONG).show()
     }
 
     private fun setNexusWallpaper(lock: Boolean) {
@@ -601,7 +613,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
                 b.recycle()
                 true
             } catch (_: Exception) { false }
-            runOnUiThread { Toast.makeText(this, if (ok) "Wallpaper set" else "Couldn't set the wallpaper", Toast.LENGTH_SHORT).show() }
+            runOnUiThread { NexusUi.note(this, if (ok) "Wallpaper set" else "Couldn't set the wallpaper") }
         }.start()
     }
 
@@ -626,7 +638,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
             NexusUi.Option("Buttons in apps:  " + onOff(NexusAccessibility.appButtonsOn(this))) { buttonSettings() },
             NexusUi.Option("Sound:  $sound") { soundSettings() },
             NexusUi.Option("Help") { helpSettings() },
-            NexusUi.Option("Phone settings") { openSystem() },
+            NexusUi.Option("System: device info & tests") { openSystem() },
             NexusUi.Option("Close NEXUS", danger = true) { askClose() }
         ), cancel = "Done")
     }
@@ -698,7 +710,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
                 "• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n" +
                 "• Tap ADD APP to add apps to NEXUS: tick as many as you like, then tap ADD.\n" +
                 "• Swipe down on the list to see your notifications.\n" +
-                "• Recent Apps (RECENT, or the square button once the helper is on): swipe an app up to close it. With no apps open, it takes you to the home screen. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent apps helper).\n" +
+                "• Recent Apps (RECENT, or the square button once the helper is on): tap a card to switch to that app, or swipe it up to close the app. With no apps open, it takes you to the home screen. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent apps helper).\n" +
                 "• Buttons in apps: NEXUS's Back, Home and Recent buttons in place of the phone's own (needs 3-button navigation).\n" +
                 "• Close NEXUS (in Settings) and Home goes to your normal home screen; open NEXUS from its icon to make it your home again.\n\n" +
                 "To stop using NEXUS as Home completely, choose your old home screen in the phone's Settings → Apps → Default apps → Home app.",
@@ -719,16 +731,16 @@ class MainActivity : Activity(), NexusUi.NavHost {
         if (!Recents.serviceOn(this) || !helperRunning()) {
             NexusUi.panel(this, "NEXUS buttons in all apps",
                 "This uses NEXUS's helper (the one behind Recent Apps). Turn the helper on first, then switch this on here.",
-                listOf(NexusUi.Option("Turn on helper", primary = true) { openAccessibility() }), cancel = "Not now")
+                listOf(NexusUi.Option("Turn on helper", primary = true) { openAccessibility() }), cancel = "Back", back = { buttonSettings() })
             return
         }
         if (NavBar.order(this) == "off") { NavBar.setOrder(this, "brh"); applyNavBar() }
         NexusAccessibility.setAppButtons(this, true)
-        Toast.makeText(this,
+        buttonSettings()
+        NexusUi.note(this,
             if (NexusAccessibility.threeButtonNav(this)) "NEXUS's buttons now take the place of the phone's in your apps"
             else "Your phone uses gesture navigation: NEXUS's buttons appear in your apps once it's set to 3-button navigation (in the phone's Settings, search \"navigation\")",
-            Toast.LENGTH_LONG).show()
-        buttonSettings()
+            long = true)
     }
 
     private fun hideBars() {
@@ -886,7 +898,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
                     "They step aside for full-screen videos and games, the lock screen and TalkBack. You can change this any time in NEXUS settings.",
                 listOf(NexusUi.Option("Turn on", primary = true) {
                     NexusAccessibility.setAppButtons(this, true)
-                    Toast.makeText(this, "NEXUS's buttons now take the place of the phone's in your apps", Toast.LENGTH_SHORT).show()
+                    NexusUi.note(this, "NEXUS's buttons now take the place of the phone's in your apps")
                 }), cancel = "Not now")
         }
     }
@@ -945,7 +957,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         try {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/buickdriver2001-gif/countdown-app/releases?q=$tag&expanded=true")))
         } catch (_: Exception) {
-            Toast.makeText(this, "Couldn't open the download page", Toast.LENGTH_SHORT).show()
+            NexusUi.note(this, "Couldn't open the download page")
         }
     }
 

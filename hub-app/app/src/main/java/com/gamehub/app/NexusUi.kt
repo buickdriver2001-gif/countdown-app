@@ -135,8 +135,11 @@ object NexusUi {
         col.alpha = 0f; col.scaleX = 0.96f; col.scaleY = 0.96f
         col.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(if (switching) 120 else 180)
             .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
-        showing.add(dialog)
-        dialog.setOnDismissListener { showing.remove(dialog); lastClosedAt = System.currentTimeMillis(); onPanels?.invoke(a, anyShowing(a)) }
+        showing.add(dialog); shownOrder.add(java.lang.ref.WeakReference(dialog))
+        dialog.setOnDismissListener {
+            showing.remove(dialog); shownOrder.removeAll { it.get() == null || it.get() === dialog }
+            lastClosedAt = System.currentTimeMillis(); onPanels?.invoke(a, anyShowing(a))
+        }
         dialog.show()
         onPanels?.invoke(a, true)
         return field
@@ -174,6 +177,52 @@ object NexusUi {
 
     /** Panels on screen right now (so pressing Home can tidy them away, like other launchers do). */
     private val showing = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Dialog, Boolean>())
+
+    /** Panels in the order they opened (the last one showing is on top). */
+    private val shownOrder = ArrayList<java.lang.ref.WeakReference<Dialog>>()
+
+    /** The panel on top over [a], if one is open. */
+    private fun topPanel(a: Activity): Dialog? = shownOrder.lastOrNull { it.get()?.let { d -> d.ownerActivity === a && d.isShowing } == true }?.get()
+
+    private var noteView: java.lang.ref.WeakReference<View>? = null
+
+    /**
+     * A short note in the NEXUS style (instead of Android's grey pop-up): a glass pill that fades in just above the
+     * buttons, on top of any open panel, and fades away by itself. Never takes touches. [long]: a longer note
+     * that needs a little more time to read.
+     */
+    fun note(a: Activity, text: String, long: Boolean = false) {
+        if (a.isFinishing || a.isDestroyed) {
+            try { android.widget.Toast.makeText(a.applicationContext, text, if (long) android.widget.Toast.LENGTH_LONG else android.widget.Toast.LENGTH_SHORT).show() } catch (_: Exception) {}
+            return
+        }
+        val d = a.resources.displayMetrics.density
+        // On the panel on top if one is open (a note on the screen underneath would be hidden behind it)
+        val host = ((topPanel(a)?.window ?: a.window)?.decorView as? ViewGroup) ?: return
+        noteView?.get()?.let { old -> old.animate().cancel(); (old.parent as? ViewGroup)?.removeView(old) }
+        val maxW = minOf(a.resources.displayMetrics.widthPixels - (48 * d).toInt(), (420 * d).toInt())
+        val tv = TextView(a).apply {
+            this.text = text; setTextColor(TEXT); textSize = 14f; typeface = light; letterSpacing = 0.02f
+            gravity = Gravity.CENTER; setLineSpacing(0f, 1.15f); maxWidth = maxW
+            background = glass(d, 20f, strong = true)
+            setPadding((18 * d).toInt(), (11 * d).toInt(), (18 * d).toInt(), (11 * d).toInt())
+            // Above everything on the screen (the buttons, All apps, the guide), without a shadow
+            elevation = 60 * d; outlineProvider = null
+            // (TalkBack reads it out)
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            isClickable = false; isFocusable = false
+            alpha = 0f; translationY = 8 * d
+        }
+        // Clear of the buttons along the bottom and the bars just above them (the home screen's, All apps' Add bar)
+        val bottom = NavBar.heightPx(a) + (96 * d).toInt()
+        host.addView(tv, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = bottom })
+        noteView = java.lang.ref.WeakReference(tv)
+        tv.animate().alpha(1f).translationY(0f).setDuration(180).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+        tv.postDelayed({
+            tv.animate().alpha(0f).translationY(4 * d).setDuration(220).withEndAction { (tv.parent as? ViewGroup)?.removeView(tv) }.start()
+        }, if (long) 4200L else 2400L)
+    }
 
     /** Closes every panel [a] has open. Returns true if there were any. */
     fun dismissAll(a: Activity): Boolean {

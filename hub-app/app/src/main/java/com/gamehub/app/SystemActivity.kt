@@ -39,7 +39,6 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
 import java.io.File
 import kotlin.math.PI
 import kotlin.math.max
@@ -226,7 +225,7 @@ class SystemActivity : Activity() {
     }
 
     private fun shortcuts(): View {
-        fun go(action: String) = { try { startActivity(Intent(action)) } catch (_: Exception) { Toast.makeText(this, "Not available on this phone", Toast.LENGTH_SHORT).show() } }
+        fun go(action: String) = { try { startActivity(Intent(action)) } catch (_: Exception) { NexusUi.note(this, "Not available on this phone") } }
         return grid("SETTINGS", listOf(
             "Wi-Fi" to go(android.provider.Settings.ACTION_WIFI_SETTINGS),
             "Bluetooth" to go(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS),
@@ -374,11 +373,11 @@ class SystemActivity : Activity() {
         try {
             val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
             if (torchId == null) torchId = cm.cameraIdList.firstOrNull { cm.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true }
-            val id = torchId ?: run { Toast.makeText(this, "No flashlight on this phone", Toast.LENGTH_SHORT).show(); return }
+            val id = torchId ?: run { NexusUi.note(this, "No flashlight on this phone"); return }
             cm.setTorchMode(id, on)
             torchOn = on
             torchBtn?.text = if (on) "Flashlight: ON" else "Flashlight: OFF"
-        } catch (_: Exception) { Toast.makeText(this, "Flashlight is busy", Toast.LENGTH_SHORT).show() }
+        } catch (_: Exception) { NexusUi.note(this, "Flashlight is busy") }
     }
 
     /** Solid colours, tap to change: helps spot dead or stuck pixels. Back to exit. */
@@ -390,13 +389,13 @@ class SystemActivity : Activity() {
             setOnClickListener { i++; if (i >= colors.size) root.removeView(this) else setBackgroundColor(colors[i]) }
         }
         root.addView(v, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        Toast.makeText(this, "Tap to change colour", Toast.LENGTH_SHORT).show()
+        NexusUi.note(this, "Tap to change colour")
     }
 
     /** Draw with your fingers to check every part of the screen responds. Back to exit. */
     private fun touchTest() {
         root.addView(TouchTestView(this), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        Toast.makeText(this, "Draw anywhere. Press Back when done", Toast.LENGTH_SHORT).show()
+        NexusUi.note(this, "Draw anywhere. Press Back when done.")
     }
 
     private fun vibrationTest() {

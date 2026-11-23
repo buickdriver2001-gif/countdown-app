@@ -33,22 +33,22 @@ class TutorialView(private val a: Activity, private val sfx: Sfx, private val ac
         Page("01", "Welcome to NEXUS",
             "NEXUS is a new home screen for your phone: your favourite apps and games in one place, with a look of its own.\n\nThis quick guide takes about a minute."),
         Page("02", "Your apps",
-            "• Tap an app once to highlight it, then tap it again to open it.\n• Hold an app and drag it to move it.\n• Hold an app without moving it to change its tile size (small, wide, tall, large or full row), or to edit or remove apps you added.\n• Tap ADD APP at the bottom and tick as many apps as you like, then tap ADD.\n• Change the grid (3×5, 4×6, 4×8) in ⚙ → Grid size."),
+            "• Tap an app once to choose it, then tap it again to open it.\n• Hold an app and drag it to move it.\n• Hold an app without moving it for its shortcuts, App info, Remove and Uninstall (and its tile size, with the Tiles style).\n• Tap ADD APP at the bottom, tick as many apps as you like, then tap ADD.\n• Settings (the gear) → Home screen switches between the PS2-style menu and Tiles, and sets the grid size for Tiles."),
         Page("03", "All apps",
-            "Tap ALL APPS at the bottom to see every app on your phone. Search at the top; games are listed first; hold an app for more options.\n\nIn Gear icon → System you\'ll find live battery, memory, storage and temperature, device details, hardware tests (screen, touch, vibration, speaker), a flashlight and quick settings shortcuts."),
+            "Tap ALL APPS at the bottom to see every app on your phone. Search at the top; games are listed first; hold an app for more options.\n\nSettings → System has live battery, memory, storage and temperature, device details, hardware tests (screen, touch, vibration, speaker), a flashlight and shortcuts to the phone's own settings."),
         Page("04", "Make NEXUS your home",
             "So pressing Home takes you to NEXUS:\n\n1. Tap the button below.\n2. Choose NEXUS as your Home app.\n\nNEXUS stays your home until you close it (see step 07).",
             listOf("Set NEXUS as Home" to { actions.setHome() })),
         Page("05", "Recent apps (square button)",
-            "See your recent apps as NEXUS cards showing their last screen. Press the square button, or tap RECENT in NEXUS.\n\nTo turn it on:\n1. Tap Turn on helper, choose NEXUS Recent Apps and switch it on.\n2. If Android says \"Restricted setting\", tap Allow restricted settings below, then tap ⋮ at the top right and choose Allow restricted settings. (Newer Android asks this for apps installed from a download.)\n3. Tap Turn on helper again and switch it on.\n\nNEXUS only uses this to remember each app's last screen and to show its own Recent Apps screen. Pictures stay on your phone and are never sent anywhere. You can skip this step; everything else works without it.\n\nTip: Android shows its own screen for a split second when you press the square button. Gear icon → Match wallpaper to NEXUS makes that moment look like NEXUS too.",
+            "Your recent apps as NEXUS cards: press the square button, or tap RECENT in NEXUS. Tap a card to switch to that app; swipe a card up to close the app.\n\nTo turn it on:\n1. Tap Turn on helper, choose NEXUS Recent Apps and switch it on.\n2. If Android says \"Restricted setting\", tap Allow restricted settings below, then tap ⋮ at the top right and choose Allow restricted settings. (Newer Android asks this for apps installed from a download.)\n3. Tap Turn on helper again and switch it on.\n\nThe helper notices which apps you open so they appear in Recent Apps. It never takes pictures of your screen (cards are made from each app's icon), and nothing is ever sent anywhere. You can skip this step; everything else works without it.",
             listOf("Turn on helper" to { actions.accessibility() }, "Allow restricted settings" to { actions.appInfo() })),
         Page("06", "NEXUS lock screen (optional)",
-            "Gear icon → NEXUS lock screen shows NEXUS's own clock screen whenever your screen turns on.\n\nSwipe up and your phone's normal PIN, pattern or fingerprint unlock appears, so your phone stays just as secure. It never covers calls or alarms. Needs the Recent Apps helper from step 05."),
+            "Settings → Lock screen shows NEXUS's own clock screen whenever your screen turns on.\n\nSwipe up and your phone's normal PIN, pattern or fingerprint unlock appears, so your phone stays just as secure. It never covers calls or alarms. Needs the Recent Apps helper from step 05."),
         Page("07", "Closing NEXUS & going back",
-            "• To use your normal home screen for a while: tap the gear in NEXUS and choose Close NEXUS. Open NEXUS from its icon to make it your home again.\n\n• To stop using NEXUS completely: Settings → Apps → Default apps → Home app, then choose your original launcher (the one your phone came with). Names can vary slightly by phone; searching Settings for \"Home app\" also works.",
+            "• To use your normal home screen for a while: open Settings (the gear) in NEXUS and choose Close NEXUS. Open NEXUS from its icon to make it your home again.\n\n• To stop using NEXUS completely: in the phone's Settings → Apps → Default apps → Home app, choose your original launcher (the one your phone came with). Names can vary slightly by phone; searching the phone's Settings for \"Home app\" also works.",
             listOf("Open Home app settings" to { actions.setHome() })),
         Page("08", "You're all set",
-            "You can see this guide again any time from ⚙ → Tutorial.\n\nEnjoy NEXUS.")
+            "You can see this guide again any time in Settings → Help → Tutorial.\n\nEnjoy NEXUS.")
     )
     private var page = 0
 

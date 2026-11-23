@@ -349,7 +349,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         })
         box.setOnClickListener {
             if (addMode) {
-                if (added) { android.widget.Toast.makeText(a, "${item.label} is already in NEXUS", android.widget.Toast.LENGTH_SHORT).show(); return@setOnClickListener }
+                if (added) { NexusUi.note(a, "${item.label} is already in NEXUS"); return@setOnClickListener }
                 sfx.tick()
                 if (!picked.add(item.pkg)) picked.remove(item.pkg)
                 updateBar(); refreshCell(item.pkg)
