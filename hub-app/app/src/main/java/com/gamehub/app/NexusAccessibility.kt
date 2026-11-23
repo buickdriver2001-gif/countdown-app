@@ -1223,6 +1223,21 @@ class NexusAccessibility : AccessibilityService() {
     private val veilRun = Runnable { safe { stepVeil() } }
     /** After the new screen is in place, before the fade lifts (the phone's slide is all but done by then). */
     private val VEIL_HOLD = 170L
+    /** Going home onto a picture of the home screen (see goHome), and when Android's own animation into it finished. */
+    private var veilHomePic = false
+    private var homeSettledAt = 0L
+    /** The longest the home screen's picture stays if Android never says its animation finished. */
+    private val HOME_PIC_MAX = 800L
+
+    /**
+     * Called by the home screen when Android has finished animating it into place: if NEXUS is showing its picture
+     * (going home), the real one takes over now, exactly where the picture is.
+     */
+    fun homeSettled() {
+        if (veilKind != FADE_HOME || !veilHomePic || homeSettledAt != 0L) return
+        homeSettledAt = SystemClock.uptimeMillis()
+        h.removeCallbacks(veilRun); h.post(veilRun)
+    }
 
     /**
      * Fades the NEXUS dark in over [fadeInMs] (or shows [picture] at once) for a screen change of [kind];
@@ -1243,6 +1258,7 @@ class NexusAccessibility : AccessibilityService() {
             v.animate().alpha(1f).setDuration(fadeInMs).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
         }
         veilKind = kind; veilAt = SystemClock.uptimeMillis(); veilSeenAt = 0L
+        veilHomePic = kind == FADE_HOME && picture != null; homeSettledAt = 0L
         veilFromWin = topAppWindow()
         armSafety(VEIL_MAX + 600, "screen change: fade lifted by the fallback")
         h.removeCallbacks(veilRun); h.postDelayed(veilRun, 40L)
@@ -1259,6 +1275,15 @@ class NexusAccessibility : AccessibilityService() {
         if (veilKind == 0) return
         val now = SystemClock.uptimeMillis()
         if (veilSeenAt == 0L) { val w = topAppWindow(); if (w != Int.MIN_VALUE && w != veilFromWin) veilSeenAt = now }
+        if (veilHomePic) {
+            // Going home onto its picture: the real home screen takes over only once Android's own zoom into it has
+            // finished (the home screen says so, see homeSettled), so the two never show at once; never later than a moment
+            when {
+                homeSettledAt != 0L || now - veilAt >= HOME_PIC_MAX -> liftVeil()
+                else -> h.postDelayed(veilRun, 40L)
+            }
+            return
+        }
         // If nothing changes (e.g. Back inside an app), it lifts almost at once
         val limit = when (veilKind) { FADE_BACK -> 200L; FADE_HOME -> 450L; FADE_RECENTS -> 800L; else -> VEIL_MAX }
         // (Recent Apps opens without the phone's slide, so its fade can lift almost at once)
@@ -1280,11 +1305,13 @@ class NexusAccessibility : AccessibilityService() {
         if (veilKind == 0) return
         val now = SystemClock.uptimeMillis()
         // The first few each time the helper starts are noted (how quickly screens change), so it can be tuned
-        if (veilsLogged < 3) {
+        if (veilsLogged < 6) {
             veilsLogged++
-            LockTrace.log(this, "screen change ($veilKind): " + (if (veilSeenAt != 0L) "in place after ${veilSeenAt - veilAt}ms, " else "") + "faded after ${now - veilAt}ms")
+            LockTrace.log(this, "screen change ($veilKind): " + (if (veilSeenAt != 0L) "in place after ${veilSeenAt - veilAt}ms, " else "") +
+                (if (homeSettledAt != 0L) "settled after ${homeSettledAt - veilAt}ms, " else if (veilHomePic) "not told it settled, " else "") +
+                "faded after ${now - veilAt}ms")
         }
-        veilKind = 0
+        veilKind = 0; veilHomePic = false
         h.removeCallbacks(veilRun)
         fadeCover()
         // The app now in front counts as opened (in case it never announced itself)

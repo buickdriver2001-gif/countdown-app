@@ -861,6 +861,12 @@ class MainActivity : Activity(), NexusUi.NavHost {
         leftForApp = true // brought back from one of the apps
     }
 
+    /** Android has finished animating this screen into place (e.g. after Home): NEXUS's picture of it can make way. */
+    override fun onEnterAnimationComplete() {
+        super.onEnterAnimationComplete()
+        NexusAccessibility.instance?.homeSettled()
+    }
+
     /** Android is short of memory while NEXUS is in the background: let go of the tile pictures (read again on return). */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
