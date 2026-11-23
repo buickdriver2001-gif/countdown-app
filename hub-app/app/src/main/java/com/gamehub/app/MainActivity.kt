@@ -14,7 +14,7 @@ import kotlin.math.exp
 import kotlin.math.min
 import kotlin.math.sin
 
-class MainActivity : Activity() {
+class MainActivity : Activity(), NexusUi.NavHost {
 
     private val builtIn = listOf(
         GameEntry("Zombie Dots", "com.zombiedots.app", Color.rgb(255, 80, 80), 0),
@@ -191,6 +191,10 @@ class MainActivity : Activity() {
             onBack = { sfx.tick(); @Suppress("DEPRECATION") onBackPressed() },
             onHome = { sfx.tick(); goHome(onScreen = true) },
             onRecent = { sfx.tick(); openSwitcher() })
+        // Above All apps / Add app too (which sits raised over the home screen), so the buttons work there as well;
+        // only the first-run guide covers them. (No shadow: it's a flat strip)
+        navBar.elevation = 35 * resources.displayMetrics.density
+        navBar.outlineProvider = null
         root.addView(navBar, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
             NavBar.heightPx(this), android.view.Gravity.BOTTOM))
         applyNavBar()
@@ -312,19 +316,12 @@ class MainActivity : Activity() {
         startActivity(Intent(this, SystemActivity::class.java), Transitions.rise(this, solidSplash = true))
     }
 
-    private fun openSwitcher() {
-        // Recent Apps in NEXUS's own layer: at once, nothing for Android to open
-        if (NexusAccessibility.showRecents()) return
-        // No apps open (and the helper is on, so the list is up to date): stay here and say so
-        if (Recents.serviceOn(this) && !SwitcherView.anyOpen(this)) {
-            HubView.noteNothingOpen()
-            @Suppress("DEPRECATION") hub.announceForAccessibility("No open apps")
-            return
-        }
-        NexusAccessibility.instance?.fadeFor(NexusAccessibility.FADE_RECENTS, null, 90L)
-        // (Under NEXUS's fade, with no slide of the phone's own: the cards glide in as the fade lifts)
-        startActivity(Intent(this, SwitcherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION), Transitions.app(window.decorView, solidSplash = true))
-    }
+    private fun openSwitcher() = openRecents(this)
+
+    // NEXUS's Back / Home / Recent buttons over a panel (see NexusUi.NavHost)
+    override fun navTick() { sfx.tick() }
+    override fun navHome() { sfx.tick(); goHome(onScreen = true) }
+    override fun navRecent() { sfx.tick(); openSwitcher() }
 
     /** NEXUS's own App info page (where "Allow restricted settings" lives, under ⋮). */
     private fun openAppInfo() {
@@ -896,6 +893,32 @@ class MainActivity : Activity() {
 
     companion object {
         private var home: java.lang.ref.WeakReference<MainActivity>? = null
+
+        /**
+         * Back to the plain home screen while NEXUS itself is on screen (Home in Recent Apps opened over NEXUS, or
+         * Recent with no apps open): panels, All apps and Phone settings close, as the Home button does.
+         */
+        fun showHome() {
+            SystemActivity.closeIfOpen()
+            val m = home?.get() ?: return
+            if (!m.isDestroyed) m.goHome(onScreen = false)
+        }
+
+        /** NEXUS Recent Apps, from a NEXUS screen (RECENT, or the Recent button). */
+        fun openRecents(a: Activity) {
+            // In NEXUS's own layer: at once, nothing for Android to open
+            if (NexusAccessibility.showRecents()) return
+            // No apps open (and the helper is on, so the list is up to date): the home screen, which says so
+            if (Recents.serviceOn(a) && !SwitcherView.anyOpen(a)) {
+                showHome()
+                HubView.noteNothingOpen()
+                @Suppress("DEPRECATION") a.window.decorView.announceForAccessibility("No open apps")
+                return
+            }
+            NexusAccessibility.instance?.fadeFor(NexusAccessibility.FADE_RECENTS, null, 90L)
+            // (Under NEXUS's fade, with no slide of the phone's own: the cards glide in as the fade lifts)
+            a.startActivity(Intent(a, SwitcherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION), Transitions.app(a.window.decorView, solidSplash = true))
+        }
         /** A still picture of the NEXUS home screen as it stands (null if not available), for the cover. */
         fun homeStill(): android.graphics.Bitmap? = try { home?.get()?.stillPicture() } catch (_: Throwable) { null }
 

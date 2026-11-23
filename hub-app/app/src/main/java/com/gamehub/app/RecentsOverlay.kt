@@ -307,7 +307,12 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     /** Recent Apps asked for with no apps open: the home screen (which says "No open apps" for a moment). */
     private fun nothingOpen() {
         HubView.noteNothingOpen()
-        if (svc.topAppPackage() == svc.packageName) { LockTrace.log(svc, "Recent Apps: no apps open (stayed on the home screen)"); return }
+        if (svc.topAppPackage() == svc.packageName) {
+            // Already in NEXUS: any panel, All apps or Phone settings closes, leaving the home screen
+            MainActivity.showHome()
+            LockTrace.log(svc, "Recent Apps: no apps open (stayed on the home screen)")
+            return
+        }
         LockTrace.log(svc, "Recent Apps: no apps open, so the home screen")
         svc.goHome()
     }
@@ -325,8 +330,9 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
             hide(false)
             return
         }
-        // Opened over the home screen and it's still right there: just fade away
-        if (openedOver == svc.packageName && svc.topAppPackage() == svc.packageName) { hide(true); return }
+        // Opened over NEXUS and it's still right there: just fade away, onto the plain home screen (any panel,
+        // All apps or Phone settings that was open underneath closes, as Home does)
+        if (openedOver == svc.packageName && svc.topAppPackage() == svc.packageName) { MainActivity.showHome(); hide(true); return }
         try {
             fromWin = svc.topAppWindowId()
             svc.startActivity(i)

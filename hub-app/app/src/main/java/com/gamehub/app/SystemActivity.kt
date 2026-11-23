@@ -49,6 +49,15 @@ import kotlin.math.sin
 /** NEXUS System: live diagnostics, device information, hardware tests and settings shortcuts. */
 class SystemActivity : Activity() {
 
+    companion object {
+        private var live: java.lang.ref.WeakReference<SystemActivity>? = null
+        /** Home pressed while this screen is open (e.g. in Recent Apps over it): it closes, as other screens do. */
+        fun closeIfOpen() {
+            val s = live?.get() ?: return
+            if (!s.isFinishing && !s.isDestroyed) { s.finish(); @Suppress("DEPRECATION") s.overridePendingTransition(0, R.anim.nexus_exit) }
+        }
+    }
+
     private val d by lazy { resources.displayMetrics.density }
     private val h = Handler(Looper.getMainLooper())
     private val values = HashMap<String, TextView>()
@@ -87,7 +96,26 @@ class SystemActivity : Activity() {
         col.addView(shortcuts())
 
         root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled = false; addView(col) })
-        setContentView(root)
+        // NEXUS's Back / Home / Recent buttons along the bottom, as on the home screen (hidden while a full-screen
+        // test is open, so they don't get in its way)
+        val order = NavBar.order(this)
+        if (order != "off") {
+            val outer = FrameLayout(this)
+            outer.addView(root)
+            val nav = NavBar(this,
+                onBack = { sfx.tick(); @Suppress("DEPRECATION") onBackPressed() },
+                onHome = { sfx.tick(); MainActivity.showHome() },
+                onRecent = { sfx.tick(); MainActivity.openRecents(this) })
+            outer.addView(nav, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, NavBar.heightPx(this), Gravity.BOTTOM))
+            col.setPadding(col.paddingLeft, col.paddingTop, col.paddingRight, col.paddingBottom + NavBar.heightPx(this))
+            val sync = Runnable { nav.visibility = if (root.childCount > 1) View.GONE else View.VISIBLE }
+            root.setOnHierarchyChangeListener(object : android.view.ViewGroup.OnHierarchyChangeListener {
+                override fun onChildViewAdded(parent: View?, child: View?) { root.post(sync) }
+                override fun onChildViewRemoved(parent: View?, child: View?) { root.post(sync) }
+            })
+            setContentView(outer)
+        } else setContentView(root)
+        live = java.lang.ref.WeakReference(this)
         if (Build.VERSION.SDK_INT >= 30) window.decorView.post {
             try {
                 window.insetsController?.hide(android.view.WindowInsets.Type.systemBars())
@@ -99,7 +127,7 @@ class SystemActivity : Activity() {
 
     override fun onResume() { super.onResume(); h.post(tick) }
     override fun onPause() { super.onPause(); h.removeCallbacks(tick); if (torchOn) setTorch(false) }
-    override fun onDestroy() { super.onDestroy(); sfx.release() }
+    override fun onDestroy() { super.onDestroy(); sfx.release(); if (live?.get() === this) live = null }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {

@@ -47,7 +47,11 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
     private val grid = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding((14 * d).toInt(), 0, (14 * d).toInt(), (40 * d).toInt()) }
 
     /** Room at the bottom for NEXUS's Back / Home / Recent buttons. */
-    fun setBottomInset(px: Int) { grid.setPadding((14 * d).toInt(), 0, (14 * d).toInt(), (40 * d).toInt() + px) }
+    fun setBottomInset(px: Int) {
+        grid.setPadding((14 * d).toInt(), 0, (14 * d).toInt(), (40 * d).toInt() + px)
+        // (The "Add N apps" bar floats just above the buttons)
+        (addBar.layoutParams as? LayoutParams)?.let { it.bottomMargin = (28 * d).toInt() + px; addBar.layoutParams = it }
+    }
     private val title = TextView(a)
     private val search = EditText(a)
     var isOpen = false

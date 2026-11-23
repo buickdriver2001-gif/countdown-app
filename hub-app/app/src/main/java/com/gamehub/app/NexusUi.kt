@@ -34,9 +34,20 @@ object NexusUi {
     class Option(val label: String, val primary: Boolean = false, val danger: Boolean = false, val action: () -> Unit)
 
     /**
+     * A NEXUS screen with NEXUS's own Back / Home / Recent buttons along the bottom: panels over it show the same
+     * buttons (working as they do on the screen itself) in place of the phone's own bar.
+     */
+    interface NavHost {
+        fun navTick()
+        fun navHome()
+        fun navRecent()
+    }
+
+    /**
      * A panel with a title, optional message, optional text field, and a column of options.
      * Returns the text field (if asked for) so the caller can read it in an option's action.
      */
+
     /** Told whenever panels open or close over an activity (true: one is open), e.g. so the home screen can show its crystals. */
     var onPanels: ((Activity, Boolean) -> Unit)? = null
 
@@ -88,15 +99,38 @@ object NexusUi {
         root.addView(CrystalBackdrop(a, if (switching) 1f else 0f) { dialog.cancel() },
             android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         val pw = minOf(a.resources.displayMetrics.widthPixels - (40 * d).toInt(), (420 * d).toInt())
+        // NEXUS's Back / Home / Recent buttons stay along the bottom, over the panel's backdrop
+        val host = a as? NavHost
+        val nav = if (host != null && android.os.Build.VERSION.SDK_INT >= 30 && NavBar.order(a) != "off") NavBar(a,
+            onBack = { host.navTick(); if (back != null) { dialog.dismiss(); back() } else dialog.cancel() },
+            onHome = { host.navHome() },
+            onRecent = { host.navRecent() }) else null
+        val navPx = if (nav != null) NavBar.heightPx(a) else 0
         root.addView(col, android.widget.FrameLayout.LayoutParams(pw, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply {
-            topMargin = (28 * d).toInt(); bottomMargin = (28 * d).toInt()
+            topMargin = (28 * d).toInt(); bottomMargin = (28 * d).toInt() + navPx
         })
+        if (nav != null && android.os.Build.VERSION.SDK_INT >= 30) {
+            root.addView(nav, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, navPx, Gravity.BOTTOM))
+            // (Out of the way while the keyboard is up, as the phone's own bar is)
+            root.viewTreeObserver.addOnGlobalLayoutListener {
+                val typing = try { root.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) == true } catch (_: Exception) { false }
+                val v = if (typing) View.GONE else View.VISIBLE
+                if (nav.visibility != v) nav.visibility = v
+            }
+        }
         dialog.setContentView(root)
         dialog.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
         dialog.window?.attributes?.windowAnimations = 0
         dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
             (if (field != null) WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE else 0))
+        // With NEXUS's buttons showing, the phone's own bars stay hidden (as on the screen underneath)
+        if (nav != null && android.os.Build.VERSION.SDK_INT >= 30) try {
+            dialog.window?.insetsController?.let {
+                it.hide(android.view.WindowInsets.Type.systemBars())
+                it.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } catch (_: Exception) {}
         // The panel itself comes in with a quick fade and a slight grow
         col.alpha = 0f; col.scaleX = 0.96f; col.scaleY = 0.96f
         col.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(if (switching) 120 else 180)
