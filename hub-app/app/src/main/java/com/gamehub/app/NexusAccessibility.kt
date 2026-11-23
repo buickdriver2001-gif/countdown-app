@@ -471,6 +471,8 @@ class NexusAccessibility : AccessibilityService() {
         var under = false
         /** Apps already pressed Close on (or found already gone). */
         val handled = HashSet<String>()
+        /** Times it looked again for the app cards (they can take a moment to appear). */
+        var cardWaits = 0
     }
     private var closeJob: CloseJob? = null
 
@@ -609,7 +611,34 @@ class NexusAccessibility : AccessibilityService() {
     private fun recentsRoot(j: CloseJob): AccessibilityNodeInfo? {
         val a = try { rootInActiveWindow } catch (_: Throwable) { null }
         if (a != null && a.packageName?.toString() == j.recentsPkg) return a
-        return try { windows.firstNotNullOfOrNull { w -> w.root?.takeIf { it.packageName?.toString() == j.recentsPkg } } } catch (_: Throwable) { null }
+        return try {
+            // On newer phones the same app also draws the button bar along the bottom: the recent-apps screen is its
+            // app window (or, failing that, its biggest one), never the button bar
+            val mine = windows.mapNotNull { w -> w.root?.takeIf { it.packageName?.toString() == j.recentsPkg }?.let { w to it } }
+            val r = android.graphics.Rect()
+            (mine.firstOrNull { it.first.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }
+                ?: mine.maxByOrNull { it.first.getBoundsInScreen(r); r.width().toLong() * r.height() })?.second
+        } catch (_: Throwable) { null }
+    }
+
+    /** For the log when no app cards are found: what NEXUS was looking at (its size, and the kinds of buttons on it). */
+    private fun describeRecents(root: AccessibilityNodeInfo): String {
+        val r = android.graphics.Rect(); root.getBoundsInScreen(r)
+        val acts = LinkedHashSet<String>()
+        val q = ArrayDeque<AccessibilityNodeInfo>(); q.add(root)
+        var seen = 0
+        while (q.isNotEmpty() && seen < 3000) {
+            val n = q.removeFirst(); seen++
+            for (x in n.actionList) if (acts.size < 12) acts.add(x.label?.toString()?.trim()?.lowercase() ?: when (x.id) {
+                AccessibilityNodeInfo.ACTION_CLICK -> "tap"; AccessibilityNodeInfo.ACTION_LONG_CLICK -> "hold"
+                AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> "scroll"
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_DISMISS.id -> "dismiss"
+                else -> continue
+            })
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        val wins = try { windows.count { it.root?.packageName?.toString() == root.packageName?.toString() } } catch (_: Throwable) { 0 }
+        return "looked at ${r.width()}x${r.height()} ($seen items, $wins of its windows), buttons: " + (if (acts.isEmpty()) "none" else acts.joinToString())
     }
 
     private fun runCloses(j: CloseJob) {
@@ -623,7 +652,10 @@ class NexusAccessibility : AccessibilityService() {
             goHomeAfterClose(j, "couldn't look at the phone's recent apps (helper may need turning off and on)")
             return
         }
-        LockTrace.log(this, "  phone's recent apps: " + cardNames(root).let { if (it.isEmpty()) "no app cards found" else "cards " + it.joinToString() })
+        val names = cardNames(root)
+        // Its app cards can take a moment to appear after it opens: look again a few times first
+        if (names.isEmpty() && j.cardWaits < 8) { j.cardWaits++; h.postDelayed({ safe { runCloses(j) } }, 80); return }
+        LockTrace.log(this, "  phone's recent apps: " + if (names.isEmpty()) "no app cards found (" + describeRecents(root) + ")" else "cards " + names.joinToString())
         if (j.all || j.clearRest) {
             // Clear all if the button can be pressed; then Close on any cards still there, one by one
             val clear = findByWords(root, setOf("clear all"))
