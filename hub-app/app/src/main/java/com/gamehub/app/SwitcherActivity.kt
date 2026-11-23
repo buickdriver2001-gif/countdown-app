@@ -638,25 +638,9 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
                         val card = liftCard?.takeIf { it in l }
                         liftCard = null
                         if (card != null) {
-                            val at = l.indexOf(card)
-                            if (card.lift > height * 0.18f || vy < -1500f) {
-                                // Swiped away: it flies off the top (keeping your swipe's speed) and closes
-                                card.flying = true
-                                card.flyV = max(1600f * d, -vy)
-                                sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
-                                // Nothing else happens here: the card just goes. Apps other than NEXUS's own are closed
-                                // fully on the way out of Recent Apps (quietly, as the home screen comes up)
-                                // The last one gone: home, once it's flown off (as the phone's own recent apps does), or
-                                // once the note about closing apps (shown the first time only) is closed with OK
-                                val last = live().isEmpty()
-                                val home: (() -> Unit)? = if (last) ({ if (!a.gone()) a.goNexus() }) else null
-                                val explained = !a.closeApp(card.pkg) && a.explainOnce(home)
-                                // A card to the left of the middle one went: the middle one stays where it is (the cards
-                                // on the left slide over to fill the gap)
-                                if (at < pos.roundToInt()) { pos -= 1f; if (targetIdx > 0) targetIdx-- }
-                                pos = pos.coerceIn(0f, (live().size - 1).coerceAtLeast(0).toFloat())
-                                if (last) { emptyHandled = true; if (!explained) postDelayed({ if (!a.gone()) a.goNexus() }, 320) }
-                            } else a.closeCancelled()
+                            // Swiped away: it flies off the top (keeping your swipe's speed) and closes
+                            if (card.lift > height * 0.18f || vy < -1500f) dismiss(card, max(1600f * d, -vy))
+                            else a.closeCancelled()
                         } else a.closeCancelled()
                     }
                     else -> tap(e.x, e.y, l)
@@ -689,6 +673,213 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
         val card = cardAt(x, y, l) ?: return
         sfx.confirm(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
         openWithZoom(card.pkg)
+    }
+
+    /**
+     * A card goes (swiped up, or "Close app" with TalkBack): it flies off the top at [speed] and its app closes.
+     * Apps other than NEXUS's own are closed fully underneath Recent Apps (see RecentsOverlay).
+     */
+    private fun dismiss(card: Card, speed: Float) {
+        val at = live().indexOf(card)
+        if (at < 0) return
+        card.flying = true
+        card.flyV = speed
+        sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+        // The last one gone: home, once it's flown off (as the phone's own recent apps does), or once the note about
+        // closing apps (shown the first time only) is closed with OK
+        val last = live().isEmpty()
+        val home: (() -> Unit)? = if (last) ({ if (!a.gone()) a.goNexus() }) else null
+        val explained = !a.closeApp(card.pkg) && a.explainOnce(home)
+        // A card to the left of the middle one went: the middle one stays where it is (the cards on the left slide
+        // over to fill the gap)
+        if (at < pos.roundToInt()) { pos -= 1f; if (targetIdx > 0) targetIdx-- }
+        pos = pos.coerceIn(0f, (live().size - 1).coerceAtLeast(0).toFloat())
+        if (last) { emptyHandled = true; if (!explained) postDelayed({ if (!a.gone()) a.goNexus() }, 320) }
+        a11yChanged()
+    }
+
+    // ------------------------------------------------------------------ TalkBack
+    // Recent Apps is drawn by NEXUS itself, so it describes its cards and buttons to TalkBack: each card is read out
+    // (its app and when it was used), opens with a double tap, and has a "Close app" action; swiping through the
+    // cards brings each one to the middle. (With TalkBack on, this is the Recent Apps screen NEXUS uses.)
+
+    private val A11Y_CLEAR = 10_000
+    private val A11Y_PHONE = 10_001
+    private val A11Y_HELPER = 10_002
+    private val A11Y_RESTRICT = 10_003
+    private val A11Y_NONE = Int.MIN_VALUE
+    private var a11yFocused = A11Y_NONE
+    private var a11yHovered = A11Y_NONE
+    private val a11yLoc = IntArray(2)
+    private val a11yR = android.graphics.Rect()
+
+    private fun a11yOn(): Boolean = context.getSystemService(android.view.accessibility.AccessibilityManager::class.java)?.isEnabled == true
+
+    private fun a11yChanged() {
+        if (a11yOn()) sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+    }
+
+    private fun a11yIds(): List<Int> {
+        val out = ArrayList<Int>()
+        val l = live()
+        for (i in l.indices) if (!l[i].rect.isEmpty) out.add(i)
+        if (l.isNotEmpty() && !clearRect.isEmpty) out.add(A11Y_CLEAR)
+        if (!phoneRect.isEmpty) out.add(A11Y_PHONE)
+        if (!helperRect.isEmpty) out.add(A11Y_HELPER)
+        if (!restrictRect.isEmpty) out.add(A11Y_RESTRICT)
+        return out
+    }
+
+    private fun a11yBounds(id: Int): RectF? = when (id) {
+        A11Y_CLEAR -> clearRect; A11Y_PHONE -> phoneRect; A11Y_HELPER -> helperRect; A11Y_RESTRICT -> restrictRect
+        else -> live().getOrNull(id)?.rect
+    }?.takeIf { !it.isEmpty }
+
+    /** How long ago, said out loud ("5 minutes ago" rather than "5m ago"). */
+    private fun agoSpoken(ms: Long): String {
+        val s = (System.currentTimeMillis() - ms) / 1000
+        fun n(v: Long, unit: String) = "$v $unit" + (if (v == 1L) "" else "s") + " ago"
+        return when { s < 60 -> "just now"; s < 3600 -> n(s / 60, "minute"); s < 86400 -> n(s / 3600, "hour"); else -> n(s / 86400, "day") }
+    }
+
+    private fun a11yLabel(id: Int): String = when (id) {
+        A11Y_CLEAR -> "Clear all"
+        A11Y_PHONE -> "Fully close apps in the phone's recent apps"
+        A11Y_HELPER -> "Turn on helper"
+        A11Y_RESTRICT -> "Allow restricted settings"
+        else -> live().getOrNull(id)?.let { "${it.label}, used ${agoSpoken(it.used)}" } ?: ""
+    }
+
+    private fun a11yClick(id: Int): Boolean {
+        val l = live().toList()
+        when (id) {
+            A11Y_CLEAR, A11Y_PHONE, A11Y_HELPER, A11Y_RESTRICT -> { val r = a11yBounds(id) ?: return false; tap(r.centerX(), r.centerY(), l) }
+            else -> { val c = l.getOrNull(id) ?: return false; sfx.confirm(); openWithZoom(c.pkg) }
+        }
+        return true
+    }
+
+    private fun a11yAt(x: Float, y: Float): Int {
+        val l = live()
+        cardAt(x, y, l)?.let { return l.indexOf(it) }
+        for (id in listOf(A11Y_CLEAR, A11Y_PHONE, A11Y_HELPER, A11Y_RESTRICT)) if (a11yBounds(id)?.contains(x, y) == true && id in a11yIds()) return id
+        return A11Y_NONE
+    }
+
+    private fun sendA11y(id: Int, type: Int) {
+        if (!a11yOn()) return
+        @Suppress("DEPRECATION") val ev = android.view.accessibility.AccessibilityEvent.obtain(type)
+        ev.packageName = context.packageName
+        ev.className = android.widget.Button::class.java.name
+        ev.setSource(this, id)
+        ev.contentDescription = a11yLabel(id)
+        parent?.requestSendAccessibilityEvent(this, ev)
+    }
+
+    private val a11yProvider = object : android.view.accessibility.AccessibilityNodeProvider() {
+        override fun createAccessibilityNodeInfo(id: Int): android.view.accessibility.AccessibilityNodeInfo? {
+            if (id == View.NO_ID) {
+                @Suppress("DEPRECATION") val info = android.view.accessibility.AccessibilityNodeInfo.obtain(this@SwitcherView)
+                onInitializeAccessibilityNodeInfo(info)
+                info.contentDescription = "Recent apps"
+                for (v in a11yIds()) info.addChild(this@SwitcherView, v)
+                if (live().size > 1) {
+                    info.isScrollable = true
+                    info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD)
+                    info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD)
+                }
+                return info
+            }
+            val r = a11yBounds(id) ?: return null
+            @Suppress("DEPRECATION") val info = android.view.accessibility.AccessibilityNodeInfo.obtain(this@SwitcherView, id)
+            info.packageName = context.packageName
+            info.className = android.widget.Button::class.java.name
+            info.setParent(this@SwitcherView)
+            info.contentDescription = a11yLabel(id)
+            r.roundOut(a11yR)
+            @Suppress("DEPRECATION") info.setBoundsInParent(a11yR)
+            getLocationOnScreen(a11yLoc)
+            a11yR.offset(a11yLoc[0], a11yLoc[1])
+            info.setBoundsInScreen(a11yR)
+            info.isVisibleToUser = true
+            info.isEnabled = true; info.isFocusable = true; info.isClickable = true
+            info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
+            if (id < A11Y_CLEAR) {
+                info.isDismissable = true
+                info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction(
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_DISMISS, "Close app"))
+            }
+            if (a11yFocused == id) {
+                info.isAccessibilityFocused = true
+                info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS)
+            } else info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
+            return info
+        }
+
+        override fun performAction(id: Int, action: Int, args: android.os.Bundle?): Boolean {
+            if (id == View.NO_ID) {
+                val l = live()
+                return when (action) {
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> {
+                        val c = pos.roundToInt(); if (c >= l.size - 1) false else { targetIdx = c + 1; invalidate(); true }
+                    }
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> {
+                        val c = pos.roundToInt(); if (c <= 0) false else { targetIdx = c - 1; invalidate(); true }
+                    }
+                    else -> performAccessibilityAction(action, args)
+                }
+            }
+            return when (action) {
+                android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK -> a11yClick(id)
+                android.view.accessibility.AccessibilityNodeInfo.ACTION_DISMISS -> {
+                    val c = live().getOrNull(id) ?: return false
+                    if (opening != null) return false
+                    dismiss(c, 1600f * d); true
+                }
+                android.view.accessibility.AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS -> {
+                    if (a11yFocused != id) {
+                        val old = a11yFocused
+                        a11yFocused = id
+                        // A card beside the middle one glides into the middle as it's read out
+                        if (id < A11Y_CLEAR && id in live().indices) { targetIdx = id; invalidate() }
+                        if (old != A11Y_NONE) sendA11y(old, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
+                        sendA11y(id, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED)
+                    }
+                    true
+                }
+                android.view.accessibility.AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS -> {
+                    if (a11yFocused == id) { a11yFocused = A11Y_NONE; sendA11y(id, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED) }
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    override fun getAccessibilityNodeProvider(): android.view.accessibility.AccessibilityNodeProvider = a11yProvider
+
+    /** TalkBack's touch exploration: say what's under the finger. */
+    override fun dispatchHoverEvent(e: MotionEvent): Boolean {
+        val am = context.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+        if (am == null || !am.isEnabled || !am.isTouchExplorationEnabled) return super.dispatchHoverEvent(e)
+        when (e.actionMasked) {
+            MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> {
+                val id = a11yAt(e.x, e.y)
+                if (id != a11yHovered) {
+                    val old = a11yHovered
+                    a11yHovered = id
+                    if (id != A11Y_NONE) sendA11y(id, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_HOVER_ENTER)
+                    if (old != A11Y_NONE) sendA11y(old, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_HOVER_EXIT)
+                }
+                return id != A11Y_NONE
+            }
+            MotionEvent.ACTION_HOVER_EXIT -> {
+                if (a11yHovered != A11Y_NONE) sendA11y(a11yHovered, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_HOVER_EXIT)
+                a11yHovered = A11Y_NONE
+                return true
+            }
+        }
+        return super.dispatchHoverEvent(e)
     }
 
     /** The card at (x, y): the front-most one where they overlap (the middle card is in front of those beside it). */
