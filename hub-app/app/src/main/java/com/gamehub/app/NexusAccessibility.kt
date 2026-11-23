@@ -1235,7 +1235,8 @@ class NexusAccessibility : AccessibilityService() {
         ensureCover(force = true)
         val v = cover ?: return false
         coverToken++
-        if (picture != null) v.showStill(picture) else if (kind == FADE_RECENTS) v.showRecents(null) else v.showVeil()
+        if (picture != null) { if (kind == FADE_HOME) v.showHome(picture) else v.showStill(picture) }
+        else if (kind == FADE_RECENTS) v.showRecents(null) else v.showVeil()
         setCover(true)
         if (fadeInMs > 0) {
             v.alpha = 0f
@@ -1548,8 +1549,24 @@ class NexusAccessibility : AccessibilityService() {
 
     /** To the home screen, under NEXUS's quick fade (as the Home button does). */
     fun goHome() {
-        fadeFor(FADE_HOME, null, 90L)
+        // The app cross-fades straight into the home screen (a picture of it, until the real one is in place)
+        // instead of dipping into the dark first
+        val pic = homePicture()
+        fadeFor(FADE_HOME, pic, if (pic != null) 150L else 90L)
         performGlobalAction(GLOBAL_ACTION_HOME)
+    }
+
+    /**
+     * A picture of the NEXUS home screen as it's about to appear, to cross-fade into when going home. Only when Home
+     * leads to NEXUS, with the screen upright (NEXUS's home is), and when it matches the screen exactly.
+     */
+    fun homePicture(): Bitmap? {
+        if (!HomeMode.isOn(this) || !HomeMode.isDefault(this)) return null
+        if (resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_PORTRAIT) return null
+        val b = MainActivity.homeStill() ?: return null
+        val cv = cover
+        if (cv != null && cv.width > 0 && (kotlin.math.abs(b.width - cv.width) > 2 || kotlin.math.abs(b.height - cv.height) > 2)) return null
+        return b
     }
 
     /** NEXUS's Back button over an app: the quick fade (not while typing: that Back only closes the keyboard). */

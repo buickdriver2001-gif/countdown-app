@@ -78,6 +78,9 @@ class CoverView(c: Context) : FrameLayout(c) {
 
     fun showVeil() { showBlack(); veil = true; back.invalidate() }
 
+    /** Going home from an app: a still picture of the NEXUS home screen to cross-fade into (the real one takes over). */
+    fun showHome(b: Bitmap) { showBlack(); still = b; back.invalidate() }
+
     /** Words shown on the backdrop (while NEXUS closes apps), or null. */
     private var label: String? = null
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
