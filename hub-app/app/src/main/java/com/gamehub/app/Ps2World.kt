@@ -181,6 +181,12 @@ class Ps2World(context: Context) {
             c.drawBitmap(glowBmp, null, glowDst, floorGlow)
         }
 
+        // The balls of light, mirrored faintly in the glassy floor (before the towers, which stand in front of them)
+        if (quality > 0) for (o in orbs) drawReflection(c, o, dim * intro)
+
+        // Now and then a band of light sweeps slowly across the field, and the glass catches it as it passes
+        val sweepAt = (t * 0.5f) % 26f - 13f
+
         // Towers, the far ones first
         for (i in towers.indices) { val tw = towers[i]; val dx = tw.x - ex; val dz = tw.z - ez; dist[i] = dx * dx + dz * dz }
         for (i in 1 until order.size) { // insertion sort, far to near (no new objects)
@@ -194,6 +200,8 @@ class Ps2World(context: Context) {
             val built = kotlin.math.ceil(grown * tw.cubes).toInt()
             if (built <= 0) continue
             vn = 0; ln = 0
+            val p = tw.x * 0.8f + tw.z * 0.6f - sweepAt
+            glint = kotlin.math.exp(-p * p / 1.1f)
             var f = 1f
             for (k in 0 until built) f = addCube(tw, k, dim)
             flush(c, f, dim)
@@ -315,6 +323,34 @@ class Ps2World(context: Context) {
         drawHead(c, o, a)
     }
 
+    /** How much the sweep of light is on the tower being drawn (0..1). */
+    private var glint = 0f
+
+    /**
+     * A ball of light's reflection in the floor: its trail and glow mirrored under the floor, faint and squashed
+     * (the floor is dark glass seen at an angle).
+     */
+    private fun drawReflection(c: Canvas, o: Orb, a0: Float) {
+        val a = a0 * 0.2f
+        if (a <= 0.01f || o.n < 2) return
+        if (quality > 1 && android.os.Build.VERSION.SDK_INT >= 29) {
+            val n0 = o.n
+            var m = 0
+            for (i in 0 until n0) {
+                val idx = (o.head - n0 + i + TRAIL * 2) % TRAIL
+                if (!project(o.tx[idx], -o.ty[idx], o.tz[idx])) { m = 0; continue }
+                rpx[m] = px; rpy[m] = py; rps[m] = min(1.15f, 14f / pz); m++
+            }
+            if (m >= 2) ribbon(c, m, o.color, 0.4f, 7f, a, 1.4f)
+        }
+        if (!project(o.x, -o.y, o.z)) return
+        val s = min(1.15f, 14f / pz)
+        val r = 34 * d * s
+        o.glow.alpha = (255 * a * 1.4f).toInt().coerceIn(0, 255)
+        glowDst.set(px - r, py - r * 0.45f, px + r, py + r * 0.45f)
+        c.drawBitmap(glowBmp, null, glowDst, o.glow)
+    }
+
     /** The ball itself: a soft glow in its colour with a white-hot middle. */
     private fun drawHead(c: Canvas, o: Orb, a: Float) {
         if (!project(o.x, o.y, o.z)) return
@@ -341,7 +377,8 @@ class Ps2World(context: Context) {
         val f = fog(pz) * dim
         // Now and then a block glows brighter
         val tw0 = max(0f, sin(t * 1.1f + tw.phase * 3f + k * 1.7f)).let { it * it * it * it * it }
-        val lift = 1f + tw0 * 0.9f
+        // (and brighter still while the sweep of light passes, the top blocks most)
+        val lift = 1f + tw0 * 0.9f + glint * (0.55f + 0.08f * k)
         if (vtx.size < (vn + 40) * 2) { vtx = vtx.copyOf(vtx.size * 2); vcol = vcol.copyOf(vcol.size * 2) }
         if (lines.size < ln + 80) lines = lines.copyOf(lines.size * 2)
         if (ey > yb + CUBE) face(4, 5, 7, 6, Color.argb((125 * f * lift).toInt().coerceIn(0, 255), 215, 221, 235))
@@ -380,7 +417,7 @@ class Ps2World(context: Context) {
         }
         if (ln > 0 && (quality > 0 || f > 0.5f)) {
             edge.strokeWidth = max(0.6f, 1.1f * d * f)
-            edge.color = Color.argb((185 * f).toInt().coerceIn(0, 255), 220, 227, 240)
+            edge.color = Color.argb((185 * f * (1f + glint * 0.7f)).toInt().coerceIn(0, 255), 220, 227, 240)
             c.drawLines(lines, 0, ln, edge)
         }
     }

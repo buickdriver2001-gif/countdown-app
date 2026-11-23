@@ -587,6 +587,7 @@ class LockView(private val a: LockActivity) : View(a) {
 
     /** The world behind the lock screen (the same as behind the home screen). */
     private val world = Ps2World(context)
+    private val crystals by lazy { Crystals(context) }
 
     private fun drawFrame(c: Canvas) {
         val now = System.nanoTime()
@@ -682,7 +683,9 @@ class LockView(private val a: LockActivity) : View(a) {
         val ease = min(1f, dt * 6f)
         cubeY += (cubeTarget - cubeY) * ease; cubeK += (kTarget - cubeK) * ease
 
-        // (The world behind the lock screen takes the place of the glass cube)
+        // In the open space between the clock (and notifications) and the handle: the slow ring of glass crystals,
+        // as on the home screen (lower and a little smaller when there are notifications)
+        crystals.draw(c, width, height, dt, fade * 0.9f, w / 2f, cubeY + lift * 0.3f, w * 0.30f * cubeK, h * 0.04f * cubeK, 0.72f * cubeK)
 
         // Swipe-up handle: chevrons that breathe, and a glow line
         val by = h - 70 * d + lift

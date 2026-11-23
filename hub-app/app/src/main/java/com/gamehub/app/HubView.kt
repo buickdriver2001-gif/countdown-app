@@ -1548,6 +1548,16 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             c.drawRect(-1f, r.bottom - 4 * d, 1f, r.bottom - 3 * d, fill)
             fill.shader = null
             c.restore()
+            // Now and then a spark of light runs along those lines (along the top one, and back along the bottom)
+            if (k > 0.6f && launching < 0f) {
+                val run = (t * 0.32f) % 1.7f
+                if (run < 1f) {
+                    val e = run * run * (3f - 2f * run)
+                    val ka = sin(run * Math.PI.toFloat()) * k * a
+                    glow(c, r.centerX() - half + 2 * half * e, r.top + 3.5f * d, 10 * d, (190 * ka).toInt())
+                    glow(c, r.centerX() + half - 2 * half * e, r.bottom - 3.5f * d, 10 * d, (190 * ka).toInt())
+                }
+            }
         }
         val cd = countdown
         val sub = when {
@@ -1587,7 +1597,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         c.restore()
     }
 
-    /** The last line of the PS2-style menu: add an app. */
     private val tmpRect = RectF()
     private val shotDst = RectF()
     private val shotPaint = Paint(Paint.FILTER_BITMAP_FLAG)
