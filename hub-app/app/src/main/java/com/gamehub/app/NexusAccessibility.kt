@@ -17,9 +17,10 @@ import java.io.File
 
 /**
  * NEXUS's helper service (turned on by the user in Accessibility settings). It:
- *  - keeps a small screenshot of the last screen of each app you use (stored only inside NEXUS)
- *  - notices when the phone's recent-apps screen opens (the square button) and shows NEXUS Recent Apps instead
- *  - if switched on, shows NEXUS's Back / Home / Recent buttons in place of the phone's own while you use apps
+ *  - notices which apps you open, so they appear in NEXUS Recent Apps (it never takes pictures of the screen)
+ *  - shows NEXUS Recent Apps (its own layer) for the square button and NEXUS's Recent button
+ *  - fully closes apps you swipe away there, by pressing Close in the phone's own recent apps behind it
+ *  - shows the NEXUS lock screen (if switched on) and NEXUS's Back / Home / Recent buttons in your apps
  */
 class NexusAccessibility : AccessibilityService() {
 

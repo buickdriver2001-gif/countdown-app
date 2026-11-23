@@ -112,7 +112,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; typeface = Typeface.create("sans-serif-light", Typeface.NORMAL) }
     private val path = Path()
     private val rect = RectF()
-    private val clock = SimpleDateFormat("h:mm a", Locale.getDefault())
+    /** The clock follows the phone's 12 / 24-hour setting. */
+    private var clock = SimpleDateFormat("h:mm a", Locale.getDefault())
+    private var clock24: Boolean? = null
 
     private val rows = ArrayList<RectF>()
     /** Reused every frame: the tiles' touch areas, and the cached tile layout. */
@@ -146,6 +148,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val now = System.currentTimeMillis()
         if (now / 1000 == clockSec) return
         clockSec = now / 1000
+        val h24 = try { android.text.format.DateFormat.is24HourFormat(context) } catch (_: Exception) { false }
+        if (h24 != clock24) { clock24 = h24; clock = SimpleDateFormat(if (h24) "H:mm" else "h:mm a", Locale.getDefault()) }
         val date = Date(now)
         dateText = dateFmt.format(date).uppercase(); clockText = clock.format(date)
     }

@@ -346,7 +346,9 @@ class LockView(private val a: LockActivity) : View(a) {
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textAlign = Paint.Align.CENTER; typeface = Typeface.create("sans-serif-thin", Typeface.NORMAL) }
-    private val timeFmt = SimpleDateFormat("h:mm", Locale.getDefault())
+    /** The clock follows the phone's 12 / 24-hour setting. */
+    private var timeFmt = SimpleDateFormat("h:mm", Locale.getDefault())
+    private var time24: Boolean? = null
     private val dateFmt = SimpleDateFormat("EEEE, MMMM d", Locale.getDefault())
     private val thin: Typeface = Typeface.create("sans-serif-thin", Typeface.NORMAL)
     private val light: Typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
@@ -360,6 +362,8 @@ class LockView(private val a: LockActivity) : View(a) {
         val now = System.currentTimeMillis()
         if (now / 1000 == clockSec) return
         clockSec = now / 1000
+        val h24 = try { android.text.format.DateFormat.is24HourFormat(context) } catch (_: Exception) { false }
+        if (h24 != time24) { time24 = h24; timeFmt = SimpleDateFormat(if (h24) "H:mm" else "h:mm", Locale.getDefault()) }
         val date = Date(now)
         clockText = timeFmt.format(date); dateText = dateFmt.format(date).uppercase()
     }
