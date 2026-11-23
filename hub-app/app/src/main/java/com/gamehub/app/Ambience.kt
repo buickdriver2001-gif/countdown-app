@@ -41,8 +41,20 @@ class Ambience(private val c: Context) {
         wanted = true
         h.removeCallbacks(retry)
         if (!enabled(c)) return
-        // Something else sounding (music, a video, a call): try again in a few seconds
-        if (!quietNow()) { h.postDelayed(retry, RETRY_MS); return }
+        val t0 = track
+        // Back on the home screen while it's still fading out from leaving: just fade it back in. (Asking Android whether
+        // anything is playing would count this sound itself and wrongly hold it back.)
+        if (t0 != null && !steppedAside && isPlaying(t0)) {
+            others = otherPlayers(); listen(true); tries = 0
+            fadeTo(gain()); note("playing")
+            return
+        }
+        // Something else sounding (music, a video, a call, or the app you've just left finishing its sound): look again
+        // soon, then less often
+        if (!quietNow()) {
+            note("waiting: other sound playing")
+            h.postDelayed(retry, retryDelay()); return
+        }
         val data = pcm
         if (data == null) {
             if (!building) {
@@ -57,8 +69,9 @@ class Ambience(private val c: Context) {
         val t = track ?: make(data)?.also { track = it } ?: return
         others = otherPlayers()
         listen(true)
+        steppedAside = false; tries = 0
         try { if (t.playState != AudioTrack.PLAYSTATE_PLAYING) t.play() } catch (_: Throwable) { return }
-        fadeTo(gain())
+        fadeTo(gain()); note("playing")
     }
 
     /** Leaving the home screen: fade out (and stop). */
@@ -66,8 +79,21 @@ class Ambience(private val c: Context) {
         wanted = false
         h.removeCallbacks(retry)
         listen(false)
+        steppedAside = false; tries = 0
         fadeTo(0f)
     }
+
+    /** It faded out for another sound (not because the home screen was left): it comes back once that's over. */
+    private var steppedAside = false
+    /** Times it has looked for quiet since it last played: soon at first, then less often. */
+    private var tries = 0
+    private fun retryDelay(): Long { val d = when (tries) { 0 -> 700L; 1 -> 1500L; 2 -> 3000L; else -> RETRY_MS }; tries++; return d }
+
+    private fun isPlaying(t: AudioTrack): Boolean = try { t.playState == AudioTrack.PLAYSTATE_PLAYING } catch (_: Throwable) { false }
+
+    /** What it last did, for "Report a problem" (each change once, not every look). */
+    private var lastNote = ""
+    private fun note(what: String) { if (what != lastNote) { lastNote = what; try { LockTrace.log(c, "background sound: $what") } catch (_: Throwable) {} } }
 
     /** Stops at once and lets go of the sound. */
     fun release() {
@@ -112,9 +138,12 @@ class Ambience(private val c: Context) {
     private val watcher = object : AudioManager.AudioPlaybackCallback() {
         override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>?) {
             val n = configs?.count { quietFor(it) } ?: 0
-            // Something else started: step aside, and come back once it's quiet again
-            if (n > others) { listen(false); fadeTo(0f); h.removeCallbacks(retry); h.postDelayed(retry, RETRY_MS) }
-            else others = n
+            // Something else may have started: step aside, and look again as soon as this sound has faded out (then
+            // Android can tell whether anything else is really playing; if not, it comes straight back)
+            if (n > others) {
+                listen(false); steppedAside = true; tries = 0; fadeTo(0f); note("stepped aside: another sound started")
+                h.removeCallbacks(retry); h.postDelayed(retry, 900L)
+            } else others = n
         }
     }
 
