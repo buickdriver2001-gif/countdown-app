@@ -213,6 +213,13 @@ class SwitcherActivity : Activity(), SwitcherHost {
 class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.ctx) {
     private val d = resources.displayMetrics.density
 
+    companion object {
+        /** Whether Recent Apps would have any app to show (one that's still on the phone and can be opened). */
+        fun anyOpen(c: Context): Boolean = Recents.list(c).any { (pkg, _) ->
+            c.packageManager.getLaunchIntentForPackage(pkg) != null && AppCache.get(c, pkg) != null
+        }
+    }
+
     private class Card(val pkg: String, val label: String, val icon: Drawable?, var shot: Bitmap?, val used: Long) {
         var shotFade = 1f
         var lift = 0f      // swipe-up offset (removing)
@@ -223,6 +230,8 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
         val rect = RectF() // where it was last drawn
     }
     private var cards = ArrayList<Card>()
+    /** Already on the way home because no apps are left here. */
+    private var emptyHandled = false
 
     private var pos = 0f          // carousel position (card index, fractional)
     /** Room at the bottom for the Back / Home / Recent buttons. */
@@ -275,6 +284,7 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
             list.add(Card(pkg, info.label, info.icon, null, used))
         }
         cards = list
+        emptyHandled = false
         pos = 0f; vel = 0f; targetIdx = 0; enter = if (a.zoomHandover) 1f else 0f
         opening = null; opened = false
         // The first card's art straight away (it's the one in the middle, and the one the cover hands over to)
@@ -368,6 +378,13 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
         }
         if (live.isEmpty() && cards.none { it.flying && !it.gone }) {
             val on = Recents.serviceOn(a.ctx)
+            // No apps open (none to begin with, or the last ones can't be opened any more): the home screen,
+            // as after closing the last one. (With the helper off, this screen says how to turn it on instead.)
+            if (on && !emptyHandled && opening == null && !leavingOut && !a.gone()) {
+                emptyHandled = true
+                if (cards.isEmpty()) HubView.noteNothingOpen()
+                post { if (!a.gone()) a.goNexus() }
+            }
             text.textSize = 16 * d; text.letterSpacing = 0.05f; text.color = Color.argb(220, 200, 220, 250)
             c.drawText(if (on) "No recent apps yet" else "The NEXUS helper is off", w / 2, h * 0.36f, text)
             text.textSize = 12.5f * d; text.color = Color.argb(170, 170, 195, 235)
@@ -614,10 +631,13 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
                                 sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
                                 // Nothing else happens here: the card just goes. Apps other than NEXUS's own are closed
                                 // fully on the way out of Recent Apps (quietly, as the home screen comes up)
-                                val explained = !a.closeApp(card.pkg) && a.explainOnce()
+                                // The last one gone: home, once it's flown off (as the phone's own recent apps does), or
+                                // once the note about closing apps (shown the first time only) is closed with OK
+                                val last = live().isEmpty()
+                                val home: (() -> Unit)? = if (last) ({ if (!a.gone()) a.goNexus() }) else null
+                                val explained = !a.closeApp(card.pkg) && a.explainOnce(home)
                                 pos = pos.coerceAtMost((live().size - 1).coerceAtLeast(0).toFloat())
-                                // The last one gone: home, once it's flown off (as the phone's own recent apps does)
-                                if (live().isEmpty() && !explained) postDelayed({ if (!a.gone()) a.goNexus() }, 320)
+                                if (last) { emptyHandled = true; if (!explained) postDelayed({ if (!a.gone()) a.goNexus() }, 320) }
                             }
                         }
                     }

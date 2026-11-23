@@ -101,6 +101,8 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
         if (showing) return true
         if (svc.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true) return false
         if (svc.getSystemService(android.os.PowerManager::class.java)?.isInteractive != true) return false
+        // No apps open: an empty Recent Apps is no use, so the home screen instead
+        if (!SwitcherView.anyOpen(svc)) { nothingOpen(); return true }
         val wm = svc.getSystemService(WindowManager::class.java) ?: return false
         // One layer, kept between uses (taking a layer off the screen can flash its last picture on some phones)
         val r = root ?: Root(svc).also { root = it }
@@ -300,6 +302,14 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
             awaitThenFade(pkg)
             true
         } catch (_: Exception) { false }
+    }
+
+    /** Recent Apps asked for with no apps open: the home screen (which says "No open apps" for a moment). */
+    private fun nothingOpen() {
+        HubView.noteNothingOpen()
+        if (svc.topAppPackage() == svc.packageName) { LockTrace.log(svc, "Recent Apps: no apps open (stayed on the home screen)"); return }
+        LockTrace.log(svc, "Recent Apps: no apps open, so the home screen")
+        svc.goHome()
     }
 
     override fun goNexus() {

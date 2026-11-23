@@ -315,6 +315,12 @@ class MainActivity : Activity() {
     private fun openSwitcher() {
         // Recent Apps in NEXUS's own layer: at once, nothing for Android to open
         if (NexusAccessibility.showRecents()) return
+        // No apps open (and the helper is on, so the list is up to date): stay here and say so
+        if (Recents.serviceOn(this) && !SwitcherView.anyOpen(this)) {
+            HubView.noteNothingOpen()
+            @Suppress("DEPRECATION") hub.announceForAccessibility("No open apps")
+            return
+        }
         NexusAccessibility.instance?.fadeFor(NexusAccessibility.FADE_RECENTS, null, 90L)
         // (Under NEXUS's fade, with no slide of the phone's own: the cards glide in as the fade lifts)
         startActivity(Intent(this, SwitcherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION), Transitions.app(window.decorView, solidSplash = true))
@@ -693,8 +699,9 @@ class MainActivity : Activity() {
             "• While NEXUS is open, Home brings you back to NEXUS. Pressing Home on NEXUS goes back to the top of the list.\n" +
                 "• Tap an app once to choose it, and again to open it. Hold an app for its shortcuts, App info and Uninstall; hold and drag to move it.\n" +
                 "• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n" +
+                "• Tap ADD APP to add apps to NEXUS: tick as many as you like, then tap ADD.\n" +
                 "• Swipe down on the list to see your notifications.\n" +
-                "• Recent Apps (RECENT, or the square button once the helper is on): swipe an app up to close it. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent apps helper).\n" +
+                "• Recent Apps (RECENT, or the square button once the helper is on): swipe an app up to close it. With no apps open, it takes you to the home screen. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent apps helper).\n" +
                 "• Buttons in apps: NEXUS's Back, Home and Recent buttons in place of the phone's own (needs 3-button navigation).\n" +
                 "• Close NEXUS (in Settings) and Home goes to your normal home screen; open NEXUS from its icon to make it your home again.\n\n" +
                 "To stop using NEXUS as Home completely, choose your old home screen in the phone's Settings → Apps → Default apps → Home app.",

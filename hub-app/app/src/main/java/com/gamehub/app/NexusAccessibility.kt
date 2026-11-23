@@ -994,6 +994,8 @@ class NexusAccessibility : AccessibilityService() {
         val now = SystemClock.uptimeMillis()
         if (now - lastSwitcher <= 800) return
         lastSwitcher = now
+        // The app you're in counts as open, even if you only opened it a moment ago (so it's in the list)
+        current?.let { if (isRealApp(it)) Recents.touch(this, it) }
         current = null
         // NEXUS's own layer, over the app you're in: at once, nothing for Android to open
         if (!talkBackOn() && recents.show()) { LockTrace.log(this, "$by: NEXUS Recent Apps (over the app)"); return }
@@ -1343,6 +1345,11 @@ class NexusAccessibility : AccessibilityService() {
     private fun homeButton() {
         // (Recent Apps up: it handles it, fading into the home screen)
         if (recents.showing) { recents.goNexus(); return }
+        goHome()
+    }
+
+    /** To the home screen, under NEXUS's quick fade (as the Home button does). */
+    fun goHome() {
         fadeFor(FADE_HOME, null, 90L)
         performGlobalAction(GLOBAL_ACTION_HOME)
     }

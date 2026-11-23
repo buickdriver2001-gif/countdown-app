@@ -119,7 +119,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private val hitPool = ArrayList<RectF>()
     private val tileR = RectF()
     private val glyphR = RectF()
-    private val dashes = android.graphics.DashPathEffect(floatArrayOf(7 * d, 5 * d), 0f)
     private var packGames: List<GameEntry>? = null
     private var packSig = 0
     private var packOrder = ArrayList<Int>()
@@ -716,12 +715,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val stepX = cellW + gap; val stepY = cellH + gap
         listPad = if (list) max(0f, (listBottom - listTop) / 2 - cellH / 2) else 0f
         if (list) listStep = stepY
-        // Pack tiles in order (first free spot that fits, like a phone home screen); the add tile goes last
+        // Pack tiles in order (first free spot that fits, like a phone home screen). (Adding apps is ADD APP at the bottom.)
         var target = -1
         val order: ArrayList<Int>
         val pos: Array<IntArray>
         if (moveIndex in games.indices) {
-            order = ArrayList(games.size + 1)
+            order = ArrayList(games.size)
             // Where would the dragged tile land? Look at the layout without it and find the tile under the finger
             val rest = games.indices.filter { it != moveIndex }
             val restPos = pack(rest, cols)
@@ -736,15 +735,14 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             target = hit.coerceIn(0, rest.size)
             if (target != lastTarget) { if (lastTarget >= 0) sfx.tick(); lastTarget = target }
             order.addAll(rest); order.add(target, moveIndex)
-            order.add(-1) // the + ADD tile
             pos = pack(order, cols)
         } else {
             // Not moving anything: the layout only changes when the apps, their sizes or the grid change
             var sig = cols * 31 + games.size
             for (g in games) sig = (sig * 31 + g.tileW) * 31 + rowsFor(g, cols)
-            if (games !== packGames || sig != packSig || packOrder.size != games.size + 1) {
+            if (games !== packGames || sig != packSig || packOrder.size != games.size) {
                 packGames = games; packSig = sig
-                packOrder = ArrayList<Int>(games.size + 1).apply { addAll(games.indices); add(-1) }
+                packOrder = ArrayList<Int>(games.size).apply { addAll(games.indices) }
                 packPos = pack(packOrder, cols)
             }
             order = packOrder; pos = packPos
@@ -795,7 +793,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         // PS2 menu: a soft tick (and the lightest buzz) each time another app comes to the middle, like turning
         // a wheel - at most about 20 a second on a fast flick
         if (list && listStep > 0f && moveIndex < 0) {
-            val centred = kotlin.math.round(scroll / listStep).toInt().coerceIn(0, games.size)
+            val centred = kotlin.math.round(scroll / listStep).toInt().coerceIn(0, max(0, games.size - 1))
             if (centred != lastCentred) {
                 val now = android.os.SystemClock.uptimeMillis()
                 if (lastCentred >= 0 && a > 0.5f && now - lastTickAt > 48) {
@@ -815,8 +813,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val startY = listTop + listPad - scroll
         if (anim.size != games.size) anim = Array(games.size) { RectF(Float.NaN, 0f, 0f, 0f) }
         val k = min(1f, dt * 14f)
-        while (hitPool.size < games.size + 1) hitPool.add(RectF())
-        for (hi in 0..games.size) hitPool[hi].setEmpty()
+        while (hitPool.size < games.size) hitPool.add(RectF())
+        for (hi in games.indices) hitPool[hi].setEmpty()
         c.save()
         c.clipRect(0f, listTop - 8 * d, w, listBottom + 8 * d)
         if (settle > 0f) {
@@ -830,11 +828,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             val x0 = left + p[0] * stepX; val y0 = startY + p[1] * stepY
             val tr = tileR
             tr.set(x0, y0, x0 + p[2] * stepX - gap, y0 + p[3] * stepY - gap)
-            if (idx < 0) {
-                hitPool[games.size].set(tr)
-                if (moveIndex < 0) { if (list) drawListAdd(c, tr, downRow == games.size && !dragging, a) else drawAddTile(c, tr, selected == games.size, a) }
-                continue
-            }
             hitPool[idx].set(tr)
             val ar = anim[idx]
             // Tiles glide to their new spots (while moving apps, and just after dropping)
@@ -846,9 +839,18 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 else drawTile(c, games[idx], ar, idx == selected && moveIndex < 0, a)
             }
         }
-        for (hi in 0..games.size) rows.add(hitPool[hi])
+        for (hi in games.indices) rows.add(hitPool[hi])
         if (settling) { settleT -= dt; if (settleT <= 0f) settling = false }
         c.restore()
+        // No apps on the home screen at all: say how to add some
+        if (games.isEmpty()) {
+            text.textAlign = Paint.Align.CENTER; text.letterSpacing = 0.08f
+            text.textSize = 15 * d; text.color = Color.argb((210 * a).toInt(), 200, 220, 250)
+            val my = (listTop + listBottom) / 2
+            c.drawText("No apps here yet", w / 2, my - 6 * d, text)
+            text.textSize = 12 * d; text.color = Color.argb((160 * a).toInt(), 170, 195, 235)
+            c.drawText("Tap ADD APP below to add some", w / 2, my + 18 * d, text)
+        }
         // The tile being moved floats above everything, a little bigger and glowing
         if (moveIndex in games.indices) {
             if (moveY < listTop + 50 * d) scroll = max(0f, scroll - dt * 230f * d)
@@ -885,16 +887,40 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         text.textAlign = Paint.Align.CENTER
         text.textSize = 10.5f * d; text.letterSpacing = 0.12f
         text.color = Color.argb((110 * a).toInt(), 160, 185, 230)
-        // Bottom bar: RECENT · ALL APPS
-        val pw = min(142 * d, (w - 48 * d) / 2f); val gapB = 12 * d
-        val bx0 = w / 2 - (pw * 2 + gapB) / 2
-        recentRect.set(bx0, h - 54 * d - navInset, bx0 + pw, h - 18 * d - navInset)
-        allAppsRect.set(bx0 + pw + gapB, h - 54 * d - navInset, bx0 + pw * 2 + gapB, h - 18 * d - navInset)
+        // Bottom bar: RECENT · ADD APP · ALL APPS
+        val gapB = 12 * d
+        val pw = min(142 * d, (w - 48 * d - gapB * 2) / 3f)
+        val bx0 = w / 2 - (pw * 3 + gapB * 2) / 2
+        val barTop = h - 54 * d - navInset; val barBottom = h - 18 * d - navInset
+        recentRect.set(bx0, barTop, bx0 + pw, barBottom)
+        addRect.set(bx0 + pw + gapB, barTop, bx0 + pw * 2 + gapB, barBottom)
+        allAppsRect.set(bx0 + (pw + gapB) * 2, barTop, bx0 + pw * 3 + gapB * 2, barBottom)
         systemRect.setEmpty()
         bottomPill(c, recentRect, "RECENT", 0, a)
+        bottomPill(c, addRect, "ADD APP", 3, a)
         bottomPill(c, allAppsRect, "ALL APPS", 2, a)
+        // RECENT with no apps open stays here: say so briefly, just above RECENT
+        val since = android.os.SystemClock.uptimeMillis() - nothingOpenAt
+        if (since in 0 until NOTE_MS) {
+            val f = since / NOTE_MS.toFloat()
+            val nk = min(1f, f * 8f) * min(1f, (1f - f) * 4f)
+            text.textAlign = Paint.Align.CENTER; text.textSize = 12 * d; text.letterSpacing = 0.1f
+            text.color = Color.argb((230 * nk * a).toInt(), 220, 235, 255)
+            val nx = max(text.measureText(NOTE) / 2 + 12 * d, recentRect.centerX())
+            c.drawText(NOTE, nx, barTop - 10 * d - (1f - nk) * 4 * d, text)
+        }
         text.textAlign = Paint.Align.CENTER
     }
+
+    companion object {
+        private const val NOTE = "No open apps"
+        private const val NOTE_MS = 2200L
+        @Volatile private var nothingOpenAt = -NOTE_MS
+        /** RECENT was pressed with no apps open: the home screen says so for a moment. */
+        fun noteNothingOpen() { nothingOpenAt = android.os.SystemClock.uptimeMillis() }
+    }
+
+    private val addRect = RectF()
 
     private val gearRect = RectF()
 
@@ -911,11 +937,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private val allAppsRect = RectF()
     private val systemRect = RectF()
 
-    /** A glass pill with a small glyph and a label (glyph 0 = stacked cards, 1 = gauge, 2 = grid). */
+    /** A glass pill with a small glyph and a label (glyph 0 = stacked cards, 1 = gauge, 2 = grid, 3 = plus). */
     private fun bottomPill(c: Canvas, r: RectF, label: String, glyph: Int, a: Float) {
         if (ps2Menu) {
-            // PS2 style: soft glowing words, no box
-            c.save(); c.scale(2.4f, 0.6f, r.centerX(), r.centerY())
+            // PS2 style: soft glowing words, no box (each glow only as wide as its button, so they don't run together)
+            val sx = min(2.4f, r.width() / (r.height() * 0.9f) * 0.55f)
+            c.save(); c.scale(sx, 0.6f, r.centerX(), r.centerY())
             glow(c, r.centerX(), r.centerY(), r.height() * 0.9f, (55 * a).toInt())
             c.restore()
         } else {
@@ -938,6 +965,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             1 -> { // gauge
                 glyphR.set(x0, cy - 7 * d, x0 + 14 * d, cy + 7 * d); c.drawArc(glyphR, 150f, 240f, false, line)
                 c.drawLine(x0 + 7 * d, cy, x0 + 11 * d, cy - 4 * d, line)
+            }
+            3 -> { // plus
+                line.strokeWidth = 1.5f * d
+                c.drawLine(x0 + 7 * d, cy - 7 * d, x0 + 7 * d, cy + 7 * d, line)
+                c.drawLine(x0, cy, x0 + 14 * d, cy, line)
             }
             else -> for (gx in 0..2) for (gy in 0..2) c.drawRect(x0 + gx * 5 * d, cy - 7 * d + gy * 5 * d, x0 + 3 * d + gx * 5 * d, cy - 4 * d + gy * 5 * d, fill)
         }
@@ -1147,11 +1179,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     /** Lets go of the tile pictures to free memory (they're read again next time NEXUS comes back). */
-    fun releasePictures() { liveShots.clear(); liveStamp.clear(); nameGlow.clear(); addGlow.clear() }
+    fun releasePictures() { liveShots.clear(); liveStamp.clear(); nameGlow.clear() }
 
     // The menu's soft glows and dark outlines, blurred once and reused (see TextGlow)
     private val nameGlow by lazy { TextGlow(text.typeface ?: Typeface.DEFAULT, 24 * d, 0.14f) }
-    private val addGlow by lazy { TextGlow(text.typeface ?: Typeface.DEFAULT, 15 * d, 0.32f, max = 6) }
 
     fun loadLiveShots() {
         val pkgs = games.filter { it.tileH >= 2 }.map { it.pkg }
@@ -1526,35 +1557,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     /** The last line of the PS2-style menu: add an app. */
-    private fun drawListAdd(c: Canvas, r: RectF, pressed: Boolean, a0: Float) {
-        val k = listFocus(r)
-        val a = a0 * listFade(r) * (if (pressed) 1.15f else 1f).coerceAtMost(1f)
-        val size = Math.round((13f + 2f * k) * 2f) / 2f * d
-        text.textAlign = Paint.Align.CENTER; text.textSize = size; text.letterSpacing = 0.32f
-        text.color = Color.argb(((150 + 100 * k) * a).toInt(), 170, 205, 250)
-        val label = "+  ADD AN APP"
-        val lx = r.centerX() - text.measureText(label) / 2; val ly = r.centerY() + 5 * d
-        if (k > 0.05f) addGlow.draw(c, label, lx, ly, size, 10 * d, Color.argb((200 * k * a).toInt(), 70, 140, 255))
-        else addGlow.draw(c, label, lx, ly, size, 4 * d, Color.argb((220 * a).toInt(), 0, 2, 8))
-        c.drawText(label, r.centerX(), ly, text)
-    }
-
-    private fun drawAddTile(c: Canvas, r: RectF, sel: Boolean, a: Float) {
-        line.strokeWidth = (if (sel) 1.6f else 1f) * d
-        line.color = Color.argb(((if (sel) 200 else 90) * a).toInt(), 140, 190, 255)
-        line.pathEffect = dashes
-        c.drawRoundRect(r, 8 * d, 8 * d, line)
-        line.pathEffect = null
-        val s = min(r.width(), r.height()) * 0.16f
-        line.strokeWidth = 2f * d; line.color = Color.argb(((if (sel) 255 else 190) * a).toInt(), 170, 205, 255)
-        val cy = r.centerY() - r.height() * 0.08f
-        c.drawLine(r.centerX() - s, cy, r.centerX() + s, cy, line); c.drawLine(r.centerX(), cy - s, r.centerX(), cy + s, line)
-        text.textAlign = Paint.Align.CENTER
-        text.textSize = min(11 * d, r.width() * 0.11f); text.letterSpacing = 0.2f
-        text.color = Color.argb(((if (sel) 255 else 180) * a).toInt(), 170, 205, 255)
-        c.drawText("ADD", r.centerX(), r.bottom - r.height() * 0.14f, text)
-    }
-
     private val tmpRect = RectF()
     private val shotDst = RectF()
     private val shotPaint = Paint(Paint.FILTER_BITMAP_FLAG)
@@ -1686,13 +1688,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val out = ArrayList<Int>()
         if (booting) return out
         for (i in games.indices) if (i < rows.size) out.add(i)
-        if (rows.size > games.size) out.add(A11Y_ADD)
-        out.add(A11Y_RECENT); out.add(A11Y_ALL); out.add(A11Y_GEAR)
+        out.add(A11Y_RECENT); out.add(A11Y_ADD); out.add(A11Y_ALL); out.add(A11Y_GEAR)
         return out
     }
 
     private fun a11yBounds(id: Int): RectF? = when (id) {
-        A11Y_ADD -> rows.getOrNull(games.size)
+        A11Y_ADD -> addRect
         A11Y_RECENT -> recentRect
         A11Y_ALL -> allAppsRect
         A11Y_GEAR -> gearRect
@@ -1700,7 +1701,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }?.takeIf { !it.isEmpty }
 
     /** Tiles are only on screen inside the list area (the buttons are always on screen). */
-    private fun a11yShown(id: Int, r: RectF) = id > A11Y_ADD || (r.bottom > listTop && r.top < listBottom)
+    private fun a11yShown(id: Int, r: RectF) = id >= A11Y_ADD || (r.bottom > listTop && r.top < listBottom)
 
     private fun a11yLabel(id: Int): String = when (id) {
         A11Y_ADD -> "Add an app to NEXUS"
@@ -1732,7 +1733,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     private fun a11yAt(x: Float, y: Float): Int {
-        for (id in a11yIds()) { val r = a11yBounds(id) ?: continue; if (r.contains(x, y) && a11yShown(id, r) && (id > A11Y_ADD || y in listTop..listBottom)) return id }
+        for (id in a11yIds()) { val r = a11yBounds(id) ?: continue; if (r.contains(x, y) && a11yShown(id, r) && (id >= A11Y_ADD || y in listTop..listBottom)) return id }
         return A11Y_NONE
     }
 
@@ -1933,6 +1934,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     sfx.tick(); onSystem()
                 } else if (!longFired && launchFlash <= 0f && t > readyT && recentRect.contains(e.x, e.y)) {
                     sfx.tick(); onRecent()
+                } else if (!longFired && launchFlash <= 0f && t > readyT && addRect.contains(e.x, e.y)) {
+                    sfx.tick(); onAdd()
                 } else if (!longFired && launchFlash <= 0f && t > readyT && allAppsRect.contains(e.x, e.y)) {
                     sfx.tick(); onDrawer()
                 } else if (!longFired && launchFlash <= 0f && t > readyT && gearRect.contains(e.x, e.y)) {
@@ -1955,8 +1958,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                             snapTo = target
                             sfx.confirm()
                             performHapticFeedback(if (android.os.Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.CONFIRM else android.view.HapticFeedbackConstants.VIRTUAL_KEY)
-                            if (r == games.size) onAdd()
-                            else { launchIdx = r; pending = games[r]; launchFlash = LAUNCH_LEN; rows.getOrNull(r)?.let { launchRect.set(it) } }
+                            launchIdx = r; pending = games[r]; launchFlash = LAUNCH_LEN; rows.getOrNull(r)?.let { launchRect.set(it) }
                         }
                         performClick()
                     } else if (r >= 0 && r == downRow) {
@@ -1964,8 +1966,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                         else {
                             sfx.confirm()
                             performHapticFeedback(if (android.os.Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.CONFIRM else android.view.HapticFeedbackConstants.VIRTUAL_KEY)
-                            if (r == games.size) onAdd()
-                            else { pending = games[r]; launchFlash = LAUNCH_LEN; rows.getOrNull(r)?.let { launchRect.set(it) } }
+                            pending = games[r]; launchFlash = LAUNCH_LEN; rows.getOrNull(r)?.let { launchRect.set(it) }
                         }
                         performClick()
                     } else if (r < 0) selected = -1
