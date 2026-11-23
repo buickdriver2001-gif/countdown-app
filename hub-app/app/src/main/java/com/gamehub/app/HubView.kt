@@ -427,10 +427,14 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
     /** A soft round glow, drawn once and reused (scaled) for every glow on screen. */
     private val glowBmp: android.graphics.Bitmap by lazy {
-        val s = 128
+        // (High resolution, with a smooth bell-shaped falloff: no rings, sharp at any size)
+        val s = 256
         val b = android.graphics.Bitmap.createBitmap(s, s, android.graphics.Bitmap.Config.ARGB_8888)
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        p.shader = RadialGradient(s / 2f, s / 2f, s / 2f, intArrayOf(Color.argb(255, 120, 170, 255), Color.argb(90, 80, 140, 255), Color.TRANSPARENT), floatArrayOf(0f, 0.35f, 1f), Shader.TileMode.CLAMP)
+        p.shader = RadialGradient(s / 2f, s / 2f, s / 2f,
+            intArrayOf(Color.argb(255, 120, 170, 255), Color.argb(200, 105, 160, 255), Color.argb(130, 90, 150, 255), Color.argb(70, 80, 140, 255),
+                Color.argb(30, 75, 130, 255), Color.argb(8, 70, 120, 255), Color.TRANSPARENT),
+            floatArrayOf(0f, 0.14f, 0.3f, 0.48f, 0.66f, 0.84f, 1f), Shader.TileMode.CLAMP)
         Canvas(b).drawCircle(s / 2f, s / 2f, s / 2f, p)
         b
     }

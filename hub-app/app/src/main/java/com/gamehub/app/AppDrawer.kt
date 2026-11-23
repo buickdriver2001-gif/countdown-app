@@ -44,11 +44,16 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
     private val cells = HashMap<String, MutableList<Pair<LinearLayout, TextView?>>>()
     private var builtKey = ""
     private var quiet = false
-    private val grid = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding((14 * d).toInt(), 0, (14 * d).toInt(), (40 * d).toInt()) }
+    // (Room at the end of the list for the "Add N apps" bar, so the last row can always be scrolled clear of it)
+    private val grid = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding((14 * d).toInt(), 0, (14 * d).toInt(), (96 * d).toInt()) }
+    private val col = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(0, (40 * d).toInt(), 0, 0) }
 
-    /** Room at the bottom for NEXUS's Back / Home / Recent buttons. */
+    /**
+     * Room at the bottom for NEXUS's Back / Home / Recent buttons: the list stops just above them (with a soft fade
+     * at its bottom edge), so no app is ever half under the buttons' see-through strip, looking darkened.
+     */
     fun setBottomInset(px: Int) {
-        grid.setPadding((14 * d).toInt(), 0, (14 * d).toInt(), (40 * d).toInt() + px)
+        col.setPadding(0, (40 * d).toInt(), 0, px)
         // (The "Add N apps" bar floats just above the buttons)
         (addBar.layoutParams as? LayoutParams)?.let { it.bottomMargin = (28 * d).toInt() + px; addBar.layoutParams = it }
     }
@@ -75,7 +80,6 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
                 var y = 0f; while (y < height) { c.drawLine(0f, y, width.toFloat(), y, p); y += 40 * d }
             }
         })
-        val col = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(0, (40 * d).toInt(), 0, 0) }
         // Header: title and close
         val head = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding((22 * d).toInt(), 0, (12 * d).toInt(), 0) }
         title.apply { setTextColor(NexusUi.TEXT); textSize = 20f; letterSpacing = 0.3f; typeface = NexusUi.light }
@@ -107,7 +111,10 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
         col.addView(search, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             leftMargin = (18 * d).toInt(); rightMargin = (18 * d).toInt(); topMargin = (8 * d).toInt(); bottomMargin = (8 * d).toInt()
         })
-        col.addView(ScrollView(a).apply { isVerticalScrollBarEnabled = false; addView(grid) },
+        col.addView(ScrollView(a).apply {
+            isVerticalScrollBarEnabled = false; addView(grid)
+            isVerticalFadingEdgeEnabled = true; setFadingEdgeLength((28 * d).toInt())
+        },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         addView(col)
         // Floating "Add N apps" bar for multi-select

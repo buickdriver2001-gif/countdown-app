@@ -77,14 +77,11 @@ class Crystals(context: Context) {
     private val glowDst = RectF()
     private fun Paint.additive() { if (android.os.Build.VERSION.SDK_INT >= 29) blendMode = android.graphics.BlendMode.PLUS }
 
-    private val glowBmp: Bitmap by lazy {
-        val s = 64
-        val b = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888)
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        p.shader = RadialGradient(s / 2f, s / 2f, s / 2f, intArrayOf(Color.WHITE, Color.argb(90, 255, 255, 255), Color.TRANSPARENT), floatArrayOf(0f, 0.35f, 1f), Shader.TileMode.CLAMP)
-        Canvas(b).drawCircle(s / 2f, s / 2f, s / 2f, p)
-        b
-    }
+    /** The glow behind each crystal (high resolution, smooth at any size). */
+    private val glowBmp: Bitmap get() = GlowArt.soft
+    /** Edges of the glass glowing softly, and the glint that now and then flashes at a crystal's point. */
+    private val edgeGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeJoin = Paint.Join.ROUND; strokeCap = Paint.Cap.ROUND; additive() }
+    private val twinkle = Paint(Paint.FILTER_BITMAP_FLAG).apply { additive() }
 
     private val ox = FloatArray(COUNT); private val oy = FloatArray(COUNT)
     private val near = FloatArray(COUNT)
@@ -152,7 +149,10 @@ class Crystals(context: Context) {
                         Color.argb(((70 + 110 * lit) * bright).toInt().coerceIn(0, 255),
                             (110 + 120 * lit + 25 * spec).toInt().coerceIn(0, 255), (160 + 80 * lit + 15 * spec).toInt().coerceIn(0, 255), 255)
                     }
-                    for (q in 0..2) { val vi = tris[f * 3 + q]; verts[vn * 2] = sx[vi]; verts[vn * 2 + 1] = sy[vi]; cols[vn] = col; vn++ }
+                    // (The points of a facing crystal catch more light: brighter and whiter towards its tips)
+                    val tip = if (front) Color.argb((Color.alpha(col) * 1.3f).toInt().coerceIn(0, 255), (Color.red(col) + 70).coerceAtMost(255),
+                        (Color.green(col) + 55).coerceAtMost(255), 255) else col
+                    for (q in 0..2) { val vi = tris[f * 3 + q]; verts[vn * 2] = sx[vi]; verts[vn * 2 + 1] = sy[vi]; cols[vn] = if (vi >= 12) tip else col; vn++ }
                     if (front) {
                         var q = 0
                         while (q < 4 && triEdges[f * 4 + q] >= 0) {
@@ -165,9 +165,26 @@ class Crystals(context: Context) {
             }
             if (vn > 0 && android.os.Build.VERSION.SDK_INT >= 29) c.drawVertices(Canvas.VertexMode.TRIANGLES, vn * 2, verts, 0, null, 0, cols, 0, null, 0, 0, fill)
             if (ln > 0) {
+                // A soft glow along the edges first, then the sharp edges
+                edgeGlow.strokeWidth = max(2f, unit * 0.09f)
+                edgeGlow.color = Color.argb((40 * bright).toInt().coerceIn(0, 255), 120, 180, 255)
+                c.drawLines(lines, 0, ln, edgeGlow)
                 edge.strokeWidth = max(0.7f, unit * 0.022f)
                 edge.color = Color.argb((150 * bright).toInt().coerceIn(0, 255), 190, 220, 255)
                 c.drawLines(lines, 0, ln, edge)
+            }
+            // Now and then the light glints off its top point: a small four-point flash
+            val tw = max(0f, sin(t * 0.9f + cr.bob * 3f)).let { val q2 = it * it; val q4 = q2 * q2; q4 * q4 * q2 }
+            if (tw > 0.03f) {
+                twinkle.alpha = (230 * tw * bright).toInt().coerceIn(0, 255)
+                val l = unit * 1.3f; val th = max(1.5f, unit * 0.07f)
+                c.save(); c.translate(sx[12], sy[12]); c.rotate(20f)
+                glowDst.set(-l, -th, l, th); c.drawBitmap(GlowArt.streak, null, glowDst, twinkle)
+                c.rotate(90f)
+                glowDst.set(-l * 0.6f, -th, l * 0.6f, th); c.drawBitmap(GlowArt.streak, null, glowDst, twinkle)
+                c.restore()
+                val cr2 = unit * 0.28f
+                glowDst.set(sx[12] - cr2, sy[12] - cr2, sx[12] + cr2, sy[12] + cr2); c.drawBitmap(GlowArt.core, null, glowDst, twinkle)
             }
         }
     }

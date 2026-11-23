@@ -90,20 +90,17 @@ class Ps2World(context: Context) {
         o.y = o.y0 + sin(a * 1.6f + o.phase * 2f) * o.ya
     }
 
-    /** A soft white glow, tinted per ball. */
-    private val glowBmp: Bitmap by lazy {
-        val s = 64
-        val b = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888)
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        p.shader = RadialGradient(s / 2f, s / 2f, s / 2f, intArrayOf(Color.WHITE, Color.argb(110, 255, 255, 255), Color.TRANSPARENT), floatArrayOf(0f, 0.3f, 1f), Shader.TileMode.CLAMP)
-        Canvas(b).drawCircle(s / 2f, s / 2f, s / 2f, p)
-        b
-    }
+    /** A soft white glow (tinted per ball), in high resolution so it's smooth at any size. */
+    private val glowBmp: Bitmap get() = GlowArt.soft
     private val glowDst = RectF()
 
     // Light adds up (like real light) where the paint supports it
     private val trail = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.BUTT; additive() }
     private val core = Paint(Paint.ANTI_ALIAS_FLAG).apply { additive() }
+    /** The white-hot middle of a ball (a dense little glow rather than a flat dot). */
+    private val corePaint = Paint(Paint.FILTER_BITMAP_FLAG).apply { additive() }
+    /** Thin streaks for edges of glass catching the light (towers), drawn wide and faint under the sharp lines. */
+    private val edgeGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; additive() }
     private val floorGlow = Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = PorterDuffColorFilter(Color.rgb(120, 160, 255), PorterDuff.Mode.MULTIPLY) }
     private fun Paint.additive() { if (android.os.Build.VERSION.SDK_INT >= 29) blendMode = android.graphics.BlendMode.PLUS }
     init { for (o in orbs) o.glow.additive() }
@@ -291,6 +288,8 @@ class Ps2World(context: Context) {
             }
             if (project(o.x, o.y, o.z)) { rpx[m] = px; rpy[m] = py; rps[m] = min(1.15f, 14f / pz); m++ }
             if (m >= 2) {
+                // A wide, faint bloom around the trail first (the light spilling into the air), then the trail itself
+                if (quality > 1) ribbon(c, m, o.color, 1.5f, 22f, 0.2f * a, 1.0f)
                 ribbon(c, m, o.color, 0.6f, 10f, 0.75f * a, 1.25f)
                 val hot = Color.rgb((Color.red(o.color) + 2 * 255) / 3, (Color.green(o.color) + 2 * 255) / 3, (Color.blue(o.color) + 2 * 255) / 3)
                 ribbon(c, m, hot, 0.3f, 3.2f, 0.9f * a, 1.8f)
@@ -351,7 +350,10 @@ class Ps2World(context: Context) {
         c.drawBitmap(glowBmp, null, glowDst, o.glow)
     }
 
-    /** The ball itself: a soft glow in its colour with a white-hot middle. */
+    /**
+     * The ball itself: a soft glow in its colour, a slowly turning four-point glint of light through it, and a
+     * dense white-hot middle.
+     */
     private fun drawHead(c: Canvas, o: Orb, a: Float) {
         if (!project(o.x, o.y, o.z)) return
         val s = min(1.15f, 14f / pz)
@@ -360,8 +362,21 @@ class Ps2World(context: Context) {
         o.glow.alpha = (255 * a).toInt().coerceIn(0, 255)
         glowDst.set(px - r, py - r, px + r, py + r)
         c.drawBitmap(glowBmp, null, glowDst, o.glow)
-        core.color = Color.argb((255 * a).toInt().coerceIn(0, 255), 255, 255, 255)
-        c.drawCircle(px, py, max(1.5f, 5.5f * d * s), core)
+        if (quality > 1) {
+            // The glint: a long and a short streak crossing at the ball, turning slowly
+            val ang = Math.toDegrees((t * 0.35f + o.phase).toDouble()).toFloat()
+            o.glow.alpha = (150 * a * pulse).toInt().coerceIn(0, 255)
+            c.save(); c.translate(px, py); c.rotate(ang)
+            val l1 = 64 * d * s; val l2 = 34 * d * s; val th = 3.2f * d * s
+            glowDst.set(-l1, -th, l1, th); c.drawBitmap(GlowArt.streak, null, glowDst, o.glow)
+            c.rotate(90f)
+            glowDst.set(-l2, -th, l2, th); c.drawBitmap(GlowArt.streak, null, glowDst, o.glow)
+            c.restore()
+        }
+        corePaint.alpha = (255 * a).toInt().coerceIn(0, 255)
+        val cr = max(3f, 11f * d * s)
+        glowDst.set(px - cr, py - cr, px + cr, py + cr)
+        c.drawBitmap(GlowArt.core, null, glowDst, corePaint)
     }
 
     /** Adds one glass block of a tower (only the faces that face the camera). Returns its fog amount. */
@@ -381,7 +396,7 @@ class Ps2World(context: Context) {
         val lift = 1f + tw0 * 0.9f + glint * (0.55f + 0.08f * k)
         if (vtx.size < (vn + 40) * 2) { vtx = vtx.copyOf(vtx.size * 2); vcol = vcol.copyOf(vcol.size * 2) }
         if (lines.size < ln + 80) lines = lines.copyOf(lines.size * 2)
-        if (ey > yb + CUBE) face(4, 5, 7, 6, Color.argb((125 * f * lift).toInt().coerceIn(0, 255), 215, 221, 235))
+        if (ey > yb + CUBE) face(4, 5, 7, 6, Color.argb((125 * f * lift).toInt().coerceIn(0, 255), 215, 221, 235), top = true)
         if (ex > tw.x + h) face(1, 3, 7, 5, side(0.92f, f, lift))
         if (ex < tw.x - h) face(0, 2, 6, 4, side(0.58f, f, lift))
         if (ez > tw.z + h) face(2, 3, 7, 6, side(0.78f, f, lift))
@@ -392,9 +407,21 @@ class Ps2World(context: Context) {
     private fun side(b: Float, f: Float, lift: Float) =
         Color.argb((95 * f * lift).toInt().coerceIn(0, 255), (175 * b).toInt(), (184 * b).toInt(), (200 * b).toInt())
 
-    private fun face(a: Int, b: Int, c: Int, e: Int, col: Int) {
+    /**
+     * One face of a glass block. Each corner is shaded on its own, so the glass has depth: a side brightest at its top
+     * edge, darkening towards the bottom; the top face lighter on one side than the other.
+     */
+    private fun face(a: Int, b: Int, c: Int, e: Int, col: Int, top: Boolean = false) {
         val q = intArrayOfQuad; q[0] = a; q[1] = b; q[2] = c; q[3] = a; q[4] = c; q[5] = e
-        for (j in 0 until 6) { vtx[vn * 2] = sx[q[j]]; vtx[vn * 2 + 1] = sy[q[j]]; vcol[vn] = col; vn++ }
+        val ca = Color.alpha(col); val cr = Color.red(col); val cg = Color.green(col); val cb = Color.blue(col)
+        for (j in 0 until 6) {
+            val vi = q[j]
+            vtx[vn * 2] = sx[vi]; vtx[vn * 2 + 1] = sy[vi]
+            val k = when { top -> if ((vi and 1) == 1) 1.12f else 0.9f; ((vi shr 2) and 1) == 1 -> 1.22f; else -> 0.76f }
+            vcol[vn] = Color.argb((ca * (0.6f + 0.4f * k)).toInt().coerceIn(0, 255), (cr * k).toInt().coerceIn(0, 255),
+                (cg * k).toInt().coerceIn(0, 255), (cb * k).toInt().coerceIn(0, 255))
+            vn++
+        }
         // Its edges
         edgeLine(a, b); edgeLine(b, c); edgeLine(c, e); edgeLine(e, a)
     }
@@ -416,6 +443,12 @@ class Ps2World(context: Context) {
             }
         }
         if (ln > 0 && (quality > 0 || f > 0.5f)) {
+            if (quality > 1) {
+                // The glass edges glow softly (a wide faint line under the sharp one)
+                edgeGlow.strokeWidth = max(2f, 4.5f * d * f)
+                edgeGlow.color = Color.argb((38 * f * (1f + glint)).toInt().coerceIn(0, 255), 150, 190, 255)
+                c.drawLines(lines, 0, ln, edgeGlow)
+            }
             edge.strokeWidth = max(0.6f, 1.1f * d * f)
             edge.color = Color.argb((185 * f * (1f + glint * 0.7f)).toInt().coerceIn(0, 255), 220, 227, 240)
             c.drawLines(lines, 0, ln, edge)
