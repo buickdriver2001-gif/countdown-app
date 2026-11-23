@@ -289,7 +289,8 @@ class Ps2World(context: Context) {
             if (project(o.x, o.y, o.z)) { rpx[m] = px; rpy[m] = py; rps[m] = min(1.15f, 14f / pz); m++ }
             if (m >= 2) {
                 // A wide, faint bloom around the trail first (the light spilling into the air), then the trail itself
-                if (quality > 1) ribbon(c, m, o.color, 1.5f, 22f, 0.2f * a, 1.0f)
+                // (Never wider than the ball's own glow at the head, so it melts into it rather than ending in an edge)
+                if (quality > 1) ribbon(c, m, o.color, 1.5f, 13f, 0.17f * a, 1.0f)
                 ribbon(c, m, o.color, 0.6f, 10f, 0.75f * a, 1.25f)
                 val hot = Color.rgb((Color.red(o.color) + 2 * 255) / 3, (Color.green(o.color) + 2 * 255) / 3, (Color.blue(o.color) + 2 * 255) / 3)
                 ribbon(c, m, hot, 0.3f, 3.2f, 0.9f * a, 1.8f)

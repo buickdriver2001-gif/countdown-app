@@ -587,7 +587,6 @@ class LockView(private val a: LockActivity) : View(a) {
 
     /** The world behind the lock screen (the same as behind the home screen). */
     private val world = Ps2World(context)
-    private val crystals by lazy { Crystals(context) }
 
     private fun drawFrame(c: Canvas) {
         val now = System.nanoTime()
@@ -604,7 +603,8 @@ class LockView(private val a: LockActivity) : View(a) {
         val lift = -dragY // content follows the finger up
         c.drawBitmap(backdrop(), 0f, 0f, null)
         // The world: grey glass towers and balls of coloured light, the same as behind the home screen
-        world.draw(c, width, height, dt, intro, 0.64f, 0.95f)
+        // (A little softer than it used to be: the towers' glass and edges now catch more light)
+        world.draw(c, width, height, dt, intro, 0.64f, 0.78f)
         // Lift the black wake-up cover only once the NEXUS lock screen is really what's on screen:
         // the screen is lit, and NEXUS has the focus (it doesn't while the phone's own lock screen is
         // still drawn on top). The fade-in then starts from black, so the switch is seamless.
@@ -683,9 +683,7 @@ class LockView(private val a: LockActivity) : View(a) {
         val ease = min(1f, dt * 6f)
         cubeY += (cubeTarget - cubeY) * ease; cubeK += (kTarget - cubeK) * ease
 
-        // In the open space between the clock (and notifications) and the handle: the slow ring of glass crystals,
-        // as on the home screen (lower and a little smaller when there are notifications)
-        crystals.draw(c, width, height, dt, fade * 0.9f, w / 2f, cubeY + lift * 0.3f, w * 0.30f * cubeK, h * 0.04f * cubeK, 0.72f * cubeK)
+        // (The world behind the lock screen fills this space: nothing else is drawn over its towers)
 
         // Swipe-up handle: chevrons that breathe, and a glow line
         val by = h - 70 * d + lift
