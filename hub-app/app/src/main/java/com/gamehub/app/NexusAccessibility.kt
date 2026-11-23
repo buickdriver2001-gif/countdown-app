@@ -474,6 +474,11 @@ class NexusAccessibility : AccessibilityService() {
         val handled = HashSet<String>()
         /** Times it looked again for the app cards (they can take a moment to appear). */
         var cardWaits = 0
+        /** Cards brought into view to read their names (by their place in the list), and how many times. */
+        val revealed = HashSet<Int>()
+        var reveals = 0
+        /** Cards without a name pressed Close on (Clear all: every card goes, named or not). */
+        var unnamedClosed = 0
     }
     private var closeJob: CloseJob? = null
 
@@ -656,7 +661,9 @@ class NexusAccessibility : AccessibilityService() {
         val names = cardNames(root)
         // Its app cards can take a moment to appear after it opens: look again a few times first
         if (names.isEmpty() && j.cardWaits < 8) { j.cardWaits++; h.postDelayed({ safe { runCloses(j) } }, 80); return }
-        LockTrace.log(this, "  phone's recent apps: " + if (names.isEmpty()) "no app cards found (" + describeRecents(root) + ")" else "cards " + names.joinToString())
+        val named = names.filter { it != "?" }; val unnamed = names.size - named.size
+        LockTrace.log(this, "  phone's recent apps: " + if (names.isEmpty()) "no app cards found (" + describeRecents(root) + ")"
+            else "cards " + (if (named.isEmpty()) "" else named.joinToString()) + (if (unnamed > 0) (if (named.isEmpty()) "" else " ") + "(+$unnamed not on screen yet)" else ""))
         if (j.all || j.clearRest) {
             // Clear all if the button can be pressed; then Close on any cards still there, one by one
             val clear = findByWords(root, setOf("clear all"))
@@ -674,7 +681,7 @@ class NexusAccessibility : AccessibilityService() {
         if (closeJob !== j) return
         val root = recentsRoot(j)
         // Each card once (a card that doesn't go away isn't pressed again), and never past the time limit
-        val card = if (round < 20 && root != null && !j.outOfTime()) findAnyCard(root, j.tried) else null
+        val card = if (round < 30 && root != null && !j.outOfTime()) findAnyCard(root, j.tried, unnamedOk = j.unnamedClosed < 20) else null
         if (card == null || !card.first.performAction(card.second)) {
             val left = if (root != null) cardNames(root) else emptyList()
             val why = (if (j.outOfTime() && card != null) "time's up, closed $round" else if (round == 0) "nothing left to close" else "closed $round") +
@@ -682,6 +689,7 @@ class NexusAccessibility : AccessibilityService() {
             h.postDelayed({ safe { goHomeAfterClose(j, why) } }, 150)
             return
         }
+        if (namesOf(card.first).isEmpty()) j.unnamedClosed++
         cover?.peel(null)
         h.postDelayed({ safe { closeEveryCard(j, round + 1) } }, 420)
     }
@@ -703,10 +711,11 @@ class NexusAccessibility : AccessibilityService() {
      * Any app card with a Close button (for Clear all): only real app cards (they carry the app's name), and
      * not one already pressed (if it's still there, it won't close, so it's left alone).
      */
-    private fun findAnyCard(root: AccessibilityNodeInfo, tried: MutableSet<String>): Pair<AccessibilityNodeInfo, Int>? {
+    private fun findAnyCard(root: AccessibilityNodeInfo, tried: MutableSet<String>, unnamedOk: Boolean = false): Pair<AccessibilityNodeInfo, Int>? {
         val q = ArrayDeque<AccessibilityNodeInfo>(); q.add(root)
         var seen = 0
         val r = android.graphics.Rect()
+        var unnamed: Pair<AccessibilityNodeInfo, Int>? = null
         while (q.isNotEmpty() && seen++ < 3000) {
             val n = q.removeFirst()
             val act = closeAction(n)
@@ -715,11 +724,12 @@ class NexusAccessibility : AccessibilityService() {
                 if (name != null) {
                     n.getBoundsInScreen(r)
                     if (tried.add(name + "|" + r.flattenToString())) return n to act
-                }
+                } else if (unnamedOk && unnamed == null) unnamed = n to act
             }
             for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
         }
-        return null
+        // (Cards not on screen yet have no name: with Clear all they go too, once the named ones have)
+        return unnamed
     }
 
     private fun closeNext(j: CloseJob, left: ArrayDeque<String>) {
@@ -742,6 +752,20 @@ class NexusAccessibility : AccessibilityService() {
             finishUnder(j, "the phone's recent apps closed before finishing (the rest next time)"); return
         }
         val card = root?.let { findCard(it, namesFor(pkg)) }
+        if (card == null && root != null && j.reveals < 12 && !j.outOfTime()) {
+            // The phone only shows an app's name on its card once the card has been on screen: bring the next card
+            // without a name into view (at once, behind NEXUS Recent Apps), let its name load, and look again.
+            // (Each one brought into view also names the cards beside it.)
+            val next = unnamedCards(root).firstOrNull { it.second !in j.revealed }
+            if (next != null) {
+                j.revealed.add(next.second); j.reveals++
+                if (next.first.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id)) {
+                    left.addFirst(pkg)
+                    h.postDelayed({ safe { closeNext(j, left) } }, 280)
+                    return
+                }
+            }
+        }
         if (card == null && root != null && j.scrolls < 8) {
             // Not in view: scroll the phone's recent apps along (further, then back the other way) and look again
             val forward = j.scrolls < 4
@@ -756,8 +780,11 @@ class NexusAccessibility : AccessibilityService() {
             if (forward) { j.scrolls = 4; left.addFirst(pkg); h.post { safe { closeNext(j, left) } }; return }
         }
         j.handled.add(pkg)
-        if (card != null && card.first.performAction(card.second)) { j.closed++; LockTrace.log(this, "  closed $name") }
-        else { j.missed++; LockTrace.log(this, "  $name wasn't in the phone's recent apps (already closed?)") }
+        val took = j.reveals
+        j.revealed.clear(); j.reveals = 0 // (the next app's search starts afresh)
+        val seen = if (took > 0) " (after bringing $took cards into view)" else ""
+        if (card != null && card.first.performAction(card.second)) { j.closed++; LockTrace.log(this, "  closed $name$seen") }
+        else { j.missed++; LockTrace.log(this, "  $name wasn't in the phone's recent apps (already closed?)$seen") }
         cover?.peel(pkg) // either way it's no longer open: its icon falls off the cube
         // The phone only really closes the app once the card has finished flying away: wait for that (leaving its
         // recent apps any sooner can cancel it, and the app stays open)
@@ -852,6 +879,19 @@ class NexusAccessibility : AccessibilityService() {
         }
         if (n.actionList.any { it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_DISMISS.id }) return AccessibilityNodeInfo.AccessibilityAction.ACTION_DISMISS.id
         return null
+    }
+
+    /** App cards with a Close button but no name yet (not on screen yet), each with its place among all the cards. */
+    private fun unnamedCards(root: AccessibilityNodeInfo): List<Pair<AccessibilityNodeInfo, Int>> {
+        val out = ArrayList<Pair<AccessibilityNodeInfo, Int>>()
+        val q = ArrayDeque<AccessibilityNodeInfo>(); q.add(root)
+        var seen = 0; var index = 0
+        while (q.isNotEmpty() && seen++ < 3000) {
+            val n = q.removeFirst()
+            if (closeAction(n) != null) { if (namesOf(n).isEmpty()) out.add(n to index); index++ }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        return out
     }
 
     /** The card for the app called [name] (its exact name first), with its Close button. */
