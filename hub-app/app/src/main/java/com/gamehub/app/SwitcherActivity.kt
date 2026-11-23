@@ -315,11 +315,6 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
         }.start()
     }
 
-    private fun ago(ms: Long): String {
-        val s = (System.currentTimeMillis() - ms) / 1000
-        return when { s < 60 -> "just now"; s < 3600 -> "${s / 60}m ago"; s < 86400 -> "${s / 3600}h ago"; else -> "${s / 86400}d ago" }
-    }
-
     /** Draws a frame; if anything ever goes wrong while drawing, that frame is skipped and noted, never a crash. */
     override fun onDraw(c: Canvas) {
         val saved = c.saveCount
@@ -448,14 +443,7 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
                 val fade = ((1f - min(1f, abs(off)) * 0.45f) * (1f - min(1f, card.lift / (h * 0.5f)))).coerceIn(0f, 1f)
                 drawCard(c, card, r, fade * vis, abs(off) < 0.5f)
             }
-            // Name and time under the centre card
-            val ci = pos.roundToInt().coerceIn(0, live.size - 1)
-            val cc = live[ci]
-            text.textAlign = Paint.Align.CENTER
-            text.textSize = 18 * d; text.letterSpacing = 0.1f; text.color = Color.argb((240 * vis).toInt(), 240, 245, 255)
-            c.drawText(cc.label, w / 2, cy + ch / 2 + 40 * d, text)
-            text.textSize = 12 * d; text.letterSpacing = 0.08f; text.color = Color.argb((170 * vis).toInt(), 170, 200, 240)
-            c.drawText(ago(cc.used), w / 2, cy + ch / 2 + 62 * d, text)
+            // (No name or time under the cards: each card shows its app's icon. TalkBack still reads both out.)
         }
 
         // Bottom: Clear all (Home is in the buttons along the bottom)
