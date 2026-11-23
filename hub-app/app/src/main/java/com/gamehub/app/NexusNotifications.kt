@@ -24,7 +24,9 @@ class NexusNotifications : NotificationListenerService() {
 
     /** One app's notifications, as a card on the lock screen (its newest notification, and how many). */
     class Item(val key: String, val pkg: String, val app: String, val title: String, val text: String,
-               val count: Int, val time: Long, val intent: PendingIntent?, val autoCancel: Boolean)
+               val count: Int, val time: Long, val intent: PendingIntent?, val autoCancel: Boolean,
+               /** Every notification of this app the card stands for (so a swipe clears them all), and whether it can be cleared. */
+               val keys: List<String> = listOf(key), val clearable: Boolean = true)
 
     /**
      * One app's icon in the NEXUS status bar: its own small notification symbol, as the phone's status bar shows it
@@ -40,6 +42,19 @@ class NexusNotifications : NotificationListenerService() {
         @Volatile var items: List<Item> = emptyList()
             private set
         @Volatile private var instance: NexusNotifications? = null
+        /**
+         * The boxes at the top of the NEXUS home screen (phone unlocked, so what they say shows, as in the phone's own
+         * notification shade): one per app, newest first. Not silent ones, ongoing ones (music, downloads) or what
+         * Do Not Disturb hides.
+         */
+        @Volatile var homeItems: List<Item> = emptyList()
+            private set
+        /** Notification boxes at the top of the home screen (Settings → Notifications). */
+        fun boxesOn(c: Context): Boolean = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("homeNotifs", true)
+        fun setBoxesOn(c: Context, on: Boolean) { c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit().putBoolean("homeNotifs", on).apply() }
+        /** Clears notifications (a home screen box swiped away), as swiping them away in the notification shade does. */
+        fun dismissAll(keys: List<String>) { if (keys.isNotEmpty()) try { instance?.cancelNotifications(keys.toTypedArray()) } catch (_: Exception) {} }
+
         /** The icons for the NEXUS status bar (home screen only, phone unlocked), one per app, newest first. */
         @Volatile var barIcons: List<BarIcon> = emptyList()
             private set
@@ -79,8 +94,8 @@ class NexusNotifications : NotificationListenerService() {
     }
 
     override fun onListenerConnected() { instance = this; rebuild() }
-    override fun onListenerDisconnected() { if (instance === this) instance = null; items = emptyList(); barIcons = emptyList() }
-    override fun onDestroy() { if (instance === this) { instance = null; items = emptyList(); barIcons = emptyList() }; super.onDestroy() }
+    override fun onListenerDisconnected() { if (instance === this) instance = null; items = emptyList(); barIcons = emptyList(); homeItems = emptyList() }
+    override fun onDestroy() { if (instance === this) { instance = null; items = emptyList(); barIcons = emptyList(); homeItems = emptyList() }; super.onDestroy() }
     override fun onNotificationPosted(sbn: StatusBarNotification?, rankingMap: RankingMap?) = rebuild()
     override fun onNotificationRemoved(sbn: StatusBarNotification?, rankingMap: RankingMap?) = rebuild()
     override fun onNotificationRankingUpdate(rankingMap: RankingMap?) = rebuild()
@@ -94,6 +109,7 @@ class NexusNotifications : NotificationListenerService() {
             // with a notification that isn't silent, ongoing ones too (a call, a recording, directions); not what
             // Do Not Disturb keeps out of the status bar
             barIcons = try { buildBarIcons(all, ranking) } catch (_: Throwable) { emptyList() }
+            homeItems = try { buildHomeItems(all, ranking) } catch (_: Throwable) { emptyList() }
             val mode = mode(this)
             if (mode == "off") { items = emptyList(); return }
             // Groups that have their own notifications showing (their summary card would only repeat them)
@@ -142,6 +158,41 @@ class NexusNotifications : NotificationListenerService() {
                     n.flags and Notification.FLAG_AUTO_CANCEL != 0)
             }
         } catch (_: Throwable) { /* never let a strange notification break anything */ }
+    }
+
+    /** The home screen's boxes: like the lock screen's cards, but showing what they say (the phone is unlocked). */
+    private fun buildHomeItems(all: Array<StatusBarNotification>, ranking: RankingMap?): List<Item> {
+        val r = Ranking()
+        val withChildren = all.filter { it.notification.flags and Notification.FLAG_GROUP_SUMMARY == 0 }.map { it.groupKey }.toHashSet()
+        class Acc(var newest: StatusBarNotification) { var count = 0; val keys = ArrayList<String>(); var clearable = true }
+        val byApp = LinkedHashMap<String, Acc>()
+        for (sbn in all) {
+            val n = sbn.notification ?: continue
+            if (sbn.packageName == packageName && n.channelId != TEST_CHANNEL) continue
+            if (n.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_FOREGROUND_SERVICE) != 0) continue
+            if (ranking != null && ranking.getRanking(sbn.key, r)) {
+                if (r.importance < NotificationManager.IMPORTANCE_DEFAULT) continue // silent
+                if (r.suppressedVisualEffects and NotificationManager.Policy.SUPPRESSED_EFFECT_NOTIFICATION_LIST != 0) continue // Do Not Disturb
+                if (Build.VERSION.SDK_INT >= 28 && r.isSuspended) continue
+            }
+            val a = byApp.getOrPut(sbn.packageName) { Acc(sbn) }
+            a.keys.add(sbn.key)
+            // (A group's summary only repeats its notifications: it's cleared with them, but doesn't count or show)
+            if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0 && sbn.groupKey in withChildren) continue
+            if (a.count == 0 || sbn.postTime > a.newest.postTime) a.newest = sbn
+            a.count++
+            if (n.flags and Notification.FLAG_NO_CLEAR != 0) a.clearable = false
+        }
+        return byApp.values.filter { it.count > 0 }.sortedByDescending { it.newest.postTime }.map { a ->
+            val n = a.newest.notification
+            val ex = n.extras
+            val title = ex?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
+            val text = (ex?.getCharSequence(Notification.EXTRA_TEXT) ?: ex?.getCharSequence(Notification.EXTRA_BIG_TEXT))
+                ?.toString()?.trim()?.lineSequence()?.firstOrNull().orEmpty()
+            val (t1, t2) = if (title.isEmpty() && text.isEmpty()) "" to (if (a.count > 1) "${a.count} new notifications" else "New notification") else title to text
+            Item(a.newest.key, a.newest.packageName, appName(a.newest.packageName), t1, t2, a.count, a.newest.postTime,
+                n.contentIntent, n.flags and Notification.FLAG_AUTO_CANCEL != 0, a.keys.toList(), a.clearable)
+        }
     }
 
     private fun buildBarIcons(all: Array<StatusBarNotification>, ranking: RankingMap?): List<BarIcon> {

@@ -136,6 +136,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         hub.gridCols = grid.getOrNull(0)?.toIntOrNull() ?: 4; hub.gridRows = grid.getOrNull(1)?.toIntOrNull() ?: 6
         hub.ps2Menu = prefs.getString("homeStyle", "ps2") == "ps2"
         hub.notifIcons = NexusNotifications.barOn(this)
+        hub.notifBoxes = NexusNotifications.boxesOn(this)
         hub.games = list
         hub.loadLiveShots()
     }
@@ -184,6 +185,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
             { from, to -> moveApp(from, to) }, { drawer.open(add = false) }, { openSwitcher() }, { openSystem() })
         drawer = AppDrawer(this, sfx, { openItem(it) }, { addApps(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
         hub.onPullDown = { openNotifications() }
+        hub.onNotification = { item, from -> openNotification(item, from) }
         // The phone's own buttons show over NEXUS's for a moment after a swipe down from the top: NEXUS's step aside
         hub.onPhoneBars = { away ->
             if (::navBar.isInitialized && !hub.booting && navBar.visibility == android.view.View.VISIBLE)
@@ -287,6 +289,32 @@ class MainActivity : Activity(), NexusUi.NavHost {
         var tidied = NexusUi.dismissAll(this)
         if (::drawer.isInitialized && drawer.isOpen) { drawer.close(animate = onScreen); tidied = true }
         if (::hub.isInitialized) { if (onScreen && !tidied) hub.toTop() else hub.clearSelection() }
+    }
+
+    /**
+     * A notification box on the home screen tapped: what it leads to opens (as if it had been tapped in the
+     * notification shade), growing out of the box. If it leads nowhere, the app itself opens.
+     */
+    private fun openNotification(item: NexusNotifications.Item, from: android.graphics.RectF) {
+        var ok = false
+        item.intent?.let { pi ->
+            ok = try {
+                val grow = android.app.ActivityOptions.makeScaleUpAnimation(hub, from.left.toInt(), from.top.toInt(),
+                    from.width().toInt().coerceAtLeast(1), from.height().toInt().coerceAtLeast(1))
+                // (NEXUS is in front: the app may open, as from the notification shade)
+                @Suppress("DEPRECATION")
+                val o = if (android.os.Build.VERSION.SDK_INT >= 34)
+                    grow.setPendingIntentBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED) else grow
+                pi.send(this, 0, null, null, null, null, o.toBundle()); true
+            } catch (_: Exception) { false }
+        }
+        if (!ok) ok = try {
+            packageManager.getLaunchIntentForPackage(item.pkg)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true } ?: false
+        } catch (_: Exception) { false }
+        if (ok) leftForApp = true
+        else NexusUi.note(this, "That notification couldn't be opened")
+        // (Only ones the app marked to go away when tapped, as the notification shade does)
+        if (item.autoCancel) NexusNotifications.dismiss(item.key)
     }
 
     /** Swipe down on NEXUS: the notifications, the supported way first. */
@@ -655,6 +683,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         NexusUi.panel(this, "Settings", "Version $version", listOfNotNull(
             if (!isHome) NexusUi.Option("Make NEXUS my home screen", primary = true) { openHomeSettings() } else null,
             NexusUi.Option("Home screen:  " + (if (hub.ps2Menu) "PS2 menu" else "Tiles")) { homeScreenSettings() },
+            NexusUi.Option("Notifications:  " + notifSummary()) { notificationSettings(back = { homeSettings() }) },
             NexusUi.Option("Lock screen:  " + onOff(LockActivity.enabled(this))) { lockSettings() },
             NexusUi.Option("Recent apps helper:  $helper") { openAppsSettings() },
             NexusUi.Option("Buttons in apps:  " + onOff(NexusAccessibility.appButtonsOn(this))) { buttonSettings() },
@@ -672,17 +701,35 @@ class MainActivity : Activity(), NexusUi.NavHost {
             NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
             NexusUi.Option("Style:  " + (if (hub.ps2Menu) "PS2 menu" else "Tiles")) { toggleHomeStyle() },
             if (hub.ps2Menu) null else NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
-            // Notification icons in NEXUS's status bar (swipe down from it, or tap it, for the notifications)
-            if (!NexusNotifications.granted(this))
-                NexusUi.Option("Notification icons in the status bar: allow access") { askNotificationAccess(back = { homeScreenSettings() }) }
-            else NexusUi.Option("Notification icons in the status bar:  " + onOff(NexusNotifications.barOn(this))) {
-                NexusNotifications.setBarOn(this, !NexusNotifications.barOn(this))
-                hub.notifIcons = NexusNotifications.barOn(this)
-                homeScreenSettings()
-            },
+            NexusUi.Option("Notifications:  " + notifSummary()) { notificationSettings(back = { homeScreenSettings() }) },
             NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
             NexusUi.Option("Home screen when NEXUS is closed") { chooseNormalHome() }
         ), cancel = "Back", back = { homeSettings() })
+    }
+
+    /** What NEXUS shows of your notifications on the home screen, in a word or two (for the Settings lists). */
+    private fun notifSummary(): String {
+        if (!NexusNotifications.granted(this)) return "allow access"
+        val boxes = NexusNotifications.boxesOn(this); val icons = NexusNotifications.barOn(this)
+        return when { boxes && icons -> "boxes & icons"; boxes -> "boxes"; icons -> "icons"; else -> "OFF" }
+    }
+
+    /** Settings → Notifications: the boxes at the top of the home screen and the icons in the status bar. */
+    private fun notificationSettings(back: () -> Unit) {
+        if (!NexusNotifications.granted(this)) { askNotificationAccess(back = back); return }
+        val boxes = NexusNotifications.boxesOn(this); val icons = NexusNotifications.barOn(this)
+        NexusUi.panel(this, "Notifications",
+            "Boxes: your newest notifications at the top of the home screen. Tap one to open it, swipe it sideways to " +
+                "clear it. Icons: which apps have notifications, in the status bar. Swipe down from the top for all of them.\n\n" +
+                "They only show while your phone is unlocked. Nothing is stored or sent anywhere.",
+            listOf(
+                NexusUi.Option("Boxes on the home screen:  " + onOff(boxes)) {
+                    NexusNotifications.setBoxesOn(this, !boxes); hub.notifBoxes = !boxes; notificationSettings(back)
+                },
+                NexusUi.Option("Icons in the status bar:  " + onOff(icons)) {
+                    NexusNotifications.setBarOn(this, !icons); hub.notifIcons = !icons; notificationSettings(back)
+                }
+            ), cancel = "Back", back = back)
     }
 
     /** Settings → Buttons in apps. */
