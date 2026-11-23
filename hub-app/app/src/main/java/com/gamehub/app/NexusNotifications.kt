@@ -11,8 +11,9 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 
 /**
- * Lets the NEXUS lock screen show your notifications. Needs Notification access (NEXUS settings → NEXUS lock
- * screen). Follows the same privacy rules as the phone's own lock screen:
+ * Lets NEXUS show which apps have notifications in its status bar on the home screen (icons only, like the phone's
+ * own status bar), and lets the NEXUS lock screen show your notifications. Needs Notification access (NEXUS settings
+ * → Home screen, or → Lock screen). The lock screen follows the same privacy rules as the phone's own lock screen:
  *  - an app's or channel's "don't show on the lock screen" is respected (those never appear),
  *  - "sensitive" notifications show only the app's name unless you choose to show all content
  *    (by default NEXUS follows your phone's lock screen setting),
@@ -25,6 +26,12 @@ class NexusNotifications : NotificationListenerService() {
     class Item(val key: String, val pkg: String, val app: String, val title: String, val text: String,
                val count: Int, val time: Long, val intent: PendingIntent?, val autoCancel: Boolean)
 
+    /**
+     * One app's icon in the NEXUS status bar: its own small notification symbol, as the phone's status bar shows it
+     * ([glyph]), or else the app's icon.
+     */
+    class BarIcon(val pkg: String, val drawable: android.graphics.drawable.Drawable, val glyph: Boolean)
+
     companion object {
         /** NEXUS's own test notification (Gear → NEXUS lock screen → Send a test notification). */
         const val TEST_CHANNEL = "nexus_test"
@@ -33,9 +40,15 @@ class NexusNotifications : NotificationListenerService() {
         @Volatile var items: List<Item> = emptyList()
             private set
         @Volatile private var instance: NexusNotifications? = null
-        /** Apps with notifications, newest first, for the icons in the NEXUS status bar (home screen only). */
-        @Volatile var homeApps: List<String> = emptyList()
+        /** The icons for the NEXUS status bar (home screen only, phone unlocked), one per app, newest first. */
+        @Volatile var barIcons: List<BarIcon> = emptyList()
             private set
+        /** The colour of the NEXUS status bar's symbols (the notification icons are tinted to match). */
+        val BAR_TINT = android.graphics.Color.rgb(190, 210, 245)
+
+        /** Notification icons in the NEXUS status bar (Settings → Home screen; on once Notification access is allowed). */
+        fun barOn(c: Context): Boolean = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("barNotifs", true)
+        fun setBarOn(c: Context, on: Boolean) { c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit().putBoolean("barNotifs", on).apply() }
 
         fun granted(c: Context): Boolean = try {
             c.getSystemService(NotificationManager::class.java)
@@ -66,8 +79,8 @@ class NexusNotifications : NotificationListenerService() {
     }
 
     override fun onListenerConnected() { instance = this; rebuild() }
-    override fun onListenerDisconnected() { if (instance === this) instance = null; items = emptyList(); homeApps = emptyList() }
-    override fun onDestroy() { if (instance === this) { instance = null; items = emptyList(); homeApps = emptyList() }; super.onDestroy() }
+    override fun onListenerDisconnected() { if (instance === this) instance = null; items = emptyList(); barIcons = emptyList() }
+    override fun onDestroy() { if (instance === this) { instance = null; items = emptyList(); barIcons = emptyList() }; super.onDestroy() }
     override fun onNotificationPosted(sbn: StatusBarNotification?, rankingMap: RankingMap?) = rebuild()
     override fun onNotificationRemoved(sbn: StatusBarNotification?, rankingMap: RankingMap?) = rebuild()
     override fun onNotificationRankingUpdate(rankingMap: RankingMap?) = rebuild()
@@ -77,13 +90,10 @@ class NexusNotifications : NotificationListenerService() {
             val all = activeNotifications ?: emptyArray()
             val ranking = currentRanking
             val r = Ranking()
-            // Status bar icons (home screen, phone unlocked): every app with a notification you'd be alerted to
-            homeApps = all.filter { sbn ->
-                val n = sbn.notification
-                (sbn.packageName != packageName || n?.channelId == TEST_CHANNEL) && n != null &&
-                    n.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_FOREGROUND_SERVICE) == 0 &&
-                    (ranking == null || !ranking.getRanking(sbn.key, r) || r.importance >= NotificationManager.IMPORTANCE_DEFAULT)
-            }.sortedByDescending { it.postTime }.map { it.packageName }.distinct()
+            // Status bar icons (home screen, phone unlocked): what the phone's own status bar would show. Every app
+            // with a notification that isn't silent, ongoing ones too (a call, a recording, directions); not what
+            // Do Not Disturb keeps out of the status bar
+            barIcons = try { buildBarIcons(all, ranking) } catch (_: Throwable) { emptyList() }
             val mode = mode(this)
             if (mode == "off") { items = emptyList(); return }
             // Groups that have their own notifications showing (their summary card would only repeat them)
@@ -132,6 +142,50 @@ class NexusNotifications : NotificationListenerService() {
                     n.flags and Notification.FLAG_AUTO_CANCEL != 0)
             }
         } catch (_: Throwable) { /* never let a strange notification break anything */ }
+    }
+
+    private fun buildBarIcons(all: Array<StatusBarNotification>, ranking: RankingMap?): List<BarIcon> {
+        val r = Ranking()
+        val shown = all.filter { sbn ->
+            val n = sbn.notification ?: return@filter false
+            if (sbn.packageName == packageName && n.channelId != TEST_CHANNEL) return@filter false
+            if (ranking != null && ranking.getRanking(sbn.key, r)) {
+                if (r.importance < NotificationManager.IMPORTANCE_DEFAULT) return@filter false // silent
+                if (r.suppressedVisualEffects and NotificationManager.Policy.SUPPRESSED_EFFECT_STATUS_BAR != 0) return@filter false
+                if (Build.VERSION.SDK_INT >= 28 && r.isSuspended) return@filter false
+            }
+            true
+        }.sortedByDescending { it.postTime }
+        val out = ArrayList<BarIcon>()
+        val seen = HashSet<String>()
+        for (sbn in shown) {
+            if (!seen.add(sbn.packageName)) continue
+            barIcon(sbn)?.let { out.add(it) }
+            if (out.size >= 8) break
+        }
+        return out
+    }
+
+    /** Icons already read (the same few come back with every update), by app and symbol. */
+    private val iconCache = HashMap<String, BarIcon>()
+
+    private fun barIcon(sbn: StatusBarNotification): BarIcon? {
+        val ic = sbn.notification?.smallIcon
+        val key = sbn.packageName + "|" + (ic?.toString() ?: "app")
+        iconCache[key]?.let { return it }
+        if (iconCache.size > 48) iconCache.clear()
+        // The app's small notification symbol, tinted to match NEXUS's status bar (the phone's bar does the same)
+        val glyph = try { ic?.loadDrawable(this)?.mutate() } catch (_: Throwable) { null }
+        val made = if (glyph != null) {
+            glyph.setTint(BAR_TINT)
+            BarIcon(sbn.packageName, glyph, true)
+        } else {
+            // (Can't read it: the app's own icon instead)
+            val app = AppCache.get(this, sbn.packageName)?.icon?.constantState?.newDrawable()?.mutate() ?: return null
+            BarIcon(sbn.packageName, app, false)
+        }
+        iconCache[key] = made
+        return made
     }
 
     private fun appName(pkg: String): String = AppCache.get(this, pkg)?.label

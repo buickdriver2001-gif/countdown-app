@@ -135,6 +135,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         val grid = prefs.getString("grid", "4x6")!!.split("x")
         hub.gridCols = grid.getOrNull(0)?.toIntOrNull() ?: 4; hub.gridRows = grid.getOrNull(1)?.toIntOrNull() ?: 6
         hub.ps2Menu = prefs.getString("homeStyle", "ps2") == "ps2"
+        hub.notifIcons = NexusNotifications.barOn(this)
         hub.games = list
         hub.loadLiveShots()
     }
@@ -183,6 +184,11 @@ class MainActivity : Activity(), NexusUi.NavHost {
             { from, to -> moveApp(from, to) }, { drawer.open(add = false) }, { openSwitcher() }, { openSystem() })
         drawer = AppDrawer(this, sfx, { openItem(it) }, { addApps(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
         hub.onPullDown = { openNotifications() }
+        // The phone's own buttons show over NEXUS's for a moment after a swipe down from the top: NEXUS's step aside
+        hub.onPhoneBars = { away ->
+            if (::navBar.isInitialized && !hub.booting && navBar.visibility == android.view.View.VISIBLE)
+                navBar.animate().alpha(if (away) 0f else 1f).setDuration(if (away) 90L else 220L).start()
+        }
         drawer.onVisible = { open -> hub.covered = open; if (open) hub.clearSelection() }
         val root = android.widget.FrameLayout(this)
         root.addView(hub)
@@ -582,14 +588,16 @@ class MainActivity : Activity(), NexusUi.NavHost {
     }
 
     /** Says what to do on Android's Notification access page before going there (it can't be explained once you're there). */
-    private fun askNotificationAccess() {
-        NexusUi.panel(this, "Notifications on the lock screen",
-            "On the next screen, switch on NEXUS lock screen notifications, then come back.\n\n" +
+    private fun askNotificationAccess(back: () -> Unit = { lockSettings() }) {
+        NexusUi.panel(this, "Notification access",
+            "With access, NEXUS's status bar shows which apps have notifications (their icons only, like the phone's own " +
+                "status bar), and the NEXUS lock screen can show your notifications if you use it. Nothing is stored or sent anywhere.\n\n" +
+                "On the next screen, switch on NEXUS notifications, then come back.\n\n" +
                 "If Android says \"Restricted setting\", open NEXUS's App info below, tap ⋮ at the top right, choose " +
                 "Allow restricted settings, then try again.",
             listOf(NexusUi.Option("Continue", primary = true) { openNotificationAccess() },
                 NexusUi.Option("Open App info") { openAppInfo() }),
-            cancel = "Back", back = { lockSettings() })
+            cancel = "Back", back = back)
     }
 
     /** Android's Notification access page for NEXUS (where it can be allowed or taken away). */
@@ -664,6 +672,14 @@ class MainActivity : Activity(), NexusUi.NavHost {
             NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
             NexusUi.Option("Style:  " + (if (hub.ps2Menu) "PS2 menu" else "Tiles")) { toggleHomeStyle() },
             if (hub.ps2Menu) null else NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
+            // Notification icons in NEXUS's status bar (swipe down from it, or tap it, for the notifications)
+            if (!NexusNotifications.granted(this))
+                NexusUi.Option("Notification icons in the status bar: allow access") { askNotificationAccess(back = { homeScreenSettings() }) }
+            else NexusUi.Option("Notification icons in the status bar:  " + onOff(NexusNotifications.barOn(this))) {
+                NexusNotifications.setBarOn(this, !NexusNotifications.barOn(this))
+                hub.notifIcons = NexusNotifications.barOn(this)
+                homeScreenSettings()
+            },
             NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
             NexusUi.Option("Home screen when NEXUS is closed") { chooseNormalHome() }
         ), cancel = "Back", back = { homeSettings() })
@@ -771,6 +787,14 @@ class MainActivity : Activity(), NexusUi.NavHost {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) hideBars()
+        // (The notification shade came down over NEXUS, or went away: its status row comes back once the phone's is gone)
+        if (::hub.isInitialized) hub.focusChanged(hasFocus)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Left for an app (e.g. a notification was opened): NEXUS's status row and buttons are simply there next time
+        if (::hub.isInitialized) hub.phoneBarsGone()
     }
 
     /** A still picture of this screen as it stands (null if it wouldn't match what comes back: All Apps open etc). */

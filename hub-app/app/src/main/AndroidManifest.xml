@@ -116,7 +116,7 @@
                 android:resource="@xml/nexus_accessibility" />
         </service>
 
-        <!-- Shows your notifications on the NEXUS lock screen (only once you allow Notification access) -->
+        <!-- Notification icons in the NEXUS status bar, and notifications on the NEXUS lock screen (only once you allow Notification access) -->
         <service
             android:name=".NexusNotifications"
             android:label="@string/notif_label"

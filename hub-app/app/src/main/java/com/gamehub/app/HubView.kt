@@ -692,6 +692,38 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     /** Swiping down from the top of the list: opens the notifications (set by NEXUS). */
     var onPullDown: () -> Unit = {}
     private var pullArmed = false
+    /** NEXUS's buttons step aside while the phone's own buttons show over them (set by NEXUS). */
+    var onPhoneBars: (Boolean) -> Unit = {}
+    /** Notification icons in the status bar (Settings → Home screen). */
+    var notifIcons = true
+    /** The touch started on the status bar: it's for the notifications and never moves the list. */
+    private var fromBar = false
+    private var barPulled = false
+    /**
+     * A swipe down from the top shows the phone's own status bar and buttons over NEXUS's for a moment (and as the
+     * notification shade closes): until when NEXUS's status row and buttons stay out of their way, so there's never
+     * two of each (0: not now; MAX: until NEXUS is back in front).
+     */
+    private var phoneBarsUntil = 0L
+    private var stripA = 1f
+
+    private fun phoneBarsComing() {
+        phoneBarsUntil = android.os.SystemClock.uptimeMillis() + 3000L
+        onPhoneBars(true); invalidate()
+    }
+
+    /** NEXUS's window lost or got back the focus (e.g. the notification shade came down over it or went away). */
+    fun focusChanged(has: Boolean) {
+        if (phoneBarsUntil == 0L) return
+        phoneBarsUntil = if (has) android.os.SystemClock.uptimeMillis() + 600L else Long.MAX_VALUE
+        invalidate()
+    }
+
+    /** NEXUS left for an app (or a picture of it is taken): its own status row and buttons are simply there. */
+    fun phoneBarsGone() {
+        if (phoneBarsUntil == 0L && stripA >= 1f) return
+        phoneBarsUntil = 0L; stripA = 1f; onPhoneBars(false)
+    }
     private var maxScroll = 0f
     private var listTop = 0f
     private var listBottom = 0f
@@ -721,16 +753,20 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val a = ((intro - 0.4f) / 0.6f).coerceIn(0f, 1f) * (1f - 0.8f * crystalK)
         if (a <= 0f) return
         // (No title: the apps start right under the status row)
+        // The phone's own status bar showing over it for a moment (a swipe down from the top): NEXUS's steps aside
+        if (phoneBarsUntil != 0L && android.os.SystemClock.uptimeMillis() >= phoneBarsUntil) { phoneBarsUntil = 0L; onPhoneBars(false) }
+        stripA = if (phoneBarsUntil != 0L) max(0f, stripA - dt * 10f) else min(1f, stripA + dt * 5f)
+        val sa = a * stripA
         // Status corners: date left, clock right, thin brackets
         text.letterSpacing = 0.12f; text.textSize = 11.5f * d
-        text.color = Color.argb((170 * a).toInt(), 190, 210, 245)
+        text.color = Color.argb((170 * sa).toInt(), 190, 210, 245)
         updateClock()
         text.textAlign = Paint.Align.LEFT; c.drawText(dateText, 20 * d, 32 * d, text)
         val dateEnd = 20 * d + text.measureText(dateText)
         text.textAlign = Paint.Align.RIGHT; c.drawText(clockText, w - 20 * d, 32 * d, text)
         // NEXUS's own status bar: signal and battery beside the clock, notification icons beside the date
         val clockStart = w - 20 * d - text.measureText(clockText)
-        drawStatus(c, dateEnd, clockStart, 32 * d, a)
+        if (sa > 0.01f) drawStatus(c, dateEnd, clockStart, 32 * d, sa)
         // Settings gear under the clock
         gearRect.set(w - 50 * d, 40 * d, w - 14 * d, 76 * d)
         drawGear(c, gearRect.centerX(), gearRect.centerY(), 8 * d, Color.argb((150 * a).toInt(), 180, 205, 245))
@@ -1193,20 +1229,24 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             text.textAlign = Paint.Align.RIGHT; c.drawText("!", x + 4 * d, base, text)
             x -= 6 * d
         }
-        // Notification icons after the date (apps with notifications, newest first)
-        val apps = NexusNotifications.homeApps
-        if (apps.isNotEmpty()) {
-            val isz = 14 * d
-            var ix = left + 10 * d
+        // Notification icons after the date, newest first: each app's own small symbol, as the phone's status bar
+        // shows them (needs Notification access; Settings → Home screen)
+        val icons = if (notifIcons) NexusNotifications.barIcons else emptyList()
+        if (icons.isNotEmpty()) {
+            val isz = 13.5f * d
+            var ix = left + 12 * d
             var shown = 0
-            for (pkg in apps) {
-                if (ix + isz > x - 8 * d || shown >= 4) break
-                val icon = AppCache.get(context, pkg)?.icon ?: continue
-                icon.setBounds(ix.toInt(), (base - isz + 1 * d).toInt(), (ix + isz).toInt(), (base + 1 * d).toInt())
-                icon.alpha = (230 * a).toInt(); icon.draw(c); icon.alpha = 255
-                ix += isz + 5 * d; shown++
+            for (b in icons) {
+                if (ix + isz > x - 14 * d || shown >= 5) break
+                val dr = b.drawable
+                dr.setBounds(ix.toInt(), (base - isz + 1.5f * d).toInt(), (ix + isz).toInt(), (base + 1.5f * d).toInt())
+                dr.alpha = ((if (b.glyph) 215 else 230) * a).toInt(); dr.draw(c); dr.alpha = 255
+                ix += isz + 6 * d; shown++
             }
-            if (apps.size > shown && shown > 0 && ix + 10 * d < x) { text.textAlign = Paint.Align.LEFT; c.drawText("+", ix, base, text) }
+            // More than fit: a small dot, as the phone's own status bar shows
+            if (icons.size > shown && shown > 0 && ix + 4 * d < x) {
+                fill.color = col; c.drawCircle(ix + 1.5f * d, base - isz / 2 + 1.5f * d, 1.8f * d, fill)
+            }
         }
         text.textAlign = Paint.Align.LEFT
     }
@@ -1909,8 +1949,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 snapTo = Float.NaN
                 // Already at the top: a swipe down from here pulls down the notifications
                 pullArmed = !caught && scroll <= 1f * d
+                // On the status bar: a tap or a swipe down there brings down the notifications (never moves the list)
+                fromBar = e.y < 48 * d && !gearRect.contains(e.x, e.y)
+                barPulled = false
                 scrollVel = 0f
-                downRow = rowAt(e.x, e.y)
+                downRow = if (fromBar) -1 else rowAt(e.x, e.y)
                 swipedUp = false
                 if (downRow in games.indices && !caught) postDelayed(longPress, 600)
             }
@@ -1918,6 +1961,18 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 lastX = e.x
                 for (k in 0 until e.historySize) travel(e.getHistoricalX(k), e.getHistoricalY(k))
                 travel(e.x, e.y)
+                if (fromBar) {
+                    // The notifications come down as soon as the swipe is clearly downwards, like the phone's own bar
+                    val dy = e.y - downY
+                    if (!dragging && maxTravel > slop) dragging = true
+                    if (!barPulled && t > readyT && launchFlash <= 0f && dy > 20 * d && dy > kotlin.math.abs(e.x - downX)) {
+                        barPulled = true
+                        phoneBarsComing()
+                        onPullDown()
+                    }
+                    lastY = e.y
+                    return true
+                }
                 if (moveIndex >= 0) {
                     moveY = e.y
                     if (kotlin.math.abs(e.y - downY) > slop) movedWhileHeld = true
@@ -1966,8 +2021,17 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     return true
                 }
                 val pullDy = e.y - downY
+                if (fromBar) {
+                    // From the status bar: a tap (or a swipe down that hadn't brought them yet) opens the notifications
+                    if (!barPulled && !longFired && launchFlash <= 0f && t > readyT &&
+                        (tap || (pullDy > 20 * d && pullDy > kotlin.math.abs(e.x - downX)))) { phoneBarsComing(); onPullDown() }
+                    fromBar = false; dragging = false; downRow = -1
+                    tracker?.recycle(); tracker = null
+                    return true
+                }
                 if (!tap && pullArmed && !longFired && t > readyT && pullDy > 64 * d && kotlin.math.abs(e.x - downX) < pullDy * 0.6f && vy > -200 * d) {
                     // Swipe down at the top of the list: notifications, like other launchers
+                    phoneBarsComing()
                     onPullDown()
                 } else if (!tap) {
                     // Swipe: let the list glide on (a short flick that never got going still moves it)
@@ -2018,7 +2082,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 downRow = -1
                 tracker?.recycle(); tracker = null
             }
-            MotionEvent.ACTION_CANCEL -> { removeCallbacks(longPress); moveIndex = -1; dragging = false; downRow = -1; tracker?.recycle(); tracker = null }
+            MotionEvent.ACTION_CANCEL -> { removeCallbacks(longPress); moveIndex = -1; dragging = false; downRow = -1; fromBar = false; tracker?.recycle(); tracker = null }
         }
         return true
     }
@@ -2036,6 +2100,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         if (width <= 0 || height <= 0 || booting) return null
         // (Back from an app, nothing is left chosen: the picture shows it the same way)
         launchFlash = 0f; pending = null; enterFade = 0f; settle = 0f; selected = -1
+        phoneBarsGone()
         return try {
             val b = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
             lastNs = System.nanoTime() // no time passes for the picture
