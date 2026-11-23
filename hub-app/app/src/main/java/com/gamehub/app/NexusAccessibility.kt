@@ -102,6 +102,17 @@ class NexusAccessibility : AccessibilityService() {
         val recentsShowing: Boolean get() = instance?.recents?.showing == true
         /** The home screen is hidden behind NEXUS's cover or Recent Apps right now (it pauses its animation). */
         val homeHidden: Boolean get() = coverBusy || recentsShowing
+        /**
+         * The home screen was hidden just now: by Recent Apps, by NEXUS closing apps, or by the phone's own recent
+         * apps opened for that. A Home that arrives now isn't you pressing Home while looking at the home screen,
+         * so the list stays where you left it.
+         */
+        fun homeCoveredRecently(): Boolean {
+            val s = instance ?: return false
+            val now = SystemClock.uptimeMillis()
+            return s.closeJob != null || s.phoneRecentsOpen || s.recents.showing || now - s.recents.hiddenAt < 1500L ||
+                now - s.phoneRecentsLeftAt < 1500L || now - s.closeEndedAt < 1500L
+        }
         /** Opens Recent Apps in NEXUS's layer (false: not possible now, e.g. with TalkBack). */
         fun showRecents(): Boolean = instance?.let { !it.talkBackOn() && it.recents.show() } ?: false
         /** The phone's own Home was pressed while Recent Apps was up: it fades away. */
@@ -500,6 +511,11 @@ class NexusAccessibility : AccessibilityService() {
         val strayTried = HashSet<String>()
     }
     private var closeJob: CloseJob? = null
+        set(v) { if (field != null && v == null) closeEndedAt = SystemClock.uptimeMillis(); field = v }
+    /** When NEXUS last finished (or stopped) closing apps. */
+    private var closeEndedAt = 0L
+    /** When the phone's own recent apps (opened by NEXUS to close apps) was last left. */
+    private var phoneRecentsLeftAt = 0L
 
     fun enqueueClose(pkgs: List<String>, all: Boolean): Boolean {
         if (!fullCloseOn(this) || Build.VERSION.SDK_INT < 26) return false
@@ -1156,7 +1172,7 @@ class NexusAccessibility : AccessibilityService() {
             cls.contains("Recents", ignoreCase = true) && !cls.contains("Launcher", ignoreCase = true)
         // The phone's own recent apps, asked for on purpose (to fully close apps): leave it alone while it's open,
         // until you go back to NEXUS or into an app
-        if (phoneRecentsOpen && !isRecents && leftPhoneRecents(pkg, cls)) phoneRecentsOpen = false
+        if (phoneRecentsOpen && !isRecents && leftPhoneRecents(pkg, cls)) { phoneRecentsOpen = false; phoneRecentsLeftAt = SystemClock.uptimeMillis() }
         if (isRecents && (phoneRecentsOpen || SystemClock.uptimeMillis() < phoneRecentsAskedUntil)) {
             if (!phoneRecentsOpen) { LockTrace.log(this, "phone's own recent apps open (asked for)"); phoneRecentsSeenAt = SystemClock.uptimeMillis() }
             phoneRecentsOpen = true; phoneRecentsAskedUntil = 0L

@@ -250,6 +250,8 @@ class MainActivity : Activity(), NexusUi.NavHost {
     }
 
     private var pausedAt = 0L
+    /** When this screen last came into view (with pausedAt: whether it was really on screen when Home came). */
+    private var resumedAt = 0L
 
     override fun onPause() {
         super.onPause()
@@ -845,10 +847,14 @@ class MainActivity : Activity(), NexusUi.NavHost {
             // Home pressed: NEXUS mode on = stay in / come back to NEXUS; off = normal home screen
             if (!HomeMode.isOn(this) && HomeMode.goNormalHome(this)) return
             leftForApp = android.os.SystemClock.uptimeMillis() - pausedAt > 700
+            // The list glides back to the top only when Home is pressed while you're looking at the home screen
+            // itself. Coming home after closing apps, or from Recent Apps (NEXUS's or the phone's), it stays where
+            // you left it. (Asked before Recent Apps is put away just below.)
+            val onHome = !leftForApp && pausedAt - resumedAt > 300 && !NexusAccessibility.homeCoveredRecently()
             // Home pressed from an app: apps swiped away in Recent Apps earlier get closed fully now
             NexusAccessibility.hideRecents()
             if (leftForApp) NexusAccessibility.closeWhenHome()
-            goHome(onScreen = !leftForApp)
+            goHome(onScreen = onHome)
             // Back from an app with the phone's own Home button: the home screen shows at once on NEXUS's cover
             // while the phone's slide back plays underneath (already done if NEXUS's own Home button was used)
             // (A cross-fade into a picture of this screen when there is one, rather than a dip into the dark)
@@ -875,6 +881,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
 
     override fun onResume() {
         super.onResume()
+        resumedAt = android.os.SystemClock.uptimeMillis()
         // (No fade-in while NEXUS closes apps under its cover: the cover is already showing this screen)
         if (::hub.isInitialized) { refresh(); hub.resumed(leftForApp && !NexusAccessibility.busyClosing && !NexusAccessibility.veiling && !NexusAccessibility.recentsShowing) }
         loadCountdown()
