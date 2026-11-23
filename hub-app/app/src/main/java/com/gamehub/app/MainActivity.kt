@@ -719,8 +719,9 @@ class MainActivity : Activity(), NexusUi.NavHost {
         if (!NexusNotifications.granted(this)) { askNotificationAccess(back = back); return }
         val boxes = NexusNotifications.boxesOn(this); val icons = NexusNotifications.barOn(this)
         NexusUi.panel(this, "Notifications",
-            "Boxes: your newest notifications at the top of the home screen. Tap one to open it, swipe it sideways to " +
-                "clear it. Icons: which apps have notifications, in the status bar. Swipe down from the top for all of them.\n\n" +
+            "Boxes: your notifications at the top of the home screen, newest first. Swipe up and down on them to scroll " +
+                "through, tap one to open it, swipe it sideways to clear it. They scroll away with your apps.\n\n" +
+                "Icons: which apps have notifications, in the status bar. Swipe down from the top for all of them.\n\n" +
                 "They only show while your phone is unlocked. Nothing is stored or sent anywhere.",
             listOf(
                 NexusUi.Option("Boxes on the home screen:  " + onOff(boxes)) {

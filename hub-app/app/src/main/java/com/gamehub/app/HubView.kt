@@ -219,9 +219,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         if (ps2Menu) {
             homeCrystalK = if (panelOpen) max(0f, homeCrystalK - dt * 3f) else min(1f, homeCrystalK + dt * 1.2f)
             val ck = homeCrystalK * intro * 0.85f
-            // (Notification boxes at the top: they step back and down a little, behind them)
-            val ckb = ck * (1f - 0.5f * boxesA)
-            if (ckb > 0.01f) crystals.draw(c, width, height, dt, ckb, w / 2f, h * 0.25f + boxesH * 0.35f, w * 0.34f, h * 0.06f, 0.8f)
+            // (Notification boxes at the top: the crystals step back behind them while they're there)
+            val ckb = ck * (1f - 0.5f * boxesA * boxesVis)
+            if (ckb > 0.01f) crystals.draw(c, width, height, dt, ckb, w / 2f, h * 0.25f, w * 0.34f, h * 0.06f, 0.8f)
         }
         drawMenu(c, intro, dt)
 
@@ -282,7 +282,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         if (intro < 1f || dragging || moveIndex >= 0 || scrollVel != 0f || homing || !snapTo.isNaN() || settling) return false
         if (launchFlash > 0f || enterFade > 0f || settle > 0f || pending != null) return false
         if (crystalK != 0f && crystalK != 1f) return false
-        if ((boxesA != 0f && boxesA != 1f) || offMode != OFF_NONE || boxDown != BOX_NONE) return false
+        if ((boxesA != 0f && boxesA != 1f) || offMode != OFF_NONE || boxDown != BOX_NONE || innerVel != 0f) return false
         if (ps2Menu && homeCrystalK != 0f && homeCrystalK != 1f) return false
         return now - nothingOpenAt > NOTE_MS
     }
@@ -695,8 +695,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     /** Swiping down from the top of the list: opens the notifications (set by NEXUS). */
     var onPullDown: () -> Unit = {}
     private var pullArmed = false
-    // ---- Notification boxes at the top of the home screen, like the NEXUS lock screen's (while there are any; the
-    // menu moves down to make room). Tap one to open it, swipe it sideways to clear it, swipe down for the shade.
+    // ---- Notification boxes at the top of the home screen, like the NEXUS lock screen's (while there are any). They're
+    // part of the list: scroll down through your apps and they go up and away with it. Up to two show at a time (a
+    // third peeks out when there are more): swipe up and down on them to scroll through. Tap one to open it, swipe
+    // it sideways to clear it.
     // What they say shows, as in the phone's own notification shade: the phone is unlocked here (never while it's locked).
     var notifBoxes = true
     /** A box was tapped: open what the notification leads to (set by NEXUS), from where the box is. */
@@ -708,15 +710,26 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private var boxesMinute = -1L
     private val boxRects = Array(MAX_BOXES) { RectF() }
     private var boxShown = 0
-    private val moreRect = RectF()
+    /** The part of the screen the notification area shows in right now. */
+    private val vpRect = RectF()
     /** The room the boxes take (grows and shrinks smoothly) and how far they've faded in. */
     private var boxesH = 0f
     private var boxesA = 0f
+    /** How much of the area is still on screen (it goes up with the list): the crystals behind dim only while it shows. */
+    private var boxesVis = 0f
+    /** Scrolling through the notifications themselves (when more than fit). */
+    private var innerScroll = 0f
+    private var innerVel = 0f
+    private var innerMax = 0f
+    /** A swipe on the boxes going up or down (scrolls them, then the list), and whether they took the last of it. */
+    private var boxVertical = false
+    private var boxInner = false
+    /** Tiles: the room at the top of the list the notification area takes (it scrolls with the tiles). */
+    private var tileHdr = 0f
     /** Boxes swiped away, until the notifications are really gone. */
     private val clearedKeys = HashSet<String>()
     private var boxDown = BOX_NONE
     private var boxSwiping = false
-    private var boxPulled = false
     /** One box moved sideways: held under the finger, springing back, or flying off to be cleared. */
     private var offKey: String? = null
     private var offItem: NexusNotifications.Item? = null
@@ -759,9 +772,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         }
     }
 
-    /** Lays out and draws the boxes from [top]. */
-    private fun drawBoxes(c: Canvas, w: Float, top: Float, fade: Float, dt: Float) {
-        val boxH = 64 * d; val gap = 8 * d
+    /**
+     * Draws the notification area from [top] (it scrolls with the list, so this moves up as you scroll down), never
+     * above [clipTop]. Up to two boxes show, with the top of a third peeking out when there are more: they scroll.
+     */
+    private fun drawBoxes(c: Canvas, w: Float, top: Float, clipTop: Float, fade: Float, dt: Float) {
+        val boxH = 64 * d; val step = 72 * d
         // The one moved sideways: springing back, or flying off (then it's cleared, as in the notification shade)
         when (offMode) {
             OFF_BACK -> { offDx *= kotlin.math.exp(-dt * 16f); if (kotlin.math.abs(offDx) < 0.5f) { offMode = OFF_NONE; offKey = null; offDx = 0f } }
@@ -773,27 +789,45 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 }
             }
         }
-        boxShown = min(boxes.size, MAX_BOXES)
-        var y = top
-        for (i in 0 until boxShown) {
+        // Scrolling through them: a flick glides on and stops at the ends
+        val n = min(boxes.size, MAX_BOXES)
+        innerMax = max(0f, n * step - 8 * d - boxesH)
+        if (innerVel != 0f && boxDown == BOX_NONE) {
+            innerScroll += innerVel * dt
+            innerVel *= kotlin.math.exp(-dt * 2.6f)
+            if (kotlin.math.abs(innerVel) < 20f * d || innerScroll <= 0f || innerScroll >= innerMax) innerVel = 0f
+        }
+        innerScroll = innerScroll.coerceIn(0f, innerMax)
+        vpRect.set(16 * d, max(top, clipTop), w - 16 * d, top + boxesH)
+        boxShown = 0
+        if (vpRect.height() <= 1f) { for (i in 0 until MAX_BOXES) boxRects[i].setEmpty(); return }
+        c.save()
+        c.clipRect(0f, vpRect.top, w, vpRect.bottom)
+        for (i in 0 until MAX_BOXES) {
+            val r = boxRects[i]
+            if (i >= n) { r.setEmpty(); continue }
+            val y = top + i * step - innerScroll
+            if (y >= vpRect.bottom || y + boxH <= vpRect.top) { r.setEmpty(); continue }
             val b = boxes[i]
             val dx = if (b.item.key == offKey) offDx else 0f
-            // (They come in as the menu makes room for them)
-            val vis = ((boxesH - (y - top)) / boxH).coerceIn(0f, 1f)
-            val fa = fade * vis * (1f - (kotlin.math.abs(dx) / (w * 0.7f)).coerceIn(0f, 1f))
-            val r = boxRects[i]
+            // Partly out of the area (the one peeking out below, or one scrolled half away): softer
+            val inArea = (min(1f, (top + boxesH - y) / (boxH * 0.85f)) * min(1f, (y + boxH - top) / (boxH * 0.85f))).coerceIn(0f, 1f)
+            // Going up under the status row as the list scrolls: it fades on the way
+            val under = ((y + boxH - clipTop - 12 * d) / boxH).coerceIn(0f, 1f)
+            val fa = fade * inArea * under * (1f - (kotlin.math.abs(dx) / (w * 0.7f)).coerceIn(0f, 1f))
             r.set(16 * d + dx, y, w - 16 * d + dx, y + boxH)
-            if (fa > 0.01f) drawBox(c, b, r, fa, i == boxDown && !boxSwiping && !dragging)
-            y += boxH + gap
+            boxShown = i + 1
+            if (fa > 0.01f) drawBox(c, b, r, fa, i == boxDown && !boxSwiping && !boxVertical && !dragging)
         }
-        if (boxes.size > boxShown) {
-            val more = boxes.size - boxShown
-            moreRect.set(w / 2 - 90 * d, y - 6 * d, w / 2 + 90 * d, y + 18 * d)
-            val vis = ((boxesH - (y - top)) / (16 * d)).coerceIn(0f, 1f)
-            text.textAlign = Paint.Align.CENTER; text.textSize = 11.5f * d; text.letterSpacing = 0.12f
-            text.color = Color.argb(((if (boxDown == BOX_MORE) 230 else 150) * fade * vis).toInt(), 170, 200, 245)
-            c.drawText("+ $more MORE", w / 2, y + 8 * d, text)
-        } else moreRect.setEmpty()
+        c.restore()
+        // More than fit: a thin scroll bar beside them
+        if (innerMax > 0f) {
+            val trackT = top + 6 * d; val trackH = boxesH - 12 * d
+            val thumbH = max(18 * d, trackH * boxesH / (boxesH + innerMax))
+            val ty = trackT + (trackH - thumbH) * (innerScroll / innerMax)
+            glyphR.set(w - 10 * d, max(ty, vpRect.top), w - 8 * d, ty + thumbH)
+            if (glyphR.height() > 1f) { fill.color = Color.argb((130 * fade).toInt(), 140, 190, 255); c.drawRoundRect(glyphR, d, d, fill) }
+        }
         text.textAlign = Paint.Align.LEFT; text.letterSpacing = 0.12f
     }
 
@@ -827,9 +861,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     private fun boxAt(x: Float, y: Float): Int {
-        if (boxesA < 0.6f) return BOX_NONE
+        if (boxesA < 0.6f || !vpRect.contains(x, y)) return BOX_NONE
         for (i in 0 until boxShown) if (boxRects[i].contains(x, y)) return i
-        if (!moreRect.isEmpty && moreRect.contains(x, y)) return BOX_MORE
         return BOX_NONE
     }
 
@@ -922,18 +955,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
         // App tiles on a home-screen grid, or the PS2-style menu (one app per line) - both scroll
         rows.clear()
-        // Notification boxes at the top (when there are any): the menu moves down to make room
-        buildBoxes(w)
-        val wantBoxes = notifBoxes && boxes.isNotEmpty() && !booting
-        // (While the phone is locked they're never drawn; the room stays, so nothing shifts as you unlock)
-        val lockedNow = phoneLocked()
-        val nBox = if (wantBoxes) min(boxes.size, MAX_BOXES) else 0
-        val boxTop = 84 * d
-        val boxesTarget = if (nBox > 0) nBox * 72 * d + (if (boxes.size > nBox) 20 * d else 0f) else 0f
-        boxesH += (boxesTarget - boxesH) * min(1f, dt * 9f)
-        if (kotlin.math.abs(boxesTarget - boxesH) < 0.5f) boxesH = boxesTarget
-        boxesA = if (lockedNow) 0f else if (wantBoxes) min(1f, boxesA + dt * 4f) else max(0f, boxesA - dt * 6f)
-        listTop = max(max(h * 0.12f, 88 * d), boxTop + boxesH + 6 * d); listBottom = h - 76 * d - navInset
+        listTop = max(h * 0.12f, 88 * d); listBottom = h - 76 * d - navInset
         val list = ps2Menu
         val gap = if (list) 4 * d else 10 * d
         val left = 18 * d; val right = w - 18 * d
@@ -944,6 +966,24 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val stepX = cellW + gap; val stepY = cellH + gap
         listPad = if (list) max(0f, (listBottom - listTop) / 2 - cellH / 2) else 0f
         if (list) listStep = stepY
+        // Notification boxes at the top (when there are any): part of the list, so they scroll up and away with it.
+        // PS2 menu: they sit in the open space above the first app. Tiles: the tiles start below them.
+        buildBoxes(w)
+        val wantBoxes = notifBoxes && boxes.isNotEmpty() && !booting
+        // (While the phone is locked they're never drawn; the room stays, so nothing shifts as you unlock)
+        val lockedNow = phoneLocked()
+        val nBox = if (wantBoxes) min(boxes.size, MAX_BOXES) else 0
+        val boxTop = if (list) 84 * d else listTop
+        var boxesTarget = when { nBox == 0 -> 0f; nBox == 1 -> 64 * d; nBox == 2 -> 136 * d; else -> 144 * d + 22 * d }
+        // (PS2 menu: never into the first app's place)
+        if (list) boxesTarget = min(boxesTarget, max(0f, listTop + listPad - 16 * d - boxTop))
+        boxesH += (boxesTarget - boxesH) * min(1f, dt * 9f)
+        if (kotlin.math.abs(boxesTarget - boxesH) < 0.5f) boxesH = boxesTarget
+        boxesA = if (lockedNow) 0f else if (wantBoxes) min(1f, boxesA + dt * 4f) else max(0f, boxesA - dt * 6f)
+        tileHdr = if (!list && boxesH > 0.5f) boxesH + 14 * d else 0f
+        val boxY = boxTop - scroll
+        val boxClip = if (list) 46 * d else listTop - 8 * d
+        boxesVis = if (boxesH > 0.5f) ((boxY + boxesH - boxClip) / boxesH).coerceIn(0f, 1f) else 0f
         // Pack tiles in order (first free spot that fits, like a phone home screen). (Adding apps is ADD APP at the bottom.)
         var target = -1
         val order: ArrayList<Int>
@@ -953,7 +993,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             // Where would the dragged tile land? Look at the layout without it and find the tile under the finger
             val rest = games.indices.filter { it != moveIndex }
             val restPos = pack(rest, cols)
-            val fx = lastX; val fy = moveY + scroll - listTop - listPad
+            val fx = lastX; val fy = moveY + scroll - listTop - listPad - tileHdr
             var hit = rest.size
             for ((k, idx) in rest.withIndex()) {
                 val p = restPos[k]
@@ -978,7 +1018,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         }
         var usedRows = 0
         for (p in pos) usedRows = max(usedRows, p[1] + p[3])
-        val total = usedRows * stepY - gap + 2 * listPad
+        val total = usedRows * stepY - gap + 2 * listPad + tileHdr
         maxScroll = max(0f, total - (listBottom - listTop))
         // PS2 menu: gliding to the app that was tapped (it comes to the middle)
         if (!snapTo.isNaN() && !dragging) {
@@ -1039,7 +1079,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             c.drawRect(0f, 0f, w, 1f, fill); fill.shader = null
             c.restore()
         }
-        val startY = listTop + listPad - scroll
+        val startY = listTop + listPad - scroll + tileHdr
         if (anim.size != games.size) anim = Array(games.size) { RectF(Float.NaN, 0f, 0f, 0f) }
         val k = min(1f, dt * 14f)
         while (hitPool.size < games.size) hitPool.add(RectF())
@@ -1114,8 +1154,11 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             c.drawRoundRect(glyphR, d, d, fill)
         }
         // The notification boxes over everything at the top
-        if (boxesA > 0.01f && boxes.isNotEmpty() && !lockedNow) drawBoxes(c, w, boxTop, a * boxesA, dt)
-        else { boxShown = 0; moreRect.setEmpty(); if (boxes.isEmpty()) { offMode = OFF_NONE; offKey = null } }
+        if (boxesA > 0.01f && boxes.isNotEmpty() && !lockedNow && boxesVis > 0f) drawBoxes(c, w, boxY, boxClip, a * boxesA, dt)
+        else {
+            boxShown = 0; vpRect.setEmpty()
+            if (boxes.isEmpty()) { offMode = OFF_NONE; offKey = null; innerScroll = 0f; innerVel = 0f }
+        }
         text.textAlign = Paint.Align.CENTER
         text.textSize = 10.5f * d; text.letterSpacing = 0.12f
         text.color = Color.argb((110 * a).toInt(), 160, 185, 230)
@@ -1143,9 +1186,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     companion object {
-        private const val MAX_BOXES = 2
+        /** At most this many notification boxes (one per app; scroll through them). */
+        private const val MAX_BOXES = 30
         private const val BOX_NONE = -1
-        private const val BOX_MORE = -2
         private const val OFF_NONE = 0
         private const val OFF_HELD = 1
         private const val OFF_BACK = 2
@@ -1926,7 +1969,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private val A11Y_RECENT = 100_001
     private val A11Y_ALL = 100_002
     private val A11Y_GEAR = 100_003
-    private val A11Y_MORE = 100_009
     private val A11Y_BOX = 100_010
     private val A11Y_NONE = Int.MIN_VALUE
     private var a11yFocused = A11Y_NONE
@@ -1940,7 +1982,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val out = ArrayList<Int>()
         if (booting) return out
         // The notification boxes first (they're at the top), then the apps, then the buttons
-        if (boxesA > 0.6f) { for (i in 0 until boxShown) out.add(A11Y_BOX + i); if (!moreRect.isEmpty) out.add(A11Y_MORE) }
+        if (boxesA > 0.6f) { for (i in 0 until boxShown) if (!boxRects[i].isEmpty) out.add(A11Y_BOX + i) }
         for (i in games.indices) if (i < rows.size) out.add(i)
         out.add(A11Y_ADD); out.add(A11Y_ALL); out.add(A11Y_GEAR)
         return out
@@ -1951,7 +1993,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         A11Y_RECENT -> recentRect
         A11Y_ALL -> allAppsRect
         A11Y_GEAR -> gearRect
-        A11Y_MORE -> moreRect
         in A11Y_BOX until A11Y_BOX + MAX_BOXES -> if (id - A11Y_BOX < boxShown) boxRects[id - A11Y_BOX] else null
         else -> rows.getOrNull(id)
     }?.takeIf { !it.isEmpty }
@@ -1964,7 +2005,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         A11Y_RECENT -> "Recent apps"
         A11Y_ALL -> "All apps"
         A11Y_GEAR -> "NEXUS settings"
-        A11Y_MORE -> "${boxes.size - boxShown} more notifications. Opens the notification shade"
         in A11Y_BOX until A11Y_BOX + MAX_BOXES -> boxes.getOrNull(id - A11Y_BOX)?.item?.let { n ->
             "Notification from ${n.app}" + (if (n.count > 1) ", ${n.count} notifications" else "") +
                 (if (n.title.isNotEmpty()) ": ${n.title}" else "") + (if (n.text.isNotEmpty()) ". ${n.text}" else "")
@@ -1988,7 +2028,6 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             A11Y_RECENT -> { sfx.tick(); onRecent() }
             A11Y_ALL -> { sfx.tick(); onDrawer() }
             A11Y_GEAR -> { sfx.tick(); onSettings() }
-            A11Y_MORE -> { sfx.tick(); phoneBarsComing(); onPullDown() }
             in A11Y_BOX until A11Y_BOX + MAX_BOXES -> {
                 val i = id - A11Y_BOX; val b = boxes.getOrNull(i) ?: return false
                 sfx.confirm(); onNotification(b.item, RectF(boxRects[i]))
@@ -2087,6 +2126,16 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                         a11yFocused = id
                         if (old != A11Y_NONE) sendA11y(old, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
                         sendA11y(id, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED)
+                        // A notification box only partly showing: the notifications scroll to show it whole (then the
+                        // next one peeks out, so TalkBack can move on to it)
+                        if (id in A11Y_BOX until A11Y_BOX + MAX_BOXES && !vpRect.isEmpty) {
+                            val r = boxRects[id - A11Y_BOX]
+                            if (!r.isEmpty) {
+                                if (r.top < vpRect.top) innerScroll -= vpRect.top - r.top
+                                else if (r.bottom > vpRect.bottom) innerScroll += r.bottom - vpRect.bottom
+                                innerScroll = innerScroll.coerceIn(0f, innerMax); innerVel = 0f; invalidate()
+                            }
+                        }
                     }
                     true
                 }
@@ -2145,7 +2194,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 barPulled = false
                 // On a notification box: tap to open it, swipe it sideways to clear it (never moves the list)
                 boxDown = if (fromBar || offMode == OFF_FLY) BOX_NONE else boxAt(e.x, e.y)
-                boxSwiping = false; boxPulled = false
+                boxSwiping = false; boxVertical = false; boxInner = false
+                // (A touch on them stops them gliding)
+                if (boxDown != BOX_NONE && innerVel != 0f) { innerVel = 0f; caught = true }
                 scrollVel = 0f
                 downRow = if (fromBar || boxDown != BOX_NONE) -1 else rowAt(e.x, e.y)
                 swipedUp = false
@@ -2159,13 +2210,28 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     val dx = e.x - downX; val dy = e.y - downY
                     if (!dragging && maxTravel > slop) dragging = true
                     val b = boxes.getOrNull(boxDown)
-                    if (!boxSwiping && !boxPulled && b != null && kotlin.math.abs(dx) > slop && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.2f) boxSwiping = true
+                    // Sideways: that box (to clear it). Up or down: scrolling (the notifications first, then the list)
+                    if (!boxSwiping && !boxVertical && maxTravel > slop) {
+                        if (b != null && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.2f) boxSwiping = true
+                        else { boxVertical = true; if (ps2Menu) selected = -1 }
+                    }
                     if (boxSwiping && b != null) {
                         offKey = b.item.key; offItem = b.item; offMode = OFF_HELD
                         // (One that can't be cleared only gives a little)
                         offDx = if (b.item.clearable) dx else dx * 0.25f
-                    } else if (!boxSwiping && !boxPulled && t > readyT && dy > 24 * d && dy > kotlin.math.abs(dx)) {
-                        boxPulled = true; phoneBarsComing(); onPullDown()
+                    } else if (boxVertical) {
+                        var step = lastY - e.y
+                        if (innerMax > 0f) {
+                            val ni = (innerScroll + step).coerceIn(0f, innerMax)
+                            val used = ni - innerScroll
+                            innerScroll = ni; step -= used
+                            if (used != 0f) boxInner = true
+                        }
+                        if (kotlin.math.abs(step) > 0.01f) {
+                            // The rest moves the list, and the notifications go up (or come back) with it
+                            if (scroll < 0f || scroll > maxScroll) step *= 0.4f
+                            scroll += step; boxInner = false
+                        }
                     }
                     lastY = e.y
                     return true
@@ -2237,11 +2303,13 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                         // Far enough, or flung: it flies off and is cleared; otherwise it springs back
                         val far = kotlin.math.abs(offDx) > width * 0.3f || (kotlin.math.abs(vx) > 900 * d && vx * offDx > 0f)
                         if (far && b != null && b.item.clearable && offKey == b.item.key) { offMode = OFF_FLY; sfx.tick() } else offMode = OFF_BACK
-                    } else if (tap && !boxPulled && !longFired && launchFlash <= 0f && t > readyT) {
-                        if (bi == BOX_MORE) { sfx.tick(); phoneBarsComing(); onPullDown() }
-                        else if (b != null && bi < boxShown) { sfx.confirm(); onNotification(b.item, RectF(boxRects[bi])) }
+                    } else if (boxVertical) {
+                        // A flick glides on: the notifications if they took the last of the swipe, otherwise the list
+                        if (boxInner && innerMax > 0f) innerVel = -vy else scrollVel = -vy
+                    } else if (tap && !caught && !longFired && launchFlash <= 0f && t > readyT) {
+                        if (b != null && bi < boxShown && !boxRects[bi].isEmpty) { sfx.confirm(); onNotification(b.item, RectF(boxRects[bi])) }
                     }
-                    boxSwiping = false; boxPulled = false; dragging = false; downRow = -1
+                    boxSwiping = false; boxVertical = false; boxInner = false; dragging = false; downRow = -1
                     tracker?.recycle(); tracker = null
                     return true
                 }
@@ -2309,7 +2377,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             MotionEvent.ACTION_CANCEL -> {
                 removeCallbacks(longPress); moveIndex = -1; dragging = false; downRow = -1; fromBar = false
                 if (offMode == OFF_HELD) offMode = OFF_BACK
-                boxDown = BOX_NONE; boxSwiping = false; boxPulled = false
+                boxDown = BOX_NONE; boxSwiping = false; boxVertical = false; boxInner = false
                 tracker?.recycle(); tracker = null
             }
         }
