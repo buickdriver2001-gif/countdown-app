@@ -71,7 +71,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         val opts = ArrayList<NexusUi.Option>()
         // The app's own shortcuts first (Android shares them with the Home app), then NEXUS's options
         opts.addAll(AppActions.shortcutOptions(this, g.pkg))
-        if (!hub.ps2Menu) opts.add(NexusUi.Option("Tile size:  ${sizeName(g.tileW, g.tileH)}", primary = true) { chooseTileSize(g) })
+        if (homeStyle() == "tiles") opts.add(NexusUi.Option("Tile size:  ${sizeName(g.tileW, g.tileH)}", primary = true) { chooseTileSize(g) })
         opts.add(NexusUi.Option("Open") { open(g) })
         if (g.installed) opts.add(AppActions.infoOption(this, g.pkg))
         if (g.custom) opts.add(NexusUi.Option("Remove from NEXUS", danger = true) { removeGame(g) })
@@ -155,7 +155,8 @@ class MainActivity : Activity(), NexusUi.NavHost {
         }
         val grid = prefs.getString("grid", "4x6")!!.split("x")
         hub.gridCols = grid.getOrNull(0)?.toIntOrNull() ?: 4; hub.gridRows = grid.getOrNull(1)?.toIntOrNull() ?: 6
-        hub.ps2Menu = prefs.getString("homeStyle", "ps2") == "ps2"
+        hub.ps2Menu = homeStyle() == "ps2"
+        hub.dataGrid = homeStyle() == "grid"
         hub.notifIcons = NexusNotifications.barOn(this)
         hub.notifBoxes = NexusNotifications.boxesOn(this)
         hub.games = list
@@ -704,7 +705,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         val sound = when { amb && menu -> "ON"; amb -> "background only"; menu -> "menu only"; else -> "OFF" }
         NexusUi.panel(this, "Settings", "Version $version", listOfNotNull(
             if (!isHome) NexusUi.Option("Make NEXUS my home screen", primary = true) { openHomeSettings() } else null,
-            NexusUi.Option("Home screen:  " + (if (hub.ps2Menu) "PS2 menu" else "Tiles")) { homeScreenSettings() },
+            NexusUi.Option("Home screen:  " + styleName()) { homeScreenSettings() },
             NexusUi.Option("App order:  " + (if (alphabetical()) "A–Z" else "your own")) { toggleAlphabetical(back = { homeSettings() }) },
             NexusUi.Option("Notifications:  " + notifSummary()) { notificationSettings(back = { homeSettings() }) },
             NexusUi.Option("Lock screen:  " + onOff(LockActivity.enabled(this))) { lockSettings() },
@@ -722,9 +723,9 @@ class MainActivity : Activity(), NexusUi.NavHost {
         val isHome = HomeMode.isDefault(this)
         NexusUi.panel(this, "Home screen", null, listOfNotNull(
             NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
-            NexusUi.Option("Style:  " + (if (hub.ps2Menu) "PS2 menu" else "Tiles")) { toggleHomeStyle() },
+            NexusUi.Option("Style:  " + styleName()) { chooseHomeStyle() },
             NexusUi.Option("App order:  " + (if (alphabetical()) "A–Z" else "your own")) { toggleAlphabetical() },
-            if (hub.ps2Menu) null else NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
+            if (homeStyle() != "tiles") null else NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
             NexusUi.Option("Notifications:  " + notifSummary()) { notificationSettings(back = { homeScreenSettings() }) },
             NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
             NexusUi.Option("Home screen when NEXUS is closed") { chooseNormalHome() }
@@ -820,9 +821,26 @@ class MainActivity : Activity(), NexusUi.NavHost {
     }
 
     /** Home screen style: the PS2-style menu or tiles on a grid. */
-    private fun toggleHomeStyle() {
-        hub.ps2Menu = !hub.ps2Menu
-        prefs.edit().putString("homeStyle", if (hub.ps2Menu) "ps2" else "tiles").apply()
+    /** The home screen's style: "ps2" (the PS2 menu list), "grid" (the data grid) or "tiles". */
+    private fun homeStyle(): String = prefs.getString("homeStyle", "ps2").let { if (it == "grid" || it == "tiles") it else "ps2" }
+
+    private fun styleName(s: String = homeStyle()) = when (s) { "grid" -> "Data grid"; "tiles" -> "Tiles"; else -> "PS2 menu" }
+
+    /** Settings → Home screen → Style: the PS2 menu list, the data grid, or tiles. */
+    private fun chooseHomeStyle() {
+        val cur = homeStyle()
+        NexusUi.panel(this, "Home screen style",
+            "PS2 menu: your apps as a list, one per line.\n" +
+                "Data grid: your apps as glass blocks with their icons floating inside. Tap one to choose it (its icon spins), tap it again to open it.\n" +
+                "Tiles: a grid of tiles in sizes you pick.",
+            listOf("ps2", "grid", "tiles").map { k ->
+                NexusUi.Option((if (k == cur) "✓  " else "     ") + styleName(k), primary = k == cur) { setHomeStyle(k) }
+            }, cancel = "Back", back = { homeScreenSettings() })
+    }
+
+    private fun setHomeStyle(s: String) {
+        prefs.edit().putString("homeStyle", s).apply()
+        hub.ps2Menu = s == "ps2"; hub.dataGrid = s == "grid"
         hub.styleChanged()
         homeScreenSettings()
     }

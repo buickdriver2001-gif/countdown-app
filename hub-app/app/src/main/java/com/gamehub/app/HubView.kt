@@ -215,7 +215,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
         drawHaze(c, dt, intro)
         world.quality = quality
-        world.draw(c, width, height, dt, intro, 0.6f, if (ps2Menu) 0.62f else 0.8f)
+        world.draw(c, width, height, dt, intro, 0.6f, if (ps2Menu) 0.62f else if (dataGrid) 0.7f else 0.8f)
         // (A panel open: the menu steps back; the panel's own layer shows the crystals)
         crystalK = if (panelOpen) min(1f, crystalK + dt * 2.5f) else max(0f, crystalK - dt * 3f)
         // Crystals over the towers, in the open space above the menu: a carousel seen from a little above
@@ -916,6 +916,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
      * shining brightest) or tiles on a grid. NEXUS settings → Home screen style.
      */
     var ps2Menu = true
+    /**
+     * Data grid home style: the apps as glass blocks, three across, each with its icon floating inside and turning
+     * gently; tap one to choose it (it lights up, its icon lifts and spins, and its name shows at the top), tap it
+     * again to open it. Uses the tiles' grid underneath (scrolling, holding to move, the notification boxes).
+     */
+    var dataGrid = false
     /** PS2 menu: room above the first line and below the last, so each can sit in the middle. */
     private var listPad = 0f
     /** PS2 menu: the distance from one line to the next. */
@@ -959,14 +965,18 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
         // App tiles on a home-screen grid, or the PS2-style menu (one app per line) - both scroll
         rows.clear()
-        listTop = max(h * 0.12f, 88 * d); listBottom = h - 76 * d - navInset
         val list = ps2Menu
-        val gap = if (list) 4 * d else 10 * d
+        val grid = dataGrid && !list
+        // (Data grid: a little more room at the top, for the chosen app's name)
+        listTop = if (grid) max(h * 0.13f, 104 * d) else max(h * 0.12f, 88 * d); listBottom = h - 76 * d - navInset
+        val gap = if (list) 4 * d else if (grid) 14 * d else 10 * d
         val left = 18 * d; val right = w - 18 * d
-        val cols = if (list) 1 else gridCols.coerceIn(2, 6)
+        val cols = if (list) 1 else if (grid) 3 else gridCols.coerceIn(2, 6)
         layoutCols = cols
         cellW = (right - left - gap * (cols - 1)) / cols
-        cellH = if (list) 56 * d else ((listBottom - listTop - gap * (gridRows - 1)) / gridRows).coerceIn(cellW * 0.7f, cellW * 1.3f)
+        cellH = if (list) 56 * d else if (grid) cellW else ((listBottom - listTop - gap * (gridRows - 1)) / gridRows).coerceIn(cellW * 0.7f, cellW * 1.3f)
+        // (The chosen app's icon keeps turning; faster as it opens)
+        if (grid) gridSpin = (gridSpin + dt * (if (launchFlash > 0f) 760f else 95f)) % 360f
         val stepX = cellW + gap; val stepY = cellH + gap
         listPad = if (list) max(0f, (listBottom - listTop) / 2 - cellH / 2) else 0f
         if (list) listStep = stepY
@@ -1110,12 +1120,16 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             if (idx != moveIndex && ar.bottom > listTop - 10 * d && ar.top < listBottom + 10 * d) {
                 if (list) drawListItem(c, games[idx], ar, idx == downRow && !dragging && moveIndex < 0 && !longFired, a,
                     if (idx == launchIdx && launchFlash > 0f) 1f - launchFlash / LAUNCH_LEN else -1f, idx == selected && moveIndex < 0)
+                else if (grid) drawDataCell(c, games[idx], ar, idx == selected && moveIndex < 0,
+                    idx == downRow && !dragging && moveIndex < 0 && !longFired, a, idx)
                 else drawTile(c, games[idx], ar, idx == selected && moveIndex < 0, a)
             }
         }
         for (hi in games.indices) rows.add(hitPool[hi])
         if (settling) { settleT -= dt; if (settleT <= 0f) settling = false }
         c.restore()
+        // Data grid: the chosen app's name at the top
+        if (grid) drawGridTitle(c, w, listTop - 18 * d, a)
         // No apps on the home screen at all: say how to add some
         if (games.isEmpty()) {
             text.textAlign = Paint.Align.CENTER; text.letterSpacing = 0.08f
@@ -1134,6 +1148,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             val r = RectF(lastX - grabFx * tw, moveY - grabFy * th, lastX - grabFx * tw + tw, moveY - grabFy * th + th)
             c.save(); c.scale(1.05f, 1.05f, r.centerX(), r.centerY())
             if (list) drawListItem(c, g, r, false, a, -1f, false)
+            else if (grid) drawDataCell(c, g, r, true, false, a, moveIndex)
             else {
                 glow(c, r.centerX(), r.centerY(), max(r.width(), r.height()) * 0.9f, 150)
                 fill.color = Color.argb(210, 6, 12, 30); c.drawRoundRect(r, 8 * d, 8 * d, fill)
@@ -1224,7 +1239,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
     /** A glass pill with a small glyph and a label (glyph 0 = stacked cards, 1 = gauge, 2 = grid, 3 = plus). */
     private fun bottomPill(c: Canvas, r: RectF, label: String, glyph: Int, a: Float) {
-        if (ps2Menu) {
+        if (ps2Menu || dataGrid) {
             // PS2 style: soft glowing words, no box (each glow only as wide as its button, so they don't run together)
             val sx = min(2.4f, r.width() / (r.height() * 0.9f) * 0.55f)
             c.save(); c.scale(sx, 0.6f, r.centerX(), r.centerY())
@@ -1492,7 +1507,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
     /** Tile positions for an order of apps (-1 = the ADD tile, always 1×1). */
     private fun pack(order: List<Int>, cols: Int): Array<IntArray> =
-        TileLayout.pack(order.map { idx -> if (idx < 0 || ps2Menu) intArrayOf(1, 1) else intArrayOf(games[idx].tileW, rowsFor(games[idx], cols)) }, cols)
+        TileLayout.pack(order.map { idx -> if (idx < 0 || ps2Menu || dataGrid) intArrayOf(1, 1) else intArrayOf(games[idx].tileW, rowsFor(games[idx], cols)) }, cols)
 
     // ------------------------------------------------------------------ tile text: always shown in full
 
@@ -1510,7 +1525,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
      * (and "Not installed", if shown) need more room than that, so nothing is ever cut off.
      */
     private fun rowsFor(g: GameEntry, cols: Int): Int {
-        if (ps2Menu) return 1
+        if (ps2Menu || dataGrid) return 1
         val gap = 10 * d
         val stepX = cellW + gap; val stepY = cellH + gap
         val w = min(g.tileW, cols) * stepX - gap
@@ -1542,6 +1557,110 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
 
     private var selIndex = -2
     private var selSince = 0f
+
+    // ------------------------------------------------------------------ data grid
+    /** Turns the icons in 3D (a little distance away, so the turn has depth without looking stretched). */
+    private val cam = android.graphics.Camera().apply { setLocation(0f, 0f, -10f) }
+    private val camM = android.graphics.Matrix()
+    private val blockR = RectF()
+    private val spinR = RectF()
+    /** How far the chosen app's icon has turned (degrees), and which app that is (it starts facing you). */
+    private var gridSpin = 0f
+    private var gridSpinFor = -2
+
+    /**
+     * One app in the data grid: a glass block (a thicker edge below, so it reads as a slab) with the app's icon
+     * floating in it, swaying gently. Chosen: the block lights up with corner marks, the icon lifts, glows and spins.
+     */
+    private fun drawDataCell(c: Canvas, g: GameEntry, r: RectF, sel: Boolean, pressed: Boolean, a: Float, idx: Int) {
+        if (selected != selIndex) { selIndex = selected; selSince = t }
+        val selK = if (sel) min(1f, (t - selSince) / 0.25f) else 0f
+        val corner = 14 * d
+        c.save()
+        if (pressed) c.scale(0.95f, 0.95f, r.centerX(), r.centerY())
+        val depth = 5 * d
+        blockR.set(r.left, r.top + depth, r.right, r.bottom)
+        fill.color = Color.argb((150 * a).toInt(), 4, 10, 26)
+        c.drawRoundRect(blockR, corner, corner, fill)
+        blockR.set(r.left, r.top, r.right, r.bottom - depth)
+        fill.color = Color.argb(((70 + 55 * selK) * a).toInt(), 18, 40, 100)
+        c.drawRoundRect(blockR, corner, corner, fill)
+        // A soft light along the top of the glass
+        c.save(); c.clipRect(blockR.left, blockR.top, blockR.right, blockR.top + blockR.height() * 0.42f)
+        fill.color = Color.argb(((20 + 22 * selK) * a).toInt(), 150, 190, 255)
+        c.drawRoundRect(blockR, corner, corner, fill)
+        c.restore()
+        line.strokeWidth = 1f * d
+        line.color = Color.argb(((70 + 150 * selK) * a).toInt(), 140, 190, 255)
+        c.drawRoundRect(blockR, corner, corner, line)
+        // The icon: floating, swaying (the chosen one spins all the way round)
+        val isz = min(blockR.width(), blockR.height()) * 0.52f
+        val cx = blockR.centerX()
+        val cy = blockR.centerY() - 2 * d + sin(t * 1.7f + idx * 0.9f) * 2f * d - 3 * d * selK
+        if (sel && gridSpinFor != idx) { gridSpinFor = idx; gridSpin = 0f }
+        val angle = if (sel) gridSpin else sin(t * 0.9f + idx * 1.3f) * 18f
+        val facing = kotlin.math.cos(Math.toRadians(angle.toDouble())).toFloat()
+        // Its shadow on the glass below it, as wide as it's turned
+        val fy = blockR.bottom - blockR.height() * 0.12f
+        val fw = isz * (0.16f + 0.3f * kotlin.math.abs(facing))
+        spinR.set(cx - fw, fy - 2.5f * d, cx + fw, fy + 2.5f * d)
+        fill.color = Color.argb((110 * a).toInt(), 0, 0, 0); c.drawOval(spinR, fill)
+        if (selK > 0f) glow(c, cx, cy, isz * 1.15f, (110 * a * selK).toInt())
+        cam.save(); cam.rotateY(angle); cam.getMatrix(camM); cam.restore()
+        camM.preTranslate(-cx, -cy); camM.postTranslate(cx, cy)
+        c.save(); c.concat(camM)
+        val opening = if (sel && launchFlash > 0f) 0.25f * (1f - launchFlash / LAUNCH_LEN).coerceIn(0f, 1f) else 0f
+        val s = (1f + 0.12f * selK + opening) * isz / 2
+        spinR.set(cx - s, cy - s, cx + s, cy + s)
+        // (Seen from behind it's dimmer; an app that's no longer installed is faded)
+        drawSpinIcon(c, g, spinR, a * (if (facing < 0f) 0.5f else 1f) * (if (g.installed) 1f else 0.45f))
+        c.restore()
+        // Chosen: corner marks around the block, gently breathing
+        if (selK > 0f) {
+            val o = 5 * d + 2 * d * (0.5f + 0.5f * sin(t * 3.2f)); val l = 14 * d
+            line.strokeWidth = 2f * d; line.color = Color.argb((230 * a * selK).toInt(), 200, 225, 255)
+            val x0 = blockR.left - o; val y0 = blockR.top - o; val x1 = blockR.right + o; val y1 = r.bottom + o
+            c.drawLine(x0, y0, x0 + l, y0, line); c.drawLine(x0, y0, x0, y0 + l, line)
+            c.drawLine(x1, y0, x1 - l, y0, line); c.drawLine(x1, y0, x1, y0 + l, line)
+            c.drawLine(x0, y1, x0 + l, y1, line); c.drawLine(x0, y1, x0, y1 - l, line)
+            c.drawLine(x1, y1, x1 - l, y1, line); c.drawLine(x1, y1, x1, y1 - l, line)
+        }
+        c.restore()
+    }
+
+    /** An app's icon on its own (built-in apps' icons on their little card). */
+    private fun drawSpinIcon(c: Canvas, g: GameEntry, r: RectF, a: Float) {
+        val dr = g.drawable
+        if (dr != null) {
+            dr.setBounds(r.left.toInt(), r.top.toInt(), r.right.toInt(), r.bottom.toInt())
+            dr.alpha = (255 * a).toInt().coerceIn(0, 255); dr.draw(c); dr.alpha = 255
+        } else drawIcon(c, g, r, a)
+    }
+
+    /** Data grid: the chosen app's name (and where it is in the list) above the blocks, or how many apps there are. */
+    private fun drawGridTitle(c: Canvas, w: Float, base: Float, a: Float) {
+        if (games.isEmpty()) return
+        text.textAlign = Paint.Align.LEFT
+        val g = games.getOrNull(selected)
+        if (g == null) {
+            text.textSize = 10.5f * d; text.letterSpacing = 0.16f; text.color = Color.argb((120 * a).toInt(), 160, 190, 235)
+            c.drawText(if (games.size == 1) "1 APP" else "${games.size} APPS", 20 * d, base, text)
+            return
+        }
+        val k = min(1f, (t - selSince) / 0.25f)
+        text.textAlign = Paint.Align.RIGHT; text.textSize = 10.5f * d; text.letterSpacing = 0.16f
+        text.color = Color.argb((130 * a * k).toInt(), 160, 190, 235)
+        val count = "${selected + 1} / ${games.size}"
+        c.drawText(count, w - 20 * d, base, text)
+        val countW = text.measureText(count)
+        boxTp.typeface = text.typeface; boxTp.textSize = 19 * d; boxTp.letterSpacing = 0.06f
+        val name = android.text.TextUtils.ellipsize(g.name, boxTp, w - 40 * d - countW - 14 * d, android.text.TextUtils.TruncateAt.END).toString()
+        text.textAlign = Paint.Align.LEFT; text.textSize = 19 * d; text.letterSpacing = 0.06f
+        text.color = Color.argb((240 * a * k).toInt(), 235, 242, 255)
+        text.setShadowLayer(10 * d, 0f, 0f, Color.argb((200 * a * k).toInt(), 80, 140, 255))
+        c.drawText(name, 20 * d + (1f - k) * 8 * d, base, text)
+        text.clearShadowLayer()
+    }
 
     /** One app tile; the layout adapts to its size (small, wide, tall, large). */
     private fun drawTile(c: Canvas, g: GameEntry, r: RectF, sel: Boolean, a0: Float) {
