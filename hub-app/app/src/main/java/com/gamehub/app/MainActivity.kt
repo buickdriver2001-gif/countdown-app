@@ -115,11 +115,11 @@ class MainActivity : Activity(), NexusUi.NavHost {
     private fun alphabetical() = prefs.getBoolean("alphaOrder", false)
 
     /** Settings → Home screen → App order: A–Z, or the order you arranged them in (kept while A–Z is on). */
-    private fun toggleAlphabetical() {
+    private fun toggleAlphabetical(back: () -> Unit = { homeScreenSettings() }) {
         val az = !alphabetical()
         prefs.edit().putBoolean("alphaOrder", az).apply()
         refresh()
-        homeScreenSettings()
+        back()
         NexusUi.note(this, if (az) "Apps are in A–Z order" else "Apps are back in your own order")
     }
 
@@ -705,6 +705,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         NexusUi.panel(this, "Settings", "Version $version", listOfNotNull(
             if (!isHome) NexusUi.Option("Make NEXUS my home screen", primary = true) { openHomeSettings() } else null,
             NexusUi.Option("Home screen:  " + (if (hub.ps2Menu) "PS2 menu" else "Tiles")) { homeScreenSettings() },
+            NexusUi.Option("App order:  " + (if (alphabetical()) "A–Z" else "your own")) { toggleAlphabetical(back = { homeSettings() }) },
             NexusUi.Option("Notifications:  " + notifSummary()) { notificationSettings(back = { homeSettings() }) },
             NexusUi.Option("Lock screen:  " + onOff(LockActivity.enabled(this))) { lockSettings() },
             NexusUi.Option("Recent apps helper:  $helper") { openAppsSettings() },
