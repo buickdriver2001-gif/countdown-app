@@ -50,6 +50,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
               private val onSystem: () -> Unit) : View(context) {
 
     private val d = resources.displayMetrics.density
+    /** Apps can be held and dragged to a new place (not while they're in A–Z order: then they always go back). */
+    var canReorder = true
+    /** An app was dragged while the list is in A–Z order (set by NEXUS: it says how to arrange them). */
+    var onReorderBlocked: () -> Unit = {}
     private val rnd = Random(3)
 
     /** A column of small glass blocks. Heights slowly rise and fall. */
@@ -1001,7 +1005,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 if (fx >= x0 && fx <= x0 + p[2] * stepX && fy >= y0 && fy <= y0 + p[3] * stepY) { hit = k; break }
                 if (idx >= 0 && fy < y0) { hit = k; break }
             }
-            target = hit.coerceIn(0, rest.size)
+            // (A–Z order: the others stay where they are, and it goes back to its place)
+            target = if (canReorder) hit.coerceIn(0, rest.size) else moveIndex.coerceIn(0, rest.size)
             if (target != lastTarget) { if (lastTarget >= 0) sfx.tick(); lastTarget = target }
             order.addAll(rest); order.add(target, moveIndex)
             pos = pack(order, cols)
@@ -2282,6 +2287,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     val to = lastTarget.coerceIn(0, games.size - 1)
                     moveIndex = -1
                     if (!movedWhileHeld) onRemove(games[from])
+                    else if (!canReorder) { settling = true; settleT = 0.4f; anim.getOrNull(from)?.set(floatingRect()); onReorderBlocked() }
                     else if (to != from) {
                         // Keep the slide smooth: carry the animated positions over to the new order
                         val list = anim.toMutableList(); val v = list.removeAt(from)

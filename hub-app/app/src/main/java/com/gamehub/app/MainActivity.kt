@@ -111,8 +111,21 @@ class MainActivity : Activity(), NexusUi.NavHost {
         }, cancel = "Back", back = { homeScreenSettings() })
     }
 
+    /** The home screen list in A–Z order (Settings → Home screen → App order). */
+    private fun alphabetical() = prefs.getBoolean("alphaOrder", false)
+
+    /** Settings → Home screen → App order: A–Z, or the order you arranged them in (kept while A–Z is on). */
+    private fun toggleAlphabetical() {
+        val az = !alphabetical()
+        prefs.edit().putBoolean("alphaOrder", az).apply()
+        refresh()
+        homeScreenSettings()
+        NexusUi.note(this, if (az) "Apps are in A–Z order" else "Apps are back in your own order")
+    }
+
     /** Saves a new position for an app (the order is kept by package name). */
     private fun moveApp(from: Int, to: Int) {
+        if (alphabetical()) return
         val pkgs = hub.games.map { it.pkg }.toMutableList()
         val p = pkgs.removeAt(from); pkgs.add(to, p)
         prefs.edit().putString("order", pkgs.joinToString(",")).apply()
@@ -127,6 +140,14 @@ class MainActivity : Activity(), NexusUi.NavHost {
             val natural = list.withIndex().associate { it.value.pkg to it.index }
             list.sortBy { g -> order.indexOf(g.pkg).let { if (it < 0) 10_000 + (natural[g.pkg] ?: 0) else it } }
         }
+        // A–Z order (Settings → Home screen): by name, as your language sorts it (capitals and accents don't matter).
+        // Your own order stays saved underneath, for when you switch back.
+        val az = alphabetical()
+        if (az) {
+            val coll = java.text.Collator.getInstance().apply { strength = java.text.Collator.PRIMARY }
+            list.sortWith { a, b -> coll.compare(a.name.trim(), b.name.trim()).let { c -> if (c != 0) c else a.pkg.compareTo(b.pkg) } }
+        }
+        hub.canReorder = !az
         for (g in list) {
             g.installed = installed.getOrPut(g.pkg) { packageManager.getLaunchIntentForPackage(g.pkg) != null }
             val t = prefs.getString("tile_${g.pkg}", "2x1")!!.split("x")
@@ -185,6 +206,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
             { from, to -> moveApp(from, to) }, { drawer.open(add = false) }, { openSwitcher() }, { openSystem() })
         drawer = AppDrawer(this, sfx, { openItem(it) }, { addApps(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
         hub.onPullDown = { openNotifications() }
+        hub.onReorderBlocked = { NexusUi.note(this, "Apps are in A–Z order. To arrange them yourself: Settings → Home screen → App order", long = true) }
         hub.onNotification = { item, from -> openNotification(item, from) }
         // The phone's own buttons show over NEXUS's for a moment after a swipe down from the top: NEXUS's step aside
         hub.onPhoneBars = { away ->
@@ -700,6 +722,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         NexusUi.panel(this, "Home screen", null, listOfNotNull(
             NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
             NexusUi.Option("Style:  " + (if (hub.ps2Menu) "PS2 menu" else "Tiles")) { toggleHomeStyle() },
+            NexusUi.Option("App order:  " + (if (alphabetical()) "A–Z" else "your own")) { toggleAlphabetical() },
             if (hub.ps2Menu) null else NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
             NexusUi.Option("Notifications:  " + notifSummary()) { notificationSettings(back = { homeScreenSettings() }) },
             NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
