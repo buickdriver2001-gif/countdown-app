@@ -798,6 +798,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
             "Boxes: your notifications at the top of the home screen, newest first. Swipe up and down on them to scroll " +
                 "through, tap one to open it, swipe it sideways to clear it. They scroll away with your apps.\n\n" +
                 "Icons: which apps have notifications, in the status bar.\n\n" +
+                (if (NexusNotifications.panelOn(this)) "In your apps right now: " + NexusAccessibility.pullStatus() + "\n\n" else "") +
                 "Pull-down panel: swiping down from the very top brings NEXUS's own panel (all your notifications, their " +
                 "buttons, Clear all, and shortcuts), on the home screen and in your apps (needs the Recent Apps helper). " +
                 "The phone's own still comes down on the lock screen, during calls, with TalkBack, in landscape (full-screen " +

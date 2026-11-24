@@ -119,6 +119,12 @@ class NexusAccessibility : AccessibilityService() {
             return s.closeJob != null || s.phoneRecentsOpen || s.recents.showing || now - s.recents.hiddenAt < 1500L ||
                 now - s.phoneRecentsLeftAt < 1500L || now - s.closeEndedAt < 1500L
         }
+        /** How NEXUS's pull-down in apps is doing right now, in a few words (Settings → Notifications). */
+        fun pullStatus(): String {
+            val s = instance ?: return "needs the Recent Apps helper (Settings → Recent apps helper)"
+            return try { s.pullStripWhyNot()?.let { "waiting ($it)" } ?: "ready" } catch (_: Throwable) { "unknown" }
+        }
+
         /** The phone's own quick settings (from NEXUS's panel): asked for on purpose, so NEXUS leaves them alone. */
         fun phoneQuickSettings(): Boolean = try { instance?.openPhoneQuickSettings() ?: false } catch (_: Throwable) { false }
 
@@ -279,6 +285,9 @@ class NexusAccessibility : AccessibilityService() {
 
     private var pullStrip: android.view.View? = null
     private var pullWhyNot: String? = "not yet"
+    private var pullLogs = 0
+    /** Ringing, in a phone call, or screening / redirecting one (not MODE_IN_COMMUNICATION: voice chats keep that). */
+    private val CALL_MODES = intArrayOf(1, 2, 4, 5)
     private val pullCheck = Runnable { safe { updatePullStrip() } }
     private fun queuePullStrip(delay: Long = 150L) { h.removeCallbacks(pullCheck); h.postDelayed(pullCheck, delay) }
     private var shadeRoot: android.widget.FrameLayout? = null
@@ -303,7 +312,9 @@ class NexusAccessibility : AccessibilityService() {
         if (getSystemService(PowerManager::class.java)?.isInteractive != true) return "screen off"
         if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return "locked"
         if (talkBackOn()) return "TalkBack is on"
-        if ((getSystemService(android.media.AudioManager::class.java)?.mode ?: 0) != android.media.AudioManager.MODE_NORMAL) return "a call"
+        // A phone call (ringing or going): not a voice chat or walkie-talkie app, which can keep the phone's audio in
+        // its "communication" mode all the time they're connected. A call screen showing counts too (below)
+        if ((getSystemService(android.media.AudioManager::class.java)?.mode ?: 0) in CALL_MODES) return "a phone call"
         if (resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) return "landscape"
         if (recents.showing) return "Recent Apps"
         if (shadePanel?.isOpen == true || MainActivity.panelUp()) return "NEXUS's panel is down"
@@ -325,7 +336,7 @@ class NexusAccessibility : AccessibilityService() {
     private fun updatePullStrip() {
         val why = pullStripWhyNot()
         if (why != pullWhyNot) {
-            if (why == null || pullWhyNot == null) LockTrace.log(this, if (why == null) "NEXUS's pull-down: ready at the top of the screen" else "NEXUS's pull-down: stepped aside ($why)")
+            if (pullLogs < 30) { pullLogs++; LockTrace.log(this, if (why == null) "NEXUS's pull-down: ready at the top of the screen" else "NEXUS's pull-down: stepped aside ($why)") }
             pullWhyNot = why
         }
         if (why == null) showPullStrip() else hidePullStrip()
