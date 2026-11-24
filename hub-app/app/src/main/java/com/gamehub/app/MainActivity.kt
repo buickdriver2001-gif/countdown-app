@@ -363,13 +363,18 @@ class MainActivity : Activity(), NexusUi.NavHost {
         shadeAskedAt = now
         openNotifications(otherWayFirst = false)
         window.decorView.postDelayed({
-            if (isFinishing || isDestroyed || !hasWindowFocus() || shadeAskedAt != now) return@postDelayed
+            if (isFinishing || isDestroyed || shadeAskedAt != now) return@postDelayed
+            if (!hasWindowFocus()) {
+                if (shadeOk < 3) { shadeOk++; LockTrace.log(this, "notification panel: came down at once") }
+                return@postDelayed
+            }
             if (shadeRetries < 20) { shadeRetries++; LockTrace.log(this, "notification panel: didn't come down at first, asked again") }
             openNotifications(otherWayFirst = true)
         }, 450L)
     }
     private var shadeAskedAt = 0L
     private var shadeRetries = 0
+    private var shadeOk = 0
 
     /** The phone's own notification panel: through NEXUS's helper (the supported way) or the status bar itself. */
     private fun openNotifications(otherWayFirst: Boolean) {

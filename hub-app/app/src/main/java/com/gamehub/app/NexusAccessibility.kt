@@ -1147,6 +1147,7 @@ class NexusAccessibility : AccessibilityService() {
         if (e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = e.packageName?.toString() ?: return
         val cls = e.className?.toString() ?: ""
+        if (pkg.endsWith("packageinstaller")) installerSeenAt = SystemClock.uptimeMillis()
         // NEXUS's own pop-ups and overlays (its buttons, its cover) aren't a screen you've gone to: only its
         // screens (activities) count, so showing the buttons never looks like you've left the app you're in
         if (pkg == packageName && !cls.startsWith("$packageName.")) { queueButtons(); return }
@@ -1199,7 +1200,7 @@ class NexusAccessibility : AccessibilityService() {
             // and still in front a moment later (not something that flashed up and went).
             val pm = getSystemService(PowerManager::class.java)
             val km = getSystemService(KeyguardManager::class.java)
-            if (pm?.isInteractive != true || km?.isKeyguardLocked == true || !isAppScreen(pkg, cls)) return
+            if (pm?.isInteractive != true || km?.isKeyguardLocked == true || !isAppScreen(pkg, cls) || installCheck(pkg)) return
             // Shrunk into a little floating video window (YouTube does that when you leave a video): you've left it
             if (inPictureInPicture(pkg)) return
             lastApp = pkg; leftByScreenOff = false
@@ -1267,7 +1268,7 @@ class NexusAccessibility : AccessibilityService() {
         if (now - lastSwitcher <= 800) return
         lastSwitcher = now
         // The app you're in counts as open, even if you only opened it a moment ago (so it's in the list)
-        current?.let { if (isRealApp(it) && fullAppWindow(it)) Recents.touch(this, it) }
+        current?.let { if (isRealApp(it) && !installCheck(it) && fullAppWindow(it)) Recents.touch(this, it) }
         current = null
         // NEXUS's own layer, over the app you're in: at once, nothing for Android to open
         if (!talkBackOn() && recents.show()) { LockTrace.log(this, "$by: NEXUS Recent Apps (over the app)"); return }
@@ -1766,12 +1767,24 @@ class NexusAccessibility : AccessibilityService() {
         if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return
         val top = try { windows.filter { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }.maxByOrNull { it.layer } } catch (_: Throwable) { null } ?: return
         val pkg = try { top.root?.packageName?.toString() } catch (_: Throwable) { null } ?: return
-        if (pkg == current || !isRealApp(pkg) || inPictureInPicture(pkg)) return
+        if (pkg == current || !isRealApp(pkg) || installCheck(pkg) || inPictureInPicture(pkg)) return
         lastApp = pkg; current = pkg; currentCls = null; leftByScreenOff = false
         if (toClose.remove(pkg)) saveQueue()
         val token = ++openToken
         h.postDelayed({ safe { if (token == openToken && current == pkg && fullAppWindow(pkg)) { Recents.touch(this, pkg); AppCache.warm(this, listOf(pkg)) } } }, 1500)
     }
+
+    /**
+     * Google Play Store showing during an app install (within a minute of the phone's app installer being in front)
+     * is Play Protect checking the app, not Play Store being open: the phone's own recent apps doesn't list it either.
+     */
+    private fun installCheck(pkg: String): Boolean {
+        if (pkg != "com.android.vending" || installerSeenAt == 0L || SystemClock.uptimeMillis() - installerSeenAt > 60_000L) return false
+        if (!installCheckLogged) { installCheckLogged = true; LockTrace.log(this, "Google Play Store during an app install: Play Protect's check, not counted as open") }
+        return true
+    }
+    private var installerSeenAt = 0L
+    private var installCheckLogged = false
 
     /** Apps already noted as only a small box (logged once each). */
     private val boxOnly = HashSet<String>()
