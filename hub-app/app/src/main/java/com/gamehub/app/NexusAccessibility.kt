@@ -308,13 +308,15 @@ class NexusAccessibility : AccessibilityService() {
         if (recents.showing) return "Recent Apps"
         if (shadePanel?.isOpen == true || MainActivity.panelUp()) return "NEXUS's panel is down"
         if (callScreenShowing()) return "a call screen"
-        // A big window of the phone's is up (its own panel or quick settings, a menu, the power menu): left to it
+        // A big window of the phone's is open and in use (its own panel or quick settings, a menu, the power menu):
+        // left to it. Only one that has the focus counts: some phones keep a big window of theirs up all the time
         val ws = try { windows } catch (_: Throwable) { return null }
         val r = android.graphics.Rect(); val tall = resources.displayMetrics.heightPixels * 0.3f
         for (w in ws) {
             if (w.type != android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM) continue
+            if (!w.isFocused && !w.isActive) continue
             w.getBoundsInScreen(r)
-            if (r.height() >= tall) return "the phone's own panel or a menu is up"
+            if (r.height() >= tall) return "the phone's own panel or a menu is up: \"" + (w.title?.toString().orEmpty().ifBlank { "untitled" }) + "\""
         }
         return null
     }

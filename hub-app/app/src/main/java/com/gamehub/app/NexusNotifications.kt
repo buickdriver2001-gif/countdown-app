@@ -65,6 +65,37 @@ class NexusNotifications : NotificationListenerService() {
          */
         fun panelList(): List<Shown> = try { instance?.buildPanel() ?: emptyList() } catch (_: Throwable) { emptyList() }
 
+        /** A music player is put away after this long without playing (as the phone's own panel does). */
+        const val STALE_MS = 15 * 60_000L
+
+        /** Swiped away in NEXUS but kept by the app: key → when it was posted (it shows again when it's posted anew). */
+        private var hidden: HashMap<String, Long>? = null
+        private fun hiddenAt(c: Context): HashMap<String, Long> = hidden ?: HashMap<String, Long>().also { m ->
+            c.getSharedPreferences("hub", Context.MODE_PRIVATE).getString("hiddenNotifs", "").orEmpty().lineSequence().forEach { l ->
+                val i = l.lastIndexOf('\t'); if (i > 0) l.substring(i + 1).toLongOrNull()?.let { m[l.substring(0, i)] = it }
+            }
+            hidden = m
+        }
+
+        /**
+         * Swiped away (or cleared) in NEXUS: gone from NEXUS even if the app won't let go of it (a music player, for
+         * instance), until the app posts it again.
+         */
+        fun hide(c: Context, keys: List<Pair<String, Long>>) {
+            val m = hiddenAt(c)
+            for ((k, t) in keys) m[k] = t
+            // (Only what's still around is kept)
+            val live = instance?.let { s -> try { s.activeNotifications?.map { it.key }?.toHashSet() } catch (_: Throwable) { null } }
+            if (live != null) m.keys.retainAll(live + keys.map { it.first })
+            while (m.size > 120) m.remove(m.keys.first())
+            c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit()
+                .putString("hiddenNotifs", m.entries.joinToString("\n") { it.key + "\t" + it.value }).apply()
+            instance?.let { s -> try { s.rebuild() } catch (_: Throwable) {} }
+        }
+
+        /** A music player's notification (it can always be swiped away in NEXUS). */
+        fun isMusic(n: Notification?): Boolean = n?.extras?.containsKey(Notification.EXTRA_MEDIA_SESSION) == true
+
         /** Clears everything that can be cleared, as Clear all in the notification shade does. */
         fun clearAll() { try { instance?.cancelAllNotifications() } catch (_: Exception) {} }
 
@@ -145,6 +176,7 @@ class NexusNotifications : NotificationListenerService() {
                 if (sbn.packageName == packageName && n.channelId != TEST_CHANNEL) continue
                 if (n.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_FOREGROUND_SERVICE) != 0) continue
                 if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0 && sbn.groupKey in withChildren) continue
+                if (leftOut(sbn)) continue
                 var vis = n.visibility
                 if (ranking != null && ranking.getRanking(sbn.key, r)) {
                     if (r.importance < NotificationManager.IMPORTANCE_DEFAULT) continue // silent
@@ -185,6 +217,32 @@ class NexusNotifications : NotificationListenerService() {
         try { onChange?.invoke() } catch (_: Throwable) {}
     }
 
+    /**
+     * Left out of everything NEXUS shows: a music player that hasn't played for a while (the phone's own panel
+     * puts old players away too), and anything you swiped away in NEXUS that the app wouldn't let go of (until the
+     * app posts it again, e.g. the music plays again).
+     */
+    private fun leftOut(sbn: StatusBarNotification): Boolean {
+        if (hiddenAt(this)[sbn.key] == sbn.postTime) return true
+        return staleMusic(sbn.notification ?: return false, sbn.postTime)
+    }
+
+    /** A music player (a media notification) that isn't playing and hasn't been for [STALE_MS]. */
+    private fun staleMusic(n: Notification, postTime: Long): Boolean {
+        val token = try {
+            @Suppress("DEPRECATION") n.extras?.getParcelable<android.media.session.MediaSession.Token>(Notification.EXTRA_MEDIA_SESSION)
+        } catch (_: Throwable) { null } ?: return false
+        val st = try { android.media.session.MediaController(this, token).playbackState } catch (_: Throwable) { null }
+        val playing = st != null && st.state in intArrayOf(android.media.session.PlaybackState.STATE_PLAYING,
+            android.media.session.PlaybackState.STATE_BUFFERING, android.media.session.PlaybackState.STATE_CONNECTING,
+            android.media.session.PlaybackState.STATE_FAST_FORWARDING, android.media.session.PlaybackState.STATE_REWINDING)
+        if (playing) return false
+        // Paused or stopped: how long since it last played (or since it was posted, if the app doesn't say)
+        val since = if (st != null && st.lastPositionUpdateTime > 0) android.os.SystemClock.elapsedRealtime() - st.lastPositionUpdateTime
+                    else System.currentTimeMillis() - postTime
+        return since > STALE_MS
+    }
+
     /** NEXUS's notification panel's list (see [panelList]). */
     private fun buildPanel(): List<Shown> {
         val all = activeNotifications ?: return emptyList()
@@ -202,6 +260,7 @@ class NexusNotifications : NotificationListenerService() {
             if (sbn.packageName == packageName && n.channelId != TEST_CHANNEL) continue
             // (A group's summary only repeats its notifications, which are listed themselves)
             if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0 && sbn.groupKey in withChildren) continue
+            if (leftOut(sbn)) continue
             var silent = false; var rank = Int.MAX_VALUE
             if (ranking != null && ranking.getRanking(sbn.key, r)) {
                 if (r.suppressedVisualEffects and NotificationManager.Policy.SUPPRESSED_EFFECT_NOTIFICATION_LIST != 0) continue
@@ -225,6 +284,7 @@ class NexusNotifications : NotificationListenerService() {
             val n = sbn.notification ?: continue
             if (sbn.packageName == packageName && n.channelId != TEST_CHANNEL) continue
             if (n.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_FOREGROUND_SERVICE) != 0) continue
+            if (leftOut(sbn)) continue
             if (ranking != null && ranking.getRanking(sbn.key, r)) {
                 if (r.importance < NotificationManager.IMPORTANCE_DEFAULT) continue // silent
                 if (r.suppressedVisualEffects and NotificationManager.Policy.SUPPRESSED_EFFECT_NOTIFICATION_LIST != 0) continue // Do Not Disturb
@@ -255,6 +315,7 @@ class NexusNotifications : NotificationListenerService() {
         val shown = all.filter { sbn ->
             val n = sbn.notification ?: return@filter false
             if (sbn.packageName == packageName && n.channelId != TEST_CHANNEL) return@filter false
+            if (leftOut(sbn)) return@filter false
             if (ranking != null && ranking.getRanking(sbn.key, r)) {
                 if (r.importance < NotificationManager.IMPORTANCE_DEFAULT) return@filter false // silent
                 if (r.suppressedVisualEffects and NotificationManager.Policy.SUPPRESSED_EFFECT_STATUS_BAR != 0) return@filter false

@@ -331,7 +331,7 @@ class NotifPanel(private val act: Context, private val sfx: Sfx, private val hos
         pendingRebuild = false
         val items = NexusNotifications.panelList()
         list.removeAllViews()
-        clearBtn.visibility = if (items.any { clearable(it.sbn.notification) }) VISIBLE else GONE
+        clearBtn.visibility = if (items.any { clearable(it.sbn.notification) || NexusNotifications.isMusic(it.sbn.notification) }) VISIBLE else GONE
         if (items.isEmpty()) {
             list.addView(TextView(act).apply {
                 text = "No notifications"; textSize = 14f; typeface = NexusUi.light; letterSpacing = 0.06f
@@ -373,6 +373,8 @@ class NotifPanel(private val act: Context, private val sfx: Sfx, private val hos
         }
         postDelayed({
             NexusNotifications.clearAll()
+            // (Anything the apps won't let go of, like music players, stays out of NEXUS too)
+            NexusNotifications.hide(act, gone.map { it.s.sbn.key to it.s.sbn.postTime })
             val left = (0 until list.childCount).any { (list.getChildAt(it) as? Card)?.clearable == false }
             if (!left) close() else rebuild()
         }, delay + 200)
@@ -512,7 +514,8 @@ class NotifPanel(private val act: Context, private val sfx: Sfx, private val hos
      */
     private inner class Card(val s: NexusNotifications.Shown) : FrameLayout(act) {
         private val n: Notification = s.sbn.notification
-        val clearable = clearable(n)
+        // (A music player can always be swiped away here, even when the app keeps it: it then stays out of NEXUS)
+        val clearable = clearable(n) || NexusNotifications.isMusic(n)
         private val whenView = TextView(act)
         private var cx0 = 0f; private var cy0 = 0f
         private var swipe = false
@@ -700,6 +703,8 @@ class NotifPanel(private val act: Context, private val sfx: Sfx, private val hos
                         if (lastOfGroup) keys.add(s.summaryKey!!)
                         list.removeView(this@Card)
                         NexusNotifications.dismissAll(keys)
+                        // (And it stays gone from NEXUS even if the app won't let go of it)
+                        NexusNotifications.hide(act, listOf(s.sbn.key to s.sbn.postTime))
                     }
                 })
                 va.start()
