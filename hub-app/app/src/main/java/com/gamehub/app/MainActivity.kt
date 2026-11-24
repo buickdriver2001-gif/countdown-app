@@ -243,6 +243,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
             android.widget.FrameLayout.LayoutParams.MATCH_PARENT))
         hub.panelPull = { dy -> if (panelAvailable()) { notifPanel.pull(dy); true } else false }
         hub.panelRelease = { vy -> notifPanel.release(vy) }
+        hub.stillCovered = { (::drawer.isInitialized && drawer.isOpen) || (::notifPanel.isInitialized && notifPanel.fullyOpen) }
         navBar = NavBar(this,
             onBack = { sfx.tick(); @Suppress("DEPRECATION") onBackPressed() },
             onHome = { sfx.tick(); goHome(onScreen = true) },
@@ -924,6 +925,11 @@ class MainActivity : Activity(), NexusUi.NavHost {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) hideBars()
+        // Back in front: the home screen only rests if something really covers it (never left paused by mistake)
+        if (hasFocus && ::hub.isInitialized && hub.covered && !hub.stillCovered()) {
+            hub.covered = false
+            LockTrace.log(this, "home screen was marked covered with nothing over it: carried on")
+        }
         // (The notification shade came down over NEXUS, or went away: its status row comes back once the phone's is gone)
         if (::hub.isInitialized) hub.focusChanged(hasFocus)
     }

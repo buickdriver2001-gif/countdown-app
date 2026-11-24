@@ -100,6 +100,12 @@ class NexusAccessibility : AccessibilityService() {
         val clearAllPending: Boolean get() = instance?.closeAllPending == true
         /** Recent Apps (NEXUS's layer) is up. */
         val recentsShowing: Boolean get() = instance?.recents?.showing == true
+        /**
+         * The home screen noticed it hasn't been able to move for far longer than any screen change takes: whatever
+         * is left marked as covering it, with nothing actually showing, is cleared. Says what it found (for the log).
+         */
+        fun unstickHome(): String = try { instance?.unstickHomeState() ?: "no helper" } catch (t: Throwable) { "check failed: " + t.javaClass.simpleName }
+
         /** The home screen is hidden behind NEXUS's cover or Recent Apps right now (it pauses its animation). */
         val homeHidden: Boolean get() = coverBusy || recentsShowing
         /**
@@ -1340,6 +1346,17 @@ class NexusAccessibility : AccessibilityService() {
     /** The change didn't happen after all: fade back. */
     fun cancelVeil() = liftVeil()
 
+    private fun unstickHomeState(): String {
+        val now = SystemClock.uptimeMillis()
+        val found = ArrayList<String>()
+        if (veilKind != 0 && now - veilAt > VEIL_MAX + 800) {
+            found.add("fade $veilKind left up for ${now - veilAt}ms"); liftVeil()
+        }
+        if (recents.showing && !recents.isUp) { found.add("Recent Apps marked up while gone"); recents.forgetShowing() }
+        closeJob?.let { found.add("apps still closing" + (if (it.under == true) " (under Recent Apps)" else "")) }
+        return if (found.isEmpty()) "nothing left over found" else found.joinToString()
+    }
+
     private fun stepVeil() {
         if (veilKind == 0) return
         val now = SystemClock.uptimeMillis()
@@ -1722,12 +1739,16 @@ class NexusAccessibility : AccessibilityService() {
         screenCache[key]?.let { return it }
         val activity = isActivity(pkg, cls)
         val popup = POPUP_WORDS.any { cls.contains(it, ignoreCase = true) }
-        val ok = activity || !popup
+        // (A check that's part of something else, never that app being open: Google Play Protect's "scanning app"
+        // check while an app installs is one of Play Store's screens, and the phone's own recent apps never has it)
+        val check = NOT_OPEN_WORDS.any { cls.contains(it, ignoreCase = true) }
+        val ok = (activity || !popup) && !check
         if (screenCache.size > 400) screenCache.clear()
         screenCache[key] = ok
         return ok
     }
     private val POPUP_WORDS = listOf("Dialog", "Popup", "PopUp", "Toast", "Menu", "Notification", "Tooltip", "Snackbar", "BottomSheet")
+    private val NOT_OPEN_WORDS = listOf(".verifier.", "PlayProtect", "VerifyApps", "PackageWarning")
 
     private fun takeOverRecents() = getSharedPreferences("hub", MODE_PRIVATE).getBoolean("replaceRecents", true)
 

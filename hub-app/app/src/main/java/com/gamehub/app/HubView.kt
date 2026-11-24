@@ -194,6 +194,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     private var drawProblemNoted = false
 
     private fun drawFrame(c: Canvas) {
+        drewAt = android.os.SystemClock.uptimeMillis()
         val now = System.nanoTime()
         val dt = if (lastNs == 0L) 0f else min(0.05f, (now - lastNs) / 1e9f)
         lastNs = now
@@ -258,7 +259,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         if (!covered) {
             // Under NEXUS's cover (an app opening or closing, apps being closed): hold this frame and pause, so the
             // phone puts everything into the change; carry on the moment the cover starts to lift
-            if (NexusAccessibility.homeHidden && launchFlash <= 0f) { removeCallbacks(resumeAfterCover); postDelayed(resumeAfterCover, 50) }
+            if (!NexusAccessibility.homeHidden) ignoreHidden = false
+            if (NexusAccessibility.homeHidden && launchFlash <= 0f && !ignoreHidden) { removeCallbacks(resumeAfterCover); postDelayed(resumeAfterCover, 50) }
             // Nothing moving but the slow background, on a screen faster than 60 Hz: every other frame (it looks the
             // same, for about half the work); a touch brings back every frame at once
             else if (idle(intro)) {
@@ -292,7 +294,40 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     private val resumeAfterCover = object : Runnable {
-        override fun run() { if (NexusAccessibility.homeHidden) postDelayed(this, 50) else invalidate() }
+        override fun run() {
+            if (!NexusAccessibility.homeHidden) { heldSince = 0L; invalidate(); return }
+            val now = android.os.SystemClock.uptimeMillis()
+            if (heldSince == 0L) heldSince = now
+            // Held far longer than any screen change takes, with Recent Apps not up: something was left marked as
+            // covering the home screen. Clear it, carry on, and note it
+            if (now - heldSince > 3000L && !NexusAccessibility.recentsShowing) {
+                LockTrace.log(context, "home screen held still for ${now - heldSince}ms: " + NexusAccessibility.unstickHome())
+                heldSince = 0L; ignoreHidden = true; lastNs = 0L; invalidate()
+                return
+            }
+            postDelayed(this, 50)
+        }
+    }
+    /** When the home screen last drew a frame, and since when it has been holding still under a cover. */
+    private var drewAt = 0L
+    private var heldSince = 0L
+    /** A cover marked as up was found to be left over: the home screen carries on until it's really gone. */
+    private var ignoreHidden = false
+    /** Is something really covering the home screen (All apps, NEXUS's notification panel)? Set by NEXUS. */
+    var stillCovered: () -> Boolean = { true }
+
+    /**
+     * A touch on a home screen that hasn't drawn a frame for a while: something left it paused (marked covered
+     * with nothing over it, or a fade marked as up that isn't). It carries on at once, and the log says why.
+     */
+    private fun wake(ms: Long) {
+        val why = ArrayList<String>()
+        if (covered && !stillCovered()) { why.add("marked covered with nothing over it"); covered = false }
+        if (NexusAccessibility.homeHidden && !NexusAccessibility.recentsShowing) { why.add(NexusAccessibility.unstickHome()); ignoreHidden = true }
+        if (covered) return
+        if (why.isEmpty()) why.add("its frames had stopped")
+        LockTrace.log(context, "home screen hadn't moved for ${ms}ms (${why.joinToString()}): woken up")
+        lastNs = 0L; invalidate()
     }
 
     /**
@@ -2323,6 +2358,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 if (booting) return true // the intro always plays in full
+                // (Not moving any more though nothing covers it: carry on at once, so this touch works)
+                val nowMs = android.os.SystemClock.uptimeMillis()
+                if (drewAt != 0L && nowMs - drewAt > 800L) wake(nowMs - drewAt)
                 downX = e.x; downY = e.y; lastY = e.y; lastX = e.x
                 dragging = false; longFired = false
                 maxTravel = 0f

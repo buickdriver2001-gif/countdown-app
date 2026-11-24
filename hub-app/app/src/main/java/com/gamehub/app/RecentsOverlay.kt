@@ -526,6 +526,10 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
         h.removeCallbacks(waitRun); h.post(waitRun)
     }
 
+    /** On screen right now (its layer up), and a way to clear [showing] if it's found left over without it. */
+    val isUp: Boolean get() = up
+    fun forgetShowing() { showing = false; leaving = false; waitFor = null; afterCloses = null }
+
     /** When Recent Apps last went away (a late signal from the phone's own recent apps then isn't the square button). */
     var hiddenAt = 0L
         private set

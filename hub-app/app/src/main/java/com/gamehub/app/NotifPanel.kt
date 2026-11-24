@@ -67,6 +67,17 @@ class NotifPanel(private val act: Activity, private val sfx: Sfx, private val ho
     private var shown = 0f
     private var anim: android.animation.ValueAnimator? = null
     val isOpen: Boolean get() = visibility == VISIBLE && shown > 0f
+    /** All the way down (covering the home screen completely). */
+    val fullyOpen: Boolean get() = visibility == VISIBLE && shown >= 1f
+
+    override fun dispatchTouchEvent(e: MotionEvent): Boolean {
+        // Never an invisible layer catching touches: up out of sight, it's put away and the touch goes to the home screen
+        if (e.actionMasked == MotionEvent.ACTION_DOWN && shown < 0.02f && anim?.isRunning != true) {
+            pulling = false; dragging = false; place(0f)
+            return false
+        }
+        return super.dispatchTouchEvent(e)
+    }
 
     private val sheet = LinearLayout(act).apply { orientation = LinearLayout.VERTICAL }
     private val clock = TextView(act)
