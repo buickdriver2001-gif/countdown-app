@@ -25,6 +25,8 @@ class MainActivity : Activity(), NexusUi.NavHost {
     private lateinit var drawer: AppDrawer
     private lateinit var tutorial: TutorialView
     private lateinit var navBar: NavBar
+    /** NEXUS's own notification panel (pulled down from the top of the home screen). */
+    private lateinit var notifPanel: NotifPanel
     private val sfx by lazy { Sfx() }
     private var leftForApp = false
     private val prefs by lazy { getSharedPreferences("hub", MODE_PRIVATE) }
@@ -218,10 +220,33 @@ class MainActivity : Activity(), NexusUi.NavHost {
         val root = android.widget.FrameLayout(this)
         root.addView(hub)
         root.addView(drawer)
+        // NEXUS's own notification panel: over the home screen, under NEXUS's Back / Home / Recent buttons
+        notifPanel = NotifPanel(this, sfx, object : NotifPanel.Host {
+            override fun openNotification(pkg: String, intent: android.app.PendingIntent?, key: String, autoCancel: Boolean, from: android.graphics.RectF?) =
+                sendNotification(pkg, intent, key, autoCancel, from)
+            override fun sendAction(intent: android.app.PendingIntent) {
+                try { intent.send(this@MainActivity, 0, null, null, null, null, startOpts(null)) }
+                catch (_: Exception) { NexusUi.note(this@MainActivity, "That didn't work. The app may have changed the notification") }
+            }
+            override fun phoneQuickSettings() {
+                try { if (NexusAccessibility.instance?.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS) == true) return } catch (_: Exception) {}
+                try {
+                    @android.annotation.SuppressLint("WrongConstant") val bar = getSystemService("statusbar")
+                    Class.forName("android.app.StatusBarManager").getMethod("expandSettingsPanel").invoke(bar)
+                } catch (_: Throwable) { NexusUi.note(this@MainActivity, "Swipe down twice from the top of an app for the phone's quick settings", long = true) }
+            }
+            override fun covering(on: Boolean) { if (::hub.isInitialized && !(::drawer.isInitialized && drawer.isOpen)) hub.covered = on }
+        })
+        notifPanel.elevation = 30 * resources.displayMetrics.density
+        notifPanel.outlineProvider = null
+        root.addView(notifPanel, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT))
+        hub.panelPull = { dy -> if (panelAvailable()) { notifPanel.pull(dy); true } else false }
+        hub.panelRelease = { vy -> notifPanel.release(vy) }
         navBar = NavBar(this,
             onBack = { sfx.tick(); @Suppress("DEPRECATION") onBackPressed() },
             onHome = { sfx.tick(); goHome(onScreen = true) },
-            onRecent = { sfx.tick(); openSwitcher() })
+            onRecent = { sfx.tick(); if (::notifPanel.isInitialized) notifPanel.closeNow(); openSwitcher() })
         // Above All apps / Add app too (which sits raised over the home screen), so the buttons work there as well;
         // only the first-run guide covers them. (No shadow: it's a flat strip)
         navBar.elevation = 35 * resources.displayMetrics.density
@@ -297,6 +322,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
+            ::notifPanel.isInitialized && notifPanel.isOpen -> notifPanel.close()
             ::tutorial.isInitialized && tutorial.visibility == android.view.View.VISIBLE -> closeTutorial()
             ::drawer.isInitialized && drawer.isOpen -> drawer.close()
             // As the phone's Home app, NEXUS stays put on Back (like any launcher); Close NEXUS is under the gear
@@ -311,6 +337,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
      */
     private fun goHome(onScreen: Boolean) {
         var tidied = NexusUi.dismissAll(this)
+        if (::notifPanel.isInitialized && notifPanel.isOpen) { if (onScreen) notifPanel.close() else notifPanel.closeNow(); tidied = true }
         if (::drawer.isInitialized && drawer.isOpen) { drawer.close(animate = onScreen); tidied = true }
         if (::hub.isInitialized) { if (onScreen && !tidied) hub.toTop() else hub.clearSelection() }
     }
@@ -319,30 +346,44 @@ class MainActivity : Activity(), NexusUi.NavHost {
      * A notification box on the home screen tapped: what it leads to opens (as if it had been tapped in the
      * notification shade), growing out of the box. If it leads nowhere, the app itself opens.
      */
-    private fun openNotification(item: NexusNotifications.Item, from: android.graphics.RectF) {
+    private fun openNotification(item: NexusNotifications.Item, from: android.graphics.RectF) =
+        sendNotification(item.pkg, item.intent, item.key, item.autoCancel, from)
+
+    /**
+     * Opens what a notification leads to (from a home screen box or NEXUS's notification panel), as if it had been
+     * tapped in the phone's own shade, growing out of [from]. If it leads nowhere, the app itself opens.
+     */
+    private fun sendNotification(pkg: String, intent: android.app.PendingIntent?, key: String, autoCancel: Boolean, from: android.graphics.RectF?) {
         var ok = false
-        item.intent?.let { pi ->
-            ok = try {
-                val grow = android.app.ActivityOptions.makeScaleUpAnimation(hub, from.left.toInt(), from.top.toInt(),
-                    from.width().toInt().coerceAtLeast(1), from.height().toInt().coerceAtLeast(1))
-                // (NEXUS is in front: the app may open, as from the notification shade)
-                @Suppress("DEPRECATION")
-                val o = if (android.os.Build.VERSION.SDK_INT >= 34)
-                    grow.setPendingIntentBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED) else grow
-                pi.send(this, 0, null, null, null, null, o.toBundle()); true
-            } catch (_: Exception) { false }
+        intent?.let { pi ->
+            ok = try { pi.send(this, 0, null, null, null, null, startOpts(from)); true } catch (_: Exception) { false }
         }
         if (!ok) ok = try {
-            packageManager.getLaunchIntentForPackage(item.pkg)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true } ?: false
+            packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true } ?: false
         } catch (_: Exception) { false }
         if (ok) leftForApp = true
         else NexusUi.note(this, "That notification couldn't be opened")
         // (Only ones the app marked to go away when tapped, as the notification shade does)
-        if (item.autoCancel) NexusNotifications.dismiss(item.key)
+        if (autoCancel) NexusNotifications.dismiss(key)
     }
+
+    /** How a notification's app opens: growing out of [from] (if given); NEXUS is in front, so it may open, as from the shade. */
+    private fun startOpts(from: android.graphics.RectF?): android.os.Bundle {
+        val base = if (from != null) android.app.ActivityOptions.makeScaleUpAnimation(hub, from.left.toInt(), from.top.toInt(),
+            from.width().toInt().coerceAtLeast(1), from.height().toInt().coerceAtLeast(1)) else android.app.ActivityOptions.makeBasic()
+        @Suppress("DEPRECATION")
+        val o = if (android.os.Build.VERSION.SDK_INT >= 34)
+            base.setPendingIntentBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED) else base
+        return o.toBundle()
+    }
+
+    /** NEXUS's own notification panel comes down (Notification access allowed, and not switched to the phone's). */
+    private fun panelAvailable() = NexusNotifications.granted(this) && NexusNotifications.panelOn(this) &&
+        !(::drawer.isInitialized && drawer.isOpen)
 
     /** Swipe down on NEXUS: the notifications, the supported way first. */
     private fun openNotifications() {
+        if (::notifPanel.isInitialized && panelAvailable()) { notifPanel.open(); return }
         try { if (NexusAccessibility.instance?.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS) == true) return } catch (_: Exception) {}
         try {
             @android.annotation.SuppressLint("WrongConstant") val bar = getSystemService("statusbar")
@@ -747,7 +788,9 @@ class MainActivity : Activity(), NexusUi.NavHost {
         NexusUi.panel(this, "Notifications",
             "Boxes: your notifications at the top of the home screen, newest first. Swipe up and down on them to scroll " +
                 "through, tap one to open it, swipe it sideways to clear it. They scroll away with your apps.\n\n" +
-                "Icons: which apps have notifications, in the status bar. Swipe down from the top for all of them.\n\n" +
+                "Icons: which apps have notifications, in the status bar.\n\n" +
+                "Pull-down panel: swipe down from the top of the home screen for NEXUS's own panel (all your notifications, " +
+                "their buttons, Clear all, and shortcuts), or the phone's own.\n\n" +
                 "They only show while your phone is unlocked. Nothing is stored or sent anywhere.",
             listOf(
                 NexusUi.Option("Boxes on the home screen:  " + onOff(boxes)) {
@@ -755,6 +798,9 @@ class MainActivity : Activity(), NexusUi.NavHost {
                 },
                 NexusUi.Option("Icons in the status bar:  " + onOff(icons)) {
                     NexusNotifications.setBarOn(this, !icons); hub.notifIcons = !icons; notificationSettings(back)
+                },
+                NexusUi.Option("Pull-down panel:  " + (if (NexusNotifications.panelOn(this)) "NEXUS" else "phone's own")) {
+                    NexusNotifications.setPanelOn(this, !NexusNotifications.panelOn(this)); notificationSettings(back)
                 }
             ), cancel = "Back", back = back)
     }
@@ -813,9 +859,9 @@ class MainActivity : Activity(), NexusUi.NavHost {
                 "• Tap an app once to choose it, and again to open it. Hold an app for its shortcuts, App info and Uninstall; hold and drag to move it.\n" +
                 "• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n" +
                 "• Tap ADD APP to add apps to NEXUS: tick as many as you like, then tap ADD.\n" +
-                "• Swipe down from the top (or tap the top bar) for your notifications. With Notification access, the top bar shows which apps have notifications and the newest show as boxes at the top of the home screen: tap to open, swipe sideways to clear (Settings → Notifications).\n" +
+                "• Swipe down from the top (or tap the top bar) for your notifications: NEXUS's own panel, with each notification's buttons, Clear all and shortcuts (Settings → Notifications can switch it to the phone's own). With Notification access, the top bar shows which apps have notifications and the newest show as boxes at the top of the home screen: tap to open, swipe sideways to clear (Settings → Notifications).\n" +
                 "• Settings → Home screen → Style: the PS2 menu (a list), Data grid (glass blocks with spinning icons) or Tiles. App order: A–Z or your own.\n" +
-                "• Recent Apps (the square button, once the helper is on): tap a card to switch to that app, or swipe it up to close the app. With no apps open, it takes you to the home screen. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent apps helper).\n" +
+                "• Recent Apps (the square button, once the helper is on): tap a card to switch to that app, swipe it up to close the app, or tap beside the cards to go home. With no apps open, it takes you to the home screen. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent apps helper).\n" +
                 "• Buttons in apps: NEXUS's Back, Home and Recent buttons in place of the phone's own (needs 3-button navigation).\n" +
                 "• Close NEXUS (in Settings) and Home goes to your normal home screen; open NEXUS from its icon to make it your home again.\n\n" +
                 "To stop using NEXUS as Home completely, choose your old home screen in the phone's Settings → Apps → Default apps → Home app.",
@@ -886,6 +932,8 @@ class MainActivity : Activity(), NexusUi.NavHost {
         super.onStop()
         // Left for an app (e.g. a notification was opened): NEXUS's status row and buttons are simply there next time
         if (::hub.isInitialized) hub.phoneBarsGone()
+        // (And its notification panel is put away)
+        if (::notifPanel.isInitialized) notifPanel.closeNow()
     }
 
     /** A still picture of this screen as it stands (null if it wouldn't match what comes back: All Apps open etc). */

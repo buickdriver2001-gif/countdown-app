@@ -34,6 +34,12 @@ class NexusNotifications : NotificationListenerService() {
      */
     class BarIcon(val pkg: String, val drawable: android.graphics.drawable.Drawable, val glyph: Boolean)
 
+    /**
+     * A notification in NEXUS's notification panel: [silent] ones are listed after the others, as the phone's own
+     * shade does; [summaryKey]: its group's summary (cleared with the group's last notification).
+     */
+    class Shown(val sbn: StatusBarNotification, val silent: Boolean, val app: String, val summaryKey: String?)
+
     companion object {
         /** NEXUS's own test notification (Gear → NEXUS lock screen → Send a test notification). */
         const val TEST_CHANNEL = "nexus_test"
@@ -49,6 +55,23 @@ class NexusNotifications : NotificationListenerService() {
          */
         @Volatile var homeItems: List<Item> = emptyList()
             private set
+        /** Told on the main thread whenever the notifications change (NEXUS's notification panel, while it's open). */
+        var onChange: (() -> Unit)? = null
+
+        /**
+         * What NEXUS's notification panel lists, in the order the phone's own shade has them: every notification but
+         * a group's summary (its notifications are listed), what Do Not Disturb keeps out of the list and NEXUS's own
+         * (its test one aside).
+         */
+        fun panelList(): List<Shown> = try { instance?.buildPanel() ?: emptyList() } catch (_: Throwable) { emptyList() }
+
+        /** Clears everything that can be cleared, as Clear all in the notification shade does. */
+        fun clearAll() { try { instance?.cancelAllNotifications() } catch (_: Exception) {} }
+
+        /** Pulling down from the top of the home screen brings NEXUS's own panel (Settings → Notifications; else the phone's). */
+        fun panelOn(c: Context): Boolean = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("nexusShade", true)
+        fun setPanelOn(c: Context, on: Boolean) { c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit().putBoolean("nexusShade", on).apply() }
+
         /** Notification boxes at the top of the home screen (Settings → Notifications). */
         fun boxesOn(c: Context): Boolean = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("homeNotifs", true)
         fun setBoxesOn(c: Context, on: Boolean) { c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit().putBoolean("homeNotifs", on).apply() }
@@ -158,6 +181,38 @@ class NexusNotifications : NotificationListenerService() {
                     n.flags and Notification.FLAG_AUTO_CANCEL != 0)
             }
         } catch (_: Throwable) { /* never let a strange notification break anything */ }
+        // (NEXUS's notification panel, while it's open, shows the change)
+        try { onChange?.invoke() } catch (_: Throwable) {}
+    }
+
+    /** NEXUS's notification panel's list (see [panelList]). */
+    private fun buildPanel(): List<Shown> {
+        val all = activeNotifications ?: return emptyList()
+        val ranking = currentRanking
+        val r = Ranking()
+        val summaries = HashMap<String, String>()
+        val withChildren = HashSet<String>()
+        for (sbn in all) {
+            val f = sbn.notification?.flags ?: continue
+            if (f and Notification.FLAG_GROUP_SUMMARY != 0) summaries[sbn.groupKey] = sbn.key else withChildren.add(sbn.groupKey)
+        }
+        val out = ArrayList<Pair<Shown, Int>>()
+        for (sbn in all) {
+            val n = sbn.notification ?: continue
+            if (sbn.packageName == packageName && n.channelId != TEST_CHANNEL) continue
+            // (A group's summary only repeats its notifications, which are listed themselves)
+            if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0 && sbn.groupKey in withChildren) continue
+            var silent = false; var rank = Int.MAX_VALUE
+            if (ranking != null && ranking.getRanking(sbn.key, r)) {
+                if (r.suppressedVisualEffects and NotificationManager.Policy.SUPPRESSED_EFFECT_NOTIFICATION_LIST != 0) continue
+                if (Build.VERSION.SDK_INT >= 28 && r.isSuspended) continue
+                silent = r.importance < NotificationManager.IMPORTANCE_DEFAULT
+                rank = r.rank
+            }
+            val summary = if (n.flags and Notification.FLAG_GROUP_SUMMARY == 0) summaries[sbn.groupKey] else null
+            out.add(Shown(sbn, silent, appName(sbn.packageName), summary) to rank)
+        }
+        return out.sortedWith(compareBy<Pair<Shown, Int>>({ it.first.silent }, { it.second }, { -it.first.sbn.postTime })).map { it.first }
     }
 
     /** The home screen's boxes: like the lock screen's cards, but showing what they say (the phone is unlocked). */

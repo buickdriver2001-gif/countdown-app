@@ -578,6 +578,7 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
     private var mode = 0 // 0 = undecided, 1 = sliding the carousel, 2 = swiping a card up
     /** The card your finger came down on (null: not on a card), and the card being swiped up. */
     private var downCard: Card? = null
+    private var caughtSlide = false
     private var liftCard: Card? = null
     private var tracker: VelocityTracker? = null
     private val slop = android.view.ViewConfiguration.get(a.ctx).scaledTouchSlop.toFloat()
@@ -604,7 +605,11 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
         val l = live().toList()
         val cw = width * CoverView.CARD_SCALE
         when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> { downX = e.x; downY = e.y; lastX = e.x; mode = 0; dragging = true; vel = 0f; downCard = cardAt(e.x, e.y, l); liftCard = null }
+            MotionEvent.ACTION_DOWN -> {
+                // (A touch while the cards are still sliding just stops them: that tap doesn't count as anything)
+                caughtSlide = abs(vel) > 0.05f || (targetIdx >= 0 && abs(pos - targetIdx) > 0.08f)
+                downX = e.x; downY = e.y; lastX = e.x; mode = 0; dragging = true; vel = 0f; downCard = cardAt(e.x, e.y, l); liftCard = null
+            }
             MotionEvent.ACTION_MOVE -> {
                 if (mode == 0) {
                     if (abs(e.x - downX) > slop) mode = 1
@@ -665,8 +670,10 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
             else if (restrictRect.contains(x, y)) { sfx.confirm(); a.openAppInfo() }
             return
         }
-        // Any card you can see opens its app (the one in the middle, or one beside it), growing out of its card
-        val card = cardAt(x, y, l) ?: return
+        // Any card you can see opens its app (the one in the middle, or one beside it), growing out of its card.
+        // A tap beside the cards (not one that only stopped them sliding): home, like tapping outside the phone's own
+        val card = cardAt(x, y, l)
+        if (card == null) { if (!caughtSlide) { sfx.tick(); a.goNexus() }; return }
         sfx.confirm(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
         openWithZoom(card.pkg)
     }

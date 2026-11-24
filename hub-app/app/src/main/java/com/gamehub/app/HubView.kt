@@ -885,6 +885,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     /** The touch started on the status bar: it's for the notifications and never moves the list. */
     private var fromBar = false
     private var barPulled = false
+    /** NEXUS's own notification panel, pulled down from the top bar: it follows the finger (set by NEXUS; false: not used, the phone's opens). */
+    var panelPull: (Float) -> Boolean = { false }
+    var panelRelease: (Float) -> Unit = {}
+    private var barPanel = false
     /**
      * A swipe down from the top shows the phone's own status bar and buttons over NEXUS's for a moment (and as the
      * notification shade closes): until when NEXUS's status row and buttons stay out of their way, so there's never
@@ -2329,7 +2333,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 pullArmed = !caught && scroll <= 1f * d
                 // On the status bar: a tap or a swipe down there brings down the notifications (never moves the list)
                 fromBar = e.y < 48 * d && !gearRect.contains(e.x, e.y)
-                barPulled = false
+                barPulled = false; barPanel = false
                 // On a notification box: tap to open it, swipe it sideways to clear it (never moves the list)
                 boxDown = if (fromBar || offMode == OFF_FLY) BOX_NONE else boxAt(e.x, e.y)
                 boxSwiping = false; boxVertical = false; boxInner = false
@@ -2378,10 +2382,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     // The notifications come down as soon as the swipe is clearly downwards, like the phone's own bar
                     val dy = e.y - downY
                     if (!dragging && maxTravel > slop) dragging = true
-                    if (!barPulled && t > readyT && launchFlash <= 0f && dy > 20 * d && dy > kotlin.math.abs(e.x - downX)) {
-                        barPulled = true
-                        phoneBarsComing()
-                        onPullDown()
+                    if (barPanel) panelPull(dy)
+                    else if (!barPulled && t > readyT && launchFlash <= 0f && dy > 16 * d && dy > kotlin.math.abs(e.x - downX)) {
+                        // NEXUS's own panel comes down with your finger; without it, the phone's own shade. (From the very
+                        // top edge the phone shows its own bars for a moment too: NEXUS's step aside meanwhile)
+                        if (panelPull(dy)) { barPanel = true; if (downY < 30 * d) phoneBarsComing() }
+                        else { barPulled = true; phoneBarsComing(); onPullDown() }
                     }
                     lastY = e.y
                     return true
@@ -2452,6 +2458,13 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     tracker?.recycle(); tracker = null
                     return true
                 }
+                if (fromBar && barPanel) {
+                    // Let go of NEXUS's panel: down it goes if it's most of the way (or flicked), otherwise back up
+                    panelRelease(vy)
+                    fromBar = false; barPanel = false; dragging = false; downRow = -1
+                    tracker?.recycle(); tracker = null
+                    return true
+                }
                 if (fromBar) {
                     // From the status bar: a tap (or a swipe down that hadn't brought them yet) opens the notifications
                     if (!barPulled && !longFired && launchFlash <= 0f && t > readyT &&
@@ -2514,7 +2527,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 tracker?.recycle(); tracker = null
             }
             MotionEvent.ACTION_CANCEL -> {
-                removeCallbacks(longPress); moveIndex = -1; dragging = false; downRow = -1; fromBar = false
+                removeCallbacks(longPress); moveIndex = -1; dragging = false; downRow = -1
+                if (fromBar && barPanel) panelRelease(0f)
+                fromBar = false; barPanel = false
                 if (offMode == OFF_HELD) offMode = OFF_BACK
                 boxDown = BOX_NONE; boxSwiping = false; boxVertical = false; boxInner = false
                 tracker?.recycle(); tracker = null
