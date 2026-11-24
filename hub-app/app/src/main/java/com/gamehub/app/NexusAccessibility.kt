@@ -119,15 +119,6 @@ class NexusAccessibility : AccessibilityService() {
             return s.closeJob != null || s.phoneRecentsOpen || s.recents.showing || now - s.recents.hiddenAt < 1500L ||
                 now - s.phoneRecentsLeftAt < 1500L || now - s.closeEndedAt < 1500L
         }
-        /** How NEXUS's pull-down in apps is doing right now, in a few words (Settings → Notifications). */
-        fun pullStatus(): String {
-            val s = instance ?: return "needs the Recent Apps helper (Settings → Recent apps helper)"
-            return try { s.pullStripWhyNot()?.let { "waiting ($it)" } ?: "ready" } catch (_: Throwable) { "unknown" }
-        }
-
-        /** The phone's own quick settings (from NEXUS's panel): asked for on purpose, so NEXUS leaves them alone. */
-        fun phoneQuickSettings(): Boolean = try { instance?.openPhoneQuickSettings() ?: false } catch (_: Throwable) { false }
-
         /** Opens Recent Apps in NEXUS's layer (false: not possible now, e.g. with TalkBack). */
         fun showRecents(): Boolean = instance?.let { !it.talkBackOn() && it.recents.show() } ?: false
         /** The phone's own Home was pressed while Recent Apps was up: it fades away. */
@@ -205,8 +196,7 @@ class NexusAccessibility : AccessibilityService() {
 
     private fun handleScreen(c: Context, i: Intent) {
         if (i.action == Intent.ACTION_USER_PRESENT) { h.postDelayed({ safe { recheckFront() } }, 600); return }
-        if (i.action == Intent.ACTION_SCREEN_OFF) { hideButtons("screen off"); veilKind = 0; h.removeCallbacks(veilRun); recents.hide(false); closeShadePanel(animate = false); hidePullStrip() } else queueButtons(0)
-        queuePullStrip(400L)
+        if (i.action == Intent.ACTION_SCREEN_OFF) { hideButtons("screen off"); veilKind = 0; h.removeCallbacks(veilRun); recents.hide(false) } else queueButtons(0)
         if (i.action == Intent.ACTION_SCREEN_OFF) leftByScreenOff = true
         closeJob?.let { endClose(it, "the screen turned off", goHome = false) }
         val kmT = getSystemService(KeyguardManager::class.java)
@@ -274,234 +264,6 @@ class NexusAccessibility : AccessibilityService() {
         return CALL_WORDS.any { it in name }
     }
     private val CALL_WORDS = listOf("call", "voip", "rtc", "ringing", "incoming", "conf", "meeting", "dial", "phone")
-
-    // ------------------------------------------------------------------ NEXUS's notification panel, everywhere
-    // Settings → Notifications → Pull-down panel: NEXUS's. A thin strip of NEXUS's lies along the very top edge of
-    // the screen, where a pull-down starts: your swipe goes to NEXUS, and its panel comes down with your finger (over
-    // an app in NEXUS's own layer, leaving the button bar clear; on the NEXUS home screen, its own). The phone's own
-    // panel is never touched or put away by NEXUS. The strip steps aside (so the phone's own comes down as usual) on
-    // the lock screen, with TalkBack, during a call, in landscape (full-screen videos and games), while Recent Apps
-    // or a big window of the phone's (its own panel, a menu) is up, and when this is switched off.
-
-    private var pullStrip: android.view.View? = null
-    private var pullWhyNot: String? = "not yet"
-    private var pullLogs = 0
-    /** Ringing, in a phone call, or screening / redirecting one (not MODE_IN_COMMUNICATION: voice chats keep that). */
-    private val CALL_MODES = intArrayOf(1, 2, 4, 5)
-    private val pullCheck = Runnable { safe { updatePullStrip() } }
-    private fun queuePullStrip(delay: Long = 150L) { h.removeCallbacks(pullCheck); h.postDelayed(pullCheck, delay) }
-    private var shadeRoot: android.widget.FrameLayout? = null
-    private var shadePanel: NotifPanel? = null
-    private var shadeSfxMade: Sfx? = null
-    private val shadeSfx: Sfx get() = shadeSfxMade ?: Sfx().also { shadeSfxMade = it }
-
-    /** NEXUS's panel is the pull-down one (switched on, and Notification access allowed; looked up at most every 2 s). */
-    private fun shadeSwapOn(): Boolean {
-        val now = SystemClock.uptimeMillis()
-        if (now - swapOnAt > 2000L) { swapOnAt = now; swapOn = NexusNotifications.granted(this) && NexusNotifications.panelOn(this) }
-        return swapOn
-    }
-    private var swapOn = false
-    private var swapOnAt = 0L
-    /** The app NEXUS's panel came down over (it goes up when another app really comes in front). */
-    private var shadeOver: String? = null
-
-    /** Why the pull-down strip shouldn't be there right now (null: it should). */
-    private fun pullStripWhyNot(): String? {
-        if (!shadeSwapOn()) return "switched off"
-        if (getSystemService(PowerManager::class.java)?.isInteractive != true) return "screen off"
-        if (getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true) return "locked"
-        if (talkBackOn()) return "TalkBack is on"
-        // A phone call (ringing or going): not a voice chat or walkie-talkie app, which can keep the phone's audio in
-        // its "communication" mode all the time they're connected. A call screen showing counts too (below)
-        if ((getSystemService(android.media.AudioManager::class.java)?.mode ?: 0) in CALL_MODES) return "a phone call"
-        if (resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) return "landscape"
-        if (recents.showing) return "Recent Apps"
-        if (shadePanel?.isOpen == true || MainActivity.panelUp()) return "NEXUS's panel is down"
-        if (callScreenShowing()) return "a call screen"
-        // A big window of the phone's is open and in use (its own panel or quick settings, a menu, the power menu):
-        // left to it. Only one that has the focus counts: some phones keep a big window of theirs up all the time
-        val ws = try { windows } catch (_: Throwable) { return null }
-        val r = android.graphics.Rect(); val tall = resources.displayMetrics.heightPixels * 0.3f
-        for (w in ws) {
-            if (w.type != android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM) continue
-            if (!w.isFocused && !w.isActive) continue
-            w.getBoundsInScreen(r)
-            if (r.height() >= tall) return "the phone's own panel or a menu is up: \"" + (w.title?.toString().orEmpty().ifBlank { "untitled" }) + "\""
-        }
-        return null
-    }
-
-    /** Puts the pull-down strip at the top of the screen, or takes it away (noting in the log when that changes). */
-    private fun updatePullStrip() {
-        val why = pullStripWhyNot()
-        if (why != pullWhyNot) {
-            if (pullLogs < 30) { pullLogs++; LockTrace.log(this, if (why == null) "NEXUS's pull-down: ready at the top of the screen" else "NEXUS's pull-down: stepped aside ($why)") }
-            pullWhyNot = why
-        }
-        if (why == null) showPullStrip() else hidePullStrip()
-    }
-
-    private fun showPullStrip() {
-        if (pullStrip != null) return
-        val wm = getSystemService(android.view.WindowManager::class.java) ?: return
-        val d = resources.displayMetrics.density
-        val id = resources.getIdentifier("status_bar_height", "dimen", "android")
-        val barH = maxOf(if (id != 0) try { resources.getDimensionPixelSize(id) } catch (_: Exception) { 0 } else 0, (24 * d).toInt())
-        val v = object : android.view.View(this) {
-            private var x0 = 0f; private var y0 = 0f; private var moved = 0f
-            private var pulling = false; private var home = false
-            private var vt: android.view.VelocityTracker? = null
-            @android.annotation.SuppressLint("ClickableViewAccessibility")
-            override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
-                safe {
-                    when (e.actionMasked) {
-                        android.view.MotionEvent.ACTION_DOWN -> {
-                            x0 = e.rawX; y0 = e.rawY; pulling = false; moved = 0f
-                            vt?.recycle(); vt = android.view.VelocityTracker.obtain(); vt?.addMovement(e)
-                        }
-                        android.view.MotionEvent.ACTION_MOVE -> {
-                            vt?.addMovement(e)
-                            val dy = e.rawY - y0
-                            moved = kotlin.math.max(moved, kotlin.math.hypot(e.rawX - x0, dy))
-                            if (!pulling && dy > 10 * d && dy > kotlin.math.abs(e.rawX - x0)) {
-                                // On the NEXUS home screen its own panel; over an app, NEXUS's layer
-                                home = topAppPackage() == packageName && MainActivity.pullPanel(dy)
-                                pulling = home || startShadePanel()
-                            }
-                            if (pulling) { if (home) MainActivity.pullPanel(dy) else shadePanel?.pull(dy) }
-                        }
-                        android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
-                            vt?.addMovement(e); vt?.computeCurrentVelocity(1000)
-                            val vy = if (e.actionMasked == android.view.MotionEvent.ACTION_UP) vt?.yVelocity ?: 0f else 0f
-                            if (pulling) { if (home) MainActivity.releasePanel(vy) else shadePanel?.release(vy) }
-                            // A tap on the NEXUS home screen's top bar brings its panel down, as before
-                            else if (e.actionMasked == android.view.MotionEvent.ACTION_UP && moved < 10 * d && topAppPackage() == packageName) MainActivity.tapPanel()
-                            pulling = false; vt?.recycle(); vt = null
-                            queuePullStrip()
-                        }
-                    }
-                }
-                return true
-            }
-        }
-        v.contentDescription = "Pull down for notifications"
-        val lp = android.view.WindowManager.LayoutParams(
-            android.view.WindowManager.LayoutParams.MATCH_PARENT, barH,
-            android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            android.graphics.PixelFormat.TRANSPARENT).apply {
-            gravity = android.view.Gravity.TOP
-            if (Build.VERSION.SDK_INT >= 30) fitInsetsTypes = 0
-            if (Build.VERSION.SDK_INT >= 28) layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            title = "NEXUS pull-down"
-        }
-        try { wm.addView(v, lp); pullStrip = v } catch (t: Throwable) { LockTrace.log(this, "NEXUS's pull-down couldn't be placed: " + t.javaClass.simpleName) }
-    }
-
-    private fun hidePullStrip() {
-        val v = pullStrip ?: return
-        pullStrip = null
-        try { getSystemService(android.view.WindowManager::class.java)?.removeView(v) } catch (_: Throwable) {}
-    }
-
-    /** NEXUS's panel over an app, ready to be pulled down (false: it couldn't be shown, so nothing is taken). */
-    private fun startShadePanel(): Boolean {
-        shadeOver = topAppPackage() ?: frontPkg
-        return showShadePanel(open = false)
-    }
-
-    /** The phone's own quick settings (from NEXUS's panel). */
-    private fun openPhoneQuickSettings(): Boolean {
-        closeShadePanel(animate = false)
-        return performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)
-    }
-
-    /** NEXUS's panel over an app, in NEXUS's own layer (the button bar at the bottom stays clear). */
-    private fun showShadePanel(open: Boolean): Boolean {
-        shadePanel?.let { if (it.isOpen) return true }
-        removeShadeLayer()
-        val wm = getSystemService(android.view.WindowManager::class.java) ?: return false
-        val screenH = if (Build.VERSION.SDK_INT >= 30) wm.currentWindowMetrics.bounds.height() else resources.displayMetrics.heightPixels
-        val barH = lockStripPx(this)
-        val root = object : android.widget.FrameLayout(this) {
-            override fun dispatchKeyEvent(e: android.view.KeyEvent): Boolean {
-                // Back puts it away
-                if (e.keyCode == android.view.KeyEvent.KEYCODE_BACK) { if (e.action == android.view.KeyEvent.ACTION_UP) shadePanel?.close(); return true }
-                return super.dispatchKeyEvent(e)
-            }
-        }
-        val panel = NotifPanel(this, shadeSfx, object : NotifPanel.Host {
-            override fun openNotification(pkg: String, intent: android.app.PendingIntent?, key: String, autoCancel: Boolean, from: android.graphics.RectF?) {
-                var ok = false
-                intent?.let { pi -> ok = try { pi.send(this@NexusAccessibility, 0, null, null, null, null, startOpts(root, from)); true } catch (_: Exception) { false } }
-                if (!ok) ok = try {
-                    packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true } ?: false
-                } catch (_: Exception) { false }
-                if (!ok) android.widget.Toast.makeText(this@NexusAccessibility, "That notification couldn't be opened", android.widget.Toast.LENGTH_SHORT).show()
-                if (autoCancel) NexusNotifications.dismiss(key)
-                shadePanel?.close()
-            }
-            override fun sendAction(intent: android.app.PendingIntent) {
-                try { intent.send(this@NexusAccessibility, 0, null, null, null, null, startOpts(root, null)) }
-                catch (_: Exception) { note("That didn't work. The app may have changed the notification") }
-            }
-            override fun phoneQuickSettings() { openPhoneQuickSettings() }
-            override fun covering(on: Boolean) {}
-            override fun note(text: String) { android.widget.Toast.makeText(this@NexusAccessibility, text, android.widget.Toast.LENGTH_SHORT).show() }
-            override fun gone() { removeShadeLayer(); queuePullStrip() }
-            override fun launched() { closeShadePanel(animate = false) }
-        }, 0)
-        root.addView(panel, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.MATCH_PARENT))
-        val lp = android.view.WindowManager.LayoutParams(
-            android.view.WindowManager.LayoutParams.MATCH_PARENT, (screenH - barH).coerceAtLeast(screenH / 2),
-            android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            android.graphics.PixelFormat.TRANSLUCENT).apply {
-            gravity = android.view.Gravity.TOP
-            if (Build.VERSION.SDK_INT >= 30) fitInsetsTypes = 0
-            if (Build.VERSION.SDK_INT >= 28) layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            title = "NEXUS notifications"
-        }
-        try { wm.addView(root, lp) } catch (t: Throwable) { LockTrace.log(this, "NEXUS's notification panel couldn't open: " + t.javaClass.simpleName); return false }
-        shadeRoot = root; shadePanel = panel
-        // Comes down at once, or with your finger (from just above the screen)
-        if (open) panel.open()
-        root.requestFocus()
-        hidePullStrip()
-        return true
-    }
-
-    private fun startOpts(v: android.view.View, from: android.graphics.RectF?): android.os.Bundle {
-        val base = if (from != null) android.app.ActivityOptions.makeScaleUpAnimation(v, from.left.toInt(), from.top.toInt(),
-            from.width().toInt().coerceAtLeast(1), from.height().toInt().coerceAtLeast(1)) else android.app.ActivityOptions.makeBasic()
-        @Suppress("DEPRECATION")
-        val o = if (Build.VERSION.SDK_INT >= 34)
-            base.setPendingIntentBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED) else base
-        return o.toBundle()
-    }
-
-    /** NEXUS's panel over an app goes back up (at once: something else is coming in front). [why]: for the log. */
-    private fun closeShadePanel(animate: Boolean, why: String? = null) {
-        val p = shadePanel ?: return
-        if (why != null) LockTrace.log(this, "NEXUS's notification panel went up ($why)")
-        if (animate) p.close() else { p.closeNow(); removeShadeLayer() }
-        queuePullStrip()
-    }
-
-    /** Something changed on screen while NEXUS's panel is over an app: it goes up only if another app really came in front. */
-    private val shadeFrontCheck = Runnable { safe {
-        if (shadePanel == null) return@safe
-        val top = topAppPackage() ?: return@safe
-        if (top != shadeOver) closeShadePanel(animate = false, why = "$top came in front")
-    } }
-
-    private fun removeShadeLayer() {
-        val r = shadeRoot ?: return
-        shadeRoot = null; shadePanel = null
-        try { getSystemService(android.view.WindowManager::class.java)?.removeView(r) } catch (_: Throwable) {}
-    }
 
     // ------------------------------------------------------------------ wake-up cover
     // A black layer that is created in advance (fully see-through) while the screen is on, and switched
@@ -681,8 +443,6 @@ class NexusAccessibility : AccessibilityService() {
         try { unregisterReceiver(screenOn) } catch (_: Exception) {}
         dropCover()
         dropButtons()
-        removeShadeLayer()
-        hidePullStrip()
         try { recents.destroy() } catch (_: Throwable) {}
         lockStrip?.let { s -> lockStrip = null; lockStripLp = null; try { getSystemService(android.view.WindowManager::class.java)?.removeView(s) } catch (_: Throwable) {} }
         instance = null
@@ -1383,18 +1143,13 @@ class NexusAccessibility : AccessibilityService() {
     private fun handleEvent(e: AccessibilityEvent?) {
         if (e == null) return
         // Windows changed (e.g. the phone's own button bar showed or hid): NEXUS's buttons follow it
-        if (e.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) { if (recents.showing) recents.checkScreenshot(); queueButtons(); queuePullStrip(); return }
+        if (e.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) { if (recents.showing) recents.checkScreenshot(); queueButtons(); return }
         if (e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = e.packageName?.toString() ?: return
         val cls = e.className?.toString() ?: ""
         // NEXUS's own pop-ups and overlays (its buttons, its cover) aren't a screen you've gone to: only its
         // screens (activities) count, so showing the buttons never looks like you've left the app you're in
         if (pkg == packageName && !cls.startsWith("$packageName.")) { queueButtons(); return }
-        // NEXUS's pull-down strip follows what's on screen (the phone's own panel or a menu, a call, the lock screen)
-        queuePullStrip()
-        // NEXUS's panel over an app: if another app (or the home screen, or a call) really came in front, it goes up.
-        // Looked at a moment later from the app windows themselves (the button bar or a pop-up changing isn't that)
-        if (pkg != "com.android.systemui" && shadePanel != null && "inputmethod" !in pkg && "keyboard" !in pkg) { h.removeCallbacks(shadeFrontCheck); h.postDelayed(shadeFrontCheck, 150L) }
         if (pkg != "com.android.systemui" && pkg != "android" && "inputmethod" !in pkg && "keyboard" !in pkg) { frontPkg = pkg; frontCls = cls }
         queueButtons()
         // Recent Apps (NEXUS's layer) steps aside for a call, an alarm or any app that comes in front, and for the
@@ -1677,7 +1432,7 @@ class NexusAccessibility : AccessibilityService() {
     private var homeOk = false
 
     /** Picks up a change of setting (NEXUS settings → NEXUS buttons in all apps, or Navigation buttons). */
-    fun refreshAppButtons() { swapOnAt = 0L; h.post { safe { setupAppButtons(); updatePullStrip() } } }
+    fun refreshAppButtons() { h.post { safe { setupAppButtons() } } }
 
     private fun setupAppButtons() {
         buttonsOn = appButtonsOn(this)
@@ -1686,8 +1441,7 @@ class NexusAccessibility : AccessibilityService() {
         try {
             val info = serviceInfo
             if (info != null) {
-                // (Also while NEXUS's notification panel takes the place of the phone's: the shade is a window too)
-                val want = if (buttonsOn || shadeSwapOn()) info.eventTypes or AccessibilityEvent.TYPE_WINDOWS_CHANGED
+                val want = if (buttonsOn) info.eventTypes or AccessibilityEvent.TYPE_WINDOWS_CHANGED
                            else info.eventTypes and AccessibilityEvent.TYPE_WINDOWS_CHANGED.inv()
                 if (want != info.eventTypes) { info.eventTypes = want; serviceInfo = info }
             }
@@ -1950,8 +1704,6 @@ class NexusAccessibility : AccessibilityService() {
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
         safe { queueButtons(60) }
-        // (Turned to landscape: the pull-down strip steps aside for full-screen videos and games; back upright: it's back)
-        queuePullStrip(300L)
     }
 
     /** One of our own apps about to be closed (cancelled if you go straight back into it). */
