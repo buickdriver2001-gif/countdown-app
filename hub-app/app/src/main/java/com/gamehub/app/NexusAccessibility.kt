@@ -1207,7 +1207,7 @@ class NexusAccessibility : AccessibilityService() {
                 val token = ++openToken
                 h.postDelayed({
                     safe {
-                        if (token == openToken && current == pkg && pm?.isInteractive == true && km?.isKeyguardLocked != true) {
+                        if (token == openToken && current == pkg && pm?.isInteractive == true && km?.isKeyguardLocked != true && fullAppWindow(pkg)) {
                             Recents.touch(this, pkg)
                             AppCache.warm(this, listOf(pkg))
                         }
@@ -1261,7 +1261,7 @@ class NexusAccessibility : AccessibilityService() {
         if (now - lastSwitcher <= 800) return
         lastSwitcher = now
         // The app you're in counts as open, even if you only opened it a moment ago (so it's in the list)
-        current?.let { if (isRealApp(it)) Recents.touch(this, it) }
+        current?.let { if (isRealApp(it) && fullAppWindow(it)) Recents.touch(this, it) }
         current = null
         // NEXUS's own layer, over the app you're in: at once, nothing for Android to open
         if (!talkBackOn() && recents.show()) { LockTrace.log(this, "$by: NEXUS Recent Apps (over the app)"); return }
@@ -1749,8 +1749,31 @@ class NexusAccessibility : AccessibilityService() {
         lastApp = pkg; current = pkg; currentCls = null; leftByScreenOff = false
         if (toClose.remove(pkg)) saveQueue()
         val token = ++openToken
-        h.postDelayed({ safe { if (token == openToken && current == pkg) { Recents.touch(this, pkg); AppCache.warm(this, listOf(pkg)) } } }, 1500)
+        h.postDelayed({ safe { if (token == openToken && current == pkg && fullAppWindow(pkg)) { Recents.touch(this, pkg); AppCache.warm(this, listOf(pkg)) } } }, 1500)
     }
+
+    /** Apps already noted as only a small box (logged once each). */
+    private val boxOnly = HashSet<String>()
+
+    /**
+     * Is [pkg] showing as an app screen of its own, rather than a small box floating over the screen? (Google Play
+     * Protect's "scanning app" check when you install an app is one of Play Store's screens, but it isn't Play Store
+     * being open, and the phone's own recent apps doesn't list it.) A box counts as soon as it's the full width of the
+     * screen and at least about half its height (split screen too), or nearly the full height. Can't tell: it counts.
+     */
+    private fun fullAppWindow(pkg: String): Boolean = try {
+        val dm = resources.displayMetrics
+        val r = android.graphics.Rect()
+        val mine = windows.filter {
+            it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION && it.root?.packageName?.toString() == pkg
+        }
+        val full = mine.isEmpty() || mine.any { w ->
+            w.getBoundsInScreen(r)
+            (r.width() >= dm.widthPixels * 0.97f && r.height() >= dm.heightPixels * 0.4f) || r.height() >= dm.heightPixels * 0.75f
+        }
+        if (!full && boxOnly.add(pkg)) LockTrace.log(this, "${label(pkg)}: only a small box over the screen, not counted as an open app")
+        full
+    } catch (_: Throwable) { true }
 
     /** Is [pkg] showing only as a little floating picture-in-picture window? */
     private fun inPictureInPicture(pkg: String): Boolean = try {
