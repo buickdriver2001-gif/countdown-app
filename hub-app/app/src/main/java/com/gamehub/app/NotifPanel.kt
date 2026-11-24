@@ -1,7 +1,6 @@
 package com.gamehub.app
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.app.Notification
 import android.app.PendingIntent
 import android.content.Context
@@ -43,11 +42,13 @@ import kotlin.math.min
  * phone's own shade lists them, with the app, when, what it says and its buttons. Tap one to open it, swipe it
  * sideways to clear it, or Clear all. It goes back up with a swipe up, the handle, Back or Home.
  *
- * Only on the NEXUS home screen (the phone is unlocked there), and only with Notification access: otherwise the
- * phone's own shade comes down instead. It never sits over the lock screen.
+ * On the NEXUS home screen it lives in the home screen itself (and follows your finger); in apps, NEXUS's helper
+ * shows it in its own layer when the phone's notification shade starts to come down (see NexusAccessibility).
+ * Only with Notification access, only while the phone is unlocked: it never sits over the lock screen.
+ * [bottomSpace]: room left at the bottom for the Back / Home / Recent buttons.
  */
 @SuppressLint("ViewConstructor", "ClickableViewAccessibility")
-class NotifPanel(private val act: Activity, private val sfx: Sfx, private val host: Host) : FrameLayout(act) {
+class NotifPanel(private val act: Context, private val sfx: Sfx, private val host: Host, bottomSpace: Int) : FrameLayout(act) {
 
     interface Host {
         /** Opens what a notification leads to (as from the phone's shade), growing out of [from]. */
@@ -58,6 +59,12 @@ class NotifPanel(private val act: Activity, private val sfx: Sfx, private val ho
         fun phoneQuickSettings()
         /** While the panel covers the home screen completely (the home screen can rest meanwhile). */
         fun covering(on: Boolean)
+        /** A short message at the bottom of the screen. */
+        fun note(text: String)
+        /** All the way up and put away. */
+        fun gone() {}
+        /** A shortcut opened something (Wi-Fi, Bluetooth, Settings): over an app, the panel steps aside for it. */
+        fun launched() {}
     }
 
     private val d = resources.displayMetrics.density
@@ -163,7 +170,7 @@ class NotifPanel(private val act: Activity, private val sfx: Sfx, private val ho
         handle.contentDescription = "Close notifications"
         handle.setOnClickListener { sfx.tick(); close() }
         sheet.addView(handle, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (30 * d).toInt()))
-        sheet.addView(View(act), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, NavBar.heightPx(act)))
+        if (bottomSpace > 0) sheet.addView(View(act), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, bottomSpace))
 
         addView(sheet, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     }
@@ -240,6 +247,7 @@ class NotifPanel(private val act: Activity, private val sfx: Sfx, private val ho
             watchTorch(false)
             removeCallbacks(minuteTick)
             list.removeAllViews()
+            host.gone()
         }
     }
 
@@ -377,6 +385,7 @@ class NotifPanel(private val act: Activity, private val sfx: Sfx, private val ho
         try { act.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
         catch (_: Exception) { try { act.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {} }
         sfx.tick()
+        host.launched()
     }
 
     // ------------------------------------------------------------------ flashlight
@@ -403,8 +412,8 @@ class NotifPanel(private val act: Activity, private val sfx: Sfx, private val ho
 
     private fun toggleTorch() {
         val cm = cams(); val id = torchId
-        if (cm == null || id == null) { NexusUi.note(act, "No flashlight on this phone"); return }
-        try { cm.setTorchMode(id, !torchOn); sfx.tick() } catch (_: Exception) { NexusUi.note(act, "The flashlight is busy") }
+        if (cm == null || id == null) { host.note("No flashlight on this phone"); return }
+        try { cm.setTorchMode(id, !torchOn); sfx.tick() } catch (_: Exception) { host.note("The flashlight is busy") }
     }
 
     // ------------------------------------------------------------------ a shortcut: a round glass button with a symbol
