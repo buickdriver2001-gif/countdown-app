@@ -2416,7 +2416,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                     // The notifications come down as soon as the swipe is clearly downwards, like the phone's own bar
                     val dy = e.y - downY
                     if (!dragging && maxTravel > slop) dragging = true
-                    if (!barPulled && t > readyT && launchFlash <= 0f && dy > 16 * d && dy > kotlin.math.abs(e.x - downX)) {
+                    if (!barPulled && t > readyT && launchFlash <= 0f && dy > 8 * d && dy > kotlin.math.abs(e.x - downX)) {
                         // The phone's own notification panel (NEXUS's status row and buttons step aside meanwhile)
                         barPulled = true; phoneBarsComing(); onPullDown()
                     }

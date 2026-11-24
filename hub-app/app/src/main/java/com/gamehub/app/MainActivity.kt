@@ -206,7 +206,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         hub = HubView(this, builtIn, { open(it) }, { drawer.open(add = true) }, { appOptions(it) }, sfx, { homeSettings() },
             { from, to -> moveApp(from, to) }, { drawer.open(add = false) }, { openSwitcher() }, { openSystem() })
         drawer = AppDrawer(this, sfx, { openItem(it) }, { addApps(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
-        hub.onPullDown = { openNotifications() }
+        hub.onPullDown = { pullShade() }
         hub.onReorderBlocked = { NexusUi.note(this, "Apps are in A–Z order. To arrange them yourself, switch Settings → App order to your own", long = true) }
         hub.onNotification = { item, from -> openNotification(item, from) }
         // The phone's own buttons show over NEXUS's for a moment after a swipe down from the top: NEXUS's step aside
@@ -352,16 +352,78 @@ class MainActivity : Activity(), NexusUi.NavHost {
     }
 
 
-    /** Swipe down on NEXUS: the phone's own notifications, the supported way first. */
-    private fun openNotifications() {
-        try { if (NexusAccessibility.instance?.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS) == true) return } catch (_: Exception) {}
+    /**
+     * Swipe down from the top of NEXUS (or a tap on its status bar): the phone's whole notification panel comes
+     * down at once. If it hasn't (NEXUS still has the focus a moment later, which the panel takes when it's down),
+     * it's asked for once more, the other way.
+     */
+    private fun pullShade() {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - shadeAskedAt < 700L) return
+        shadeAskedAt = now
+        openNotifications(otherWayFirst = false)
+        window.decorView.postDelayed({
+            if (isFinishing || isDestroyed || !hasWindowFocus() || shadeAskedAt != now) return@postDelayed
+            if (shadeRetries < 20) { shadeRetries++; LockTrace.log(this, "notification panel: didn't come down at first, asked again") }
+            openNotifications(otherWayFirst = true)
+        }, 450L)
+    }
+    private var shadeAskedAt = 0L
+    private var shadeRetries = 0
+
+    /** The phone's own notification panel: through NEXUS's helper (the supported way) or the status bar itself. */
+    private fun openNotifications(otherWayFirst: Boolean) {
+        val viaHelper = {
+            try { NexusAccessibility.instance?.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS) == true }
+            catch (_: Exception) { false }
+        }
+        val viaBar = {
+            try {
+                @android.annotation.SuppressLint("WrongConstant") val bar = getSystemService("statusbar")
+                Class.forName("android.app.StatusBarManager").getMethod("expandNotificationsPanel").invoke(bar)
+                true
+            } catch (_: Throwable) { false }
+        }
+        if (otherWayFirst) { if (!viaBar()) viaHelper() } else { if (!viaHelper()) viaBar() }
+    }
+
+    // A swipe down that starts at the very top edge of any NEXUS screen (the home screen, All apps, Settings) brings
+    // the notification panel as soon as it's clearly going down, before the phone would only show its status bar.
+    // Only watched: the touch still goes where it would anyway.
+    private var edgeDown = false
+    private var edgeFired = false
+    private var edgeX = 0f
+    private var edgeY = 0f
+    private var edgeAt = 0L
+    private val edgePx: Float by lazy {
+        val d = resources.displayMetrics.density
+        val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+        val bar = if (id != 0) try { resources.getDimensionPixelSize(id) } catch (_: Exception) { 0 } else 0
+        maxOf(bar.toFloat(), 24 * d) + 6 * d
+    }
+
+    override fun dispatchTouchEvent(e: android.view.MotionEvent): Boolean {
         try {
-            @android.annotation.SuppressLint("WrongConstant") val bar = getSystemService("statusbar")
-            Class.forName("android.app.StatusBarManager").getMethod("expandNotificationsPanel").invoke(bar)
-            return
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    edgeDown = e.rawY <= edgePx && ::hub.isInitialized && !hub.booting &&
+                        !(::tutorial.isInitialized && tutorial.visibility == android.view.View.VISIBLE)
+                    edgeFired = false; edgeX = e.rawX; edgeY = e.rawY; edgeAt = android.os.SystemClock.uptimeMillis()
+                }
+                android.view.MotionEvent.ACTION_MOVE -> if (edgeDown && !edgeFired) {
+                    val dy = e.rawY - edgeY
+                    val d = resources.displayMetrics.density
+                    if (dy > 8 * d && dy > kotlin.math.abs(e.rawX - edgeX)) { edgeFired = true; pullShade() }
+                }
+                // (The phone took the swipe over at the edge: it was a pull-down all the same)
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    if (edgeDown && !edgeFired && android.os.SystemClock.uptimeMillis() - edgeAt < 600L) { edgeFired = true; pullShade() }
+                    edgeDown = false
+                }
+                android.view.MotionEvent.ACTION_UP -> edgeDown = false
+            }
         } catch (_: Throwable) {}
-        // Last resort: bring the status bar in so it can be pulled down
-        try { if (android.os.Build.VERSION.SDK_INT >= 30) window.insetsController?.show(android.view.WindowInsets.Type.statusBars()) } catch (_: Exception) {}
+        return super.dispatchTouchEvent(e)
     }
 
     private fun waitThenTutorial() {
