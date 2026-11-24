@@ -798,10 +798,10 @@ class MainActivity : Activity(), NexusUi.NavHost {
             "Boxes: your notifications at the top of the home screen, newest first. Swipe up and down on them to scroll " +
                 "through, tap one to open it, swipe it sideways to clear it. They scroll away with your apps.\n\n" +
                 "Icons: which apps have notifications, in the status bar.\n\n" +
-                "Pull-down panel: swiping down from the top brings NEXUS's own panel (all your notifications, their buttons, " +
-                "Clear all, and shortcuts), on the home screen and in your apps (it takes the place of the phone's own, which " +
-                "may show for a split second first; needs the Recent Apps helper in apps). The phone's own still comes down on " +
-                "the lock screen, during calls, with TalkBack, and from the panel's Quick settings button.\n\n" +
+                "Pull-down panel: swiping down from the very top brings NEXUS's own panel (all your notifications, their " +
+                "buttons, Clear all, and shortcuts), on the home screen and in your apps (needs the Recent Apps helper). " +
+                "The phone's own still comes down on the lock screen, during calls, with TalkBack, in landscape (full-screen " +
+                "videos and games), and from the panel's Quick settings button.\n\n" +
                 "They only show while your phone is unlocked. Nothing is stored or sent anywhere.",
             listOf(
                 NexusUi.Option("Boxes on the home screen:  " + onOff(boxes)) {
@@ -1131,6 +1131,20 @@ class MainActivity : Activity(), NexusUi.NavHost {
             if (!m.panelAvailable()) return false
             if (!m.notifPanel.isOpen) m.notifPanel.open()
             return true
+        }
+
+        /** NEXUS's pull-down strip (over the top edge) pulled down on the home screen: its own panel follows the finger. */
+        fun pullPanel(dy: Float): Boolean {
+            val m = home?.get() ?: return false
+            if (m.isDestroyed || !m.inFront || !m.panelAvailable() || !m::notifPanel.isInitialized) return false
+            m.notifPanel.pull(dy); return true
+        }
+        fun releasePanel(vy: Float) { home?.get()?.let { if (it::notifPanel.isInitialized) it.notifPanel.release(vy) } }
+        /** A tap on the top bar of the home screen (over NEXUS's pull-down strip): its panel comes down. */
+        fun tapPanel(): Boolean {
+            val m = home?.get() ?: return false
+            if (m.isDestroyed || !m.inFront || !m.panelAvailable() || !m::notifPanel.isInitialized) return false
+            m.notifPanel.open(); return true
         }
 
         /** NEXUS's panel is down on the home screen right now. */

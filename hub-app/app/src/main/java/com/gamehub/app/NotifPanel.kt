@@ -185,7 +185,9 @@ class NotifPanel(private val act: Context, private val sfx: Sfx, private val hos
         pulling = true
         anim?.cancel()
         if (visibility != VISIBLE) prepare()
-        place((dy / max(1f, height * 0.85f)).coerceIn(0f, 1f))
+        // (Until it's been measured, the screen's height)
+        val h = if (height > 0) height else resources.displayMetrics.heightPixels
+        place((dy / max(1f, h * 0.85f)).coerceIn(0f, 1f))
     }
 
     /** Let go after pulling: down if it's most of the way or was flicked down, otherwise back up. [vy]: px/s, down > 0. */
