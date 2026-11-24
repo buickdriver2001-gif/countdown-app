@@ -772,7 +772,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             val title = android.text.TextUtils.ellipsize(it2.title, boxTp, textW, android.text.TextUtils.TruncateAt.END).toString()
             boxTp.textSize = 13 * d
             val body = android.text.TextUtils.ellipsize(it2.text, boxTp, textW, android.text.TextUtils.TruncateAt.END).toString()
-            Box(it2, head, title, body, AppCache.get(context, it2.pkg)?.icon)
+            // The app's icon (or, for one NEXUS has no icon for, that notification's own small symbol)
+            Box(it2, head, title, body, AppCache.get(context, it2.pkg)?.icon
+                ?: NexusNotifications.barIcons.firstOrNull { b -> b.pkg == it2.pkg }?.drawable)
         }
     }
 
@@ -977,6 +979,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         cellH = if (list) 56 * d else if (grid) cellW else ((listBottom - listTop - gap * (gridRows - 1)) / gridRows).coerceIn(cellW * 0.7f, cellW * 1.3f)
         // (The chosen app's icon keeps turning; faster as it opens)
         if (grid) gridSpin = (gridSpin + dt * (if (launchFlash > 0f) 760f else 95f)) % 360f
+        // (Nothing chosen: the next one chosen starts its turn facing you)
+        if (selected < 0) gridSpinFor = -2
         val stepX = cellW + gap; val stepY = cellH + gap
         listPad = if (list) max(0f, (listBottom - listTop) / 2 - cellH / 2) else 0f
         if (list) listStep = stepY
@@ -1637,6 +1641,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         } else drawIcon(c, g, r, a)
     }
 
+    private var titleFor: String? = null
+    private var titleRoom = 0f
+    private var titleText = ""
+
     /** Data grid: the chosen app's name (and where it is in the list) above the blocks, or how many apps there are. */
     private fun drawGridTitle(c: Canvas, w: Float, base: Float, a: Float) {
         if (games.isEmpty()) return
@@ -1653,8 +1661,14 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val count = "${selected + 1} / ${games.size}"
         c.drawText(count, w - 20 * d, base, text)
         val countW = text.measureText(count)
-        boxTp.typeface = text.typeface; boxTp.textSize = 19 * d; boxTp.letterSpacing = 0.06f
-        val name = android.text.TextUtils.ellipsize(g.name, boxTp, w - 40 * d - countW - 14 * d, android.text.TextUtils.TruncateAt.END).toString()
+        // (Shortened to fit only when it changes, not every frame)
+        val room = w - 40 * d - countW - 14 * d
+        if (g.name != titleFor || room != titleRoom) {
+            boxTp.typeface = text.typeface; boxTp.textSize = 19 * d; boxTp.letterSpacing = 0.06f
+            titleFor = g.name; titleRoom = room
+            titleText = android.text.TextUtils.ellipsize(g.name, boxTp, room, android.text.TextUtils.TruncateAt.END).toString()
+        }
+        val name = titleText
         text.textAlign = Paint.Align.LEFT; text.textSize = 19 * d; text.letterSpacing = 0.06f
         text.color = Color.argb((240 * a * k).toInt(), 235, 242, 255)
         text.setShadowLayer(10 * d, 0f, 0f, Color.argb((200 * a * k).toInt(), 80, 140, 255))

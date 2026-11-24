@@ -207,7 +207,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
             { from, to -> moveApp(from, to) }, { drawer.open(add = false) }, { openSwitcher() }, { openSystem() })
         drawer = AppDrawer(this, sfx, { openItem(it) }, { addApps(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
         hub.onPullDown = { openNotifications() }
-        hub.onReorderBlocked = { NexusUi.note(this, "Apps are in A–Z order. To arrange them yourself: Settings → Home screen → App order", long = true) }
+        hub.onReorderBlocked = { NexusUi.note(this, "Apps are in A–Z order. To arrange them yourself, switch Settings → App order to your own", long = true) }
         hub.onNotification = { item, from -> openNotification(item, from) }
         // The phone's own buttons show over NEXUS's for a moment after a swipe down from the top: NEXUS's step aside
         hub.onPhoneBars = { away ->
@@ -233,6 +233,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
             override fun setHome() = openHomeSettings()
             override fun appInfo() = openAppInfo()
             override fun accessibility() = openAccessibility()
+            override fun notificationAccess() = openNotificationAccess()
             override fun done() = closeTutorial()
         }).apply { visibility = android.view.View.GONE }
         root.addView(tutorial)
@@ -812,7 +813,8 @@ class MainActivity : Activity(), NexusUi.NavHost {
                 "• Tap an app once to choose it, and again to open it. Hold an app for its shortcuts, App info and Uninstall; hold and drag to move it.\n" +
                 "• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n" +
                 "• Tap ADD APP to add apps to NEXUS: tick as many as you like, then tap ADD.\n" +
-                "• Swipe down on the list to see your notifications.\n" +
+                "• Swipe down from the top (or tap the top bar) for your notifications. With Notification access, the top bar shows which apps have notifications and the newest show as boxes at the top of the home screen: tap to open, swipe sideways to clear (Settings → Notifications).\n" +
+                "• Settings → Home screen → Style: the PS2 menu (a list), Data grid (glass blocks with spinning icons) or Tiles. App order: A–Z or your own.\n" +
                 "• Recent Apps (the square button, once the helper is on): tap a card to switch to that app, or swipe it up to close the app. With no apps open, it takes you to the home screen. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent apps helper).\n" +
                 "• Buttons in apps: NEXUS's Back, Home and Recent buttons in place of the phone's own (needs 3-button navigation).\n" +
                 "• Close NEXUS (in Settings) and Home goes to your normal home screen; open NEXUS from its icon to make it your home again.\n\n" +
@@ -820,7 +822,6 @@ class MainActivity : Activity(), NexusUi.NavHost {
             emptyList(), cancel = "Back", back = { helpSettings() })
     }
 
-    /** Home screen style: the PS2-style menu or tiles on a grid. */
     /** The home screen's style: "ps2" (the PS2 menu list), "grid" (the data grid) or "tiles". */
     private fun homeStyle(): String = prefs.getString("homeStyle", "ps2").let { if (it == "grid" || it == "tiles") it else "ps2" }
 
