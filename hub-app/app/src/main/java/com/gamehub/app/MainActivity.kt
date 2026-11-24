@@ -476,7 +476,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         val replace = prefs.getBoolean("replaceRecents", true)
         val status = when {
             on && helperRunning() -> "Helper is ON. Recent apps are being remembered."
-            on -> "The helper is switched on, but Android has stopped it. Tap Turn helper off/on below, switch NEXUS Recent Apps off and back on."
+            on -> "The helper is switched on, but Android has stopped it. Tap Turn helper off below, then switch NEXUS Recent Apps off and back on."
             else -> "Helper is OFF. Follow the two steps below to turn it on."
         }
         val opts = ArrayList<NexusUi.Option>()
@@ -495,13 +495,13 @@ class MainActivity : Activity(), NexusUi.NavHost {
         })
         if (on && helperRunning() && full) opts.add(NexusUi.Option("Close every open app now") { askCloseEverything() })
         opts.add(NexusUi.Option("Show Recent Apps now") { openSwitcher() })
-        NexusUi.panel(this, "Recent apps helper", "$status\n\nThe helper runs NEXUS Recent Apps, the NEXUS lock screen and NEXUS's buttons in apps.\n\n" +
+        NexusUi.panel(this, "Recent Apps helper", "$status\n\nThe helper runs NEXUS Recent Apps, the NEXUS lock screen and NEXUS's buttons in apps.\n\n" +
             "To turn it on: in Accessibility, choose NEXUS Recent Apps and switch it on. If Android says \"Restricted setting\", open App info, tap ⋮ at the top right, choose Allow restricted settings, then try again.\n\n" +
             "Fully closing apps: Android only lets its own recent apps screen close other apps, so when you swipe an app away in NEXUS Recent Apps, NEXUS opens that screen behind Recent Apps and presses Close for you. While it's there, it also closes any app still open in the phone that NEXUS Recent Apps doesn't show, so the two always match. It only reads that screen, only while closing apps. Nothing is ever sent anywhere.",
             opts, cancel = "Back", back = { homeSettings() })
     }
 
-    /** Settings → Recent apps helper → Close every open app: everything open in the phone closes, with the closing cube. */
+    /** Settings → Recent Apps helper → Close every open app: everything open in the phone closes, with the closing cube. */
     private fun askCloseEverything() {
         NexusUi.panel(this, "Close every open app?",
             "Every app open on your phone is closed, including any that NEXUS Recent Apps doesn't show. Apps keep " +
@@ -599,11 +599,11 @@ class MainActivity : Activity(), NexusUi.NavHost {
         opts.add(NexusUi.Option("Copy the details", primary = true) {
             val cm = getSystemService(android.content.ClipboardManager::class.java)
             cm?.setPrimaryClip(android.content.ClipData.newPlainText("NEXUS problem", text))
-            NexusUi.note(this, "Copied. Paste it to Claude.")
+            NexusUi.note(this, "Copied. Paste it into your message.")
         })
         if (problems.isNotBlank()) opts.add(NexusUi.Option("Clear noted problems") { f.delete(); NexusUi.note(this, "Noted problems cleared") })
         NexusUi.panel(this, "Report a problem", "If something isn't working (for example the lock screen), copy these details " +
-            "and send them to Claude so it can be fixed. They only list what NEXUS did and when; nothing personal.", opts, cancel = "Back", back = { helpSettings() })
+            "and include them when you report it. They only list what NEXUS did and when; nothing personal.", opts, cancel = "Back", back = { helpSettings() })
     }
 
     /** NEXUS lock screen: explanation and on/off. */
@@ -617,7 +617,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
             "Notifications: NEXUS can show them on its lock screen too (tap one, unlock, and it opens). It follows the same " +
             "privacy rules as your phone's lock screen: apps set to stay off the lock screen never appear, and with " +
             "\"Hide sensitive content\" private notifications only show the app's name. Nothing is stored or sent anywhere." +
-            (if (!helper) "\n\nNeeds the Recent Apps helper switched on (Settings → Recent apps helper)." else "")
+            (if (!helper) "\n\nNeeds the Recent Apps helper switched on (Settings → Recent Apps helper)." else "")
         val opts = ArrayList<NexusUi.Option>()
         if (!helper) opts.add(NexusUi.Option("Turn on helper first", primary = true) { openAppsSettings() })
         opts.add(NexusUi.Option(if (on) "Turn NEXUS lock screen OFF" else "Turn NEXUS lock screen ON", primary = helper && !on) {
@@ -720,8 +720,8 @@ class MainActivity : Activity(), NexusUi.NavHost {
     /** Says what to do on Android's Notification access page before going there (it can't be explained once you're there). */
     private fun askNotificationAccess(back: () -> Unit = { lockSettings() }) {
         NexusUi.panel(this, "Notification access",
-            "With access, NEXUS's status bar shows which apps have notifications (their icons only, like the phone's own " +
-                "status bar), and the NEXUS lock screen can show your notifications if you use it. Nothing is stored or sent anywhere.\n\n" +
+            "With access, your newest notifications show as boxes at the top of the home screen, NEXUS's status bar shows " +
+                "which apps have notifications, and the NEXUS lock screen can show them if you use it. Nothing is stored or sent anywhere.\n\n" +
                 "On the next screen, switch on NEXUS notifications, then come back.\n\n" +
                 "If Android says \"Restricted setting\", open NEXUS's App info below, tap ⋮ at the top right, choose " +
                 "Allow restricted settings, then try again.",
@@ -788,7 +788,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
             NexusUi.Option("App order:  " + (if (alphabetical()) "A–Z" else "your own")) { toggleAlphabetical(back = { homeSettings() }) },
             NexusUi.Option("Notifications:  " + notifSummary()) { notificationSettings(back = { homeSettings() }) },
             NexusUi.Option("Lock screen:  " + onOff(LockActivity.enabled(this))) { lockSettings() },
-            NexusUi.Option("Recent apps helper:  $helper") { openAppsSettings() },
+            NexusUi.Option("Recent Apps helper:  $helper") { openAppsSettings() },
             NexusUi.Option("Buttons in apps:  " + onOff(NexusAccessibility.appButtonsOn(this))) { buttonSettings() },
             NexusUi.Option("Sound:  $sound") { soundSettings() },
             NexusUi.Option("Help") { helpSettings() },
@@ -826,8 +826,8 @@ class MainActivity : Activity(), NexusUi.NavHost {
             "Boxes: your notifications at the top of the home screen, newest first. Swipe up and down on them to scroll " +
                 "through, tap one to open it, swipe it sideways to clear it. They scroll away with your apps.\n\n" +
                 "Icons: which apps have notifications, in the status bar.\n\n" +
-                "Swiping down from the top (or tapping the status bar) brings your phone's own notification panel.\n\n" +
-                "They only show while your phone is unlocked. Nothing is stored or sent anywhere.",
+                "Both only show while your phone is unlocked. Nothing is stored or sent anywhere.\n\n" +
+                "Swiping down from the top (or tapping the status bar) brings your phone's notification panel.",
             listOf(
                 NexusUi.Option("Boxes on the home screen:  " + onOff(boxes)) {
                     NexusNotifications.setBoxesOn(this, !boxes); hub.notifBoxes = !boxes; notificationSettings(back)
@@ -889,28 +889,28 @@ class MainActivity : Activity(), NexusUi.NavHost {
     private fun howItWorks() {
         NexusUi.panel(this, "How it works",
             "• While NEXUS is open, Home brings you back to NEXUS. Pressing Home on NEXUS goes back to the top of the list.\n" +
-                "• Tap an app once to choose it, and again to open it. Hold an app for its shortcuts, App info and Uninstall; hold and drag to move it.\n" +
+                "• Tap an app once to choose it, and again to open it. Hold an app for its shortcuts, App info, Remove and Uninstall; hold and drag to move it.\n" +
                 "• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n" +
                 "• Tap ADD APP to add apps to NEXUS: tick as many as you like, then tap ADD.\n" +
-                "• Swipe down from the top (or tap the top bar) for your notifications: NEXUS's own panel, with each notification's buttons, Clear all and shortcuts. In your apps too, it takes the place of the phone's own (Settings → Notifications can switch it back). With Notification access, the top bar shows which apps have notifications and the newest show as boxes at the top of the home screen: tap to open, swipe sideways to clear (Settings → Notifications).\n" +
-                "• Settings → Home screen → Style: the PS2 menu (a list), Data grid (glass blocks with spinning icons) or Tiles. App order: A–Z or your own.\n" +
-                "• Recent Apps (the square button, once the helper is on): tap a card to switch to that app, swipe it up to close the app, or tap beside the cards to go home. With no apps open, it takes you to the home screen. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent apps helper).\n" +
+                "• Swipe down from the top (or tap the top bar) for your phone's notification panel. With Notification access, the top bar shows which apps have notifications and the newest show as boxes at the top of the home screen: tap to open, swipe sideways to clear (Settings → Notifications).\n" +
+                "• Settings → Home screen → Style: List (one app per line), Data grid (glass blocks with spinning icons) or Tiles. App order: A–Z or your own.\n" +
+                "• Recent Apps (the square button, once the helper is on): tap a card to switch to that app, swipe it up to close the app, or tap beside the cards to go home. With no apps open, it takes you to the home screen. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent Apps helper).\n" +
                 "• Buttons in apps: NEXUS's Back, Home and Recent buttons in place of the phone's own (needs 3-button navigation).\n" +
                 "• Close NEXUS (in Settings) and Home goes to your normal home screen; open NEXUS from its icon to make it your home again.\n\n" +
                 "To stop using NEXUS as Home completely, choose your old home screen in the phone's Settings → Apps → Default apps → Home app.",
             emptyList(), cancel = "Back", back = { helpSettings() })
     }
 
-    /** The home screen's style: "ps2" (the PS2 menu list), "grid" (the data grid) or "tiles". */
+    /** The home screen's style: "ps2" (the List style), "grid" (the data grid) or "tiles". */
     private fun homeStyle(): String = prefs.getString("homeStyle", "ps2").let { if (it == "grid" || it == "tiles") it else "ps2" }
 
-    private fun styleName(s: String = homeStyle()) = when (s) { "grid" -> "Data grid"; "tiles" -> "Tiles"; else -> "PS2 menu" }
+    private fun styleName(s: String = homeStyle()) = when (s) { "grid" -> "Data grid"; "tiles" -> "Tiles"; else -> "List" }
 
-    /** Settings → Home screen → Style: the PS2 menu list, the data grid, or tiles. */
+    /** Settings → Home screen → Style: the list, the data grid, or tiles. */
     private fun chooseHomeStyle() {
         val cur = homeStyle()
         NexusUi.panel(this, "Home screen style",
-            "PS2 menu: your apps as a list, one per line.\n" +
+            "List: your apps one per line, the one in the middle glowing brightest.\n" +
                 "Data grid: your apps as glass blocks with their icons floating inside. Tap one to choose it (its icon spins), tap it again to open it.\n" +
                 "Tiles: a grid of tiles in sizes you pick.",
             listOf("ps2", "grid", "tiles").map { k ->

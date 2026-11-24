@@ -73,7 +73,7 @@ class NexusAccessibility : AccessibilityService() {
         fun closeNow(returnToSwitcher: Boolean): Boolean = instance?.beginClose(returnToSwitcher) ?: false
 
         /**
-         * Settings → Recent apps helper → Close every open app: everything in the phone's own recent apps is closed
+         * Settings → Recent Apps helper → Close every open app: everything in the phone's own recent apps is closed
          * (with the closing cube), and NEXUS Recent Apps is cleared. False if the helper isn't running.
          */
         fun closeEverything(c: Context): Boolean {
@@ -742,7 +742,7 @@ class NexusAccessibility : AccessibilityService() {
             if (++j.tries < 16) { h.postDelayed({ safe { runCloses(j) } }, 120); return }
             if (j.under) { endClose(j, "couldn't look at the phone's recent apps", goHome = false); return }
             // Most likely the helper needs switching off and on once, to get the access it now needs
-            App.noteProblem(this, "closing apps fully", IllegalStateException("Android didn't let the helper look at the phone's recent apps. In NEXUS settings > Recent apps, turn the helper off and on again."))
+            App.noteProblem(this, "closing apps fully", IllegalStateException("Android didn't let the helper look at the phone's recent apps. In NEXUS Settings → Recent Apps helper, turn the helper off and on again."))
             goHomeAfterClose(j, "couldn't look at the phone's recent apps (helper may need turning off and on)")
             return
         }
@@ -1753,11 +1753,6 @@ class NexusAccessibility : AccessibilityService() {
 
     private fun takeOverRecents() = getSharedPreferences("hub", MODE_PRIVATE).getBoolean("replaceRecents", true)
 
-    /**
-     * Every few seconds, refresh the current app's picture (for Recent Apps and the square button's zoom).
-     * Kept in memory; it's only saved to storage when you leave the app (or at most every 30 seconds), so the
-     * phone isn't writing a file every few seconds. Slower in Battery Saver.
-     */
     /**
      * Whatever app is in front now counts as opened. Catches apps that came up while the phone was still locked
      * (opened from a notification, say), which Android doesn't announce again once you unlock.

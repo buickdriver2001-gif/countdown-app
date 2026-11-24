@@ -13,7 +13,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 
-/** Shows the details of a crash so they can be sent to Claude for a fix (in the NEXUS style, like every other screen). */
+/** Shows the details of a crash so they can be sent along for a fix (in the NEXUS style, like every other screen). */
 class CrashActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,7 +41,7 @@ class CrashActivity : Activity() {
         root.addView(View(this).apply { setBackgroundColor(Color.argb(150, 140, 190, 255)) },
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (1 * d).toInt().coerceAtLeast(1)).apply { topMargin = (10 * d).toInt(); bottomMargin = (10 * d).toInt() })
         root.addView(TextView(this).apply {
-            text = "Tap Copy, then paste it to Claude so it can be fixed."
+            text = "Tap Copy, then include it when you report the problem so it can be fixed."
             textSize = 14f; typeface = NexusUi.light
             setTextColor(NexusUi.MUTED)
             setPadding(0, 0, 0, (10 * d).toInt())
@@ -81,7 +81,7 @@ class CrashActivity : Activity() {
             button("Copy") {
                 getSystemService(ClipboardManager::class.java)
                     ?.setPrimaryClip(ClipData.newPlainText("NEXUS error", report))
-                NexusUi.note(this@CrashActivity, "Copied. Paste it to Claude.")
+                NexusUi.note(this@CrashActivity, "Copied. Paste it into your message.")
             },
             button("Try again", primary = true) {
                 file.delete()
