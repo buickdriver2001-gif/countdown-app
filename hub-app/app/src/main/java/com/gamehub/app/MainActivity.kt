@@ -383,6 +383,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
 
     /** On screen and in front (between onResume and onPause). */
     private var inFront = false
+    private fun notifPanelIsOpen() = ::notifPanel.isInitialized && notifPanel.isOpen
     private var accessSeen: Boolean? = null
 
     /** NEXUS's own notification panel comes down (Notification access allowed, and not switched to the phone's). */
@@ -1131,6 +1132,9 @@ class MainActivity : Activity(), NexusUi.NavHost {
             if (!m.notifPanel.isOpen) m.notifPanel.open()
             return true
         }
+
+        /** NEXUS's panel is down on the home screen right now. */
+        fun panelUp(): Boolean = home?.get()?.let { it.inFront && it.notifPanelIsOpen() } ?: false
 
         fun showHome() {
             SystemActivity.closeIfOpen()
