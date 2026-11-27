@@ -220,6 +220,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
             finish()
             return
         }
+        startEmptyOnce()
         hub = HubView(this, buildList(), { open(it) }, { drawer.open(add = true) }, { appOptions(it) }, sfx, { homeSettings() },
             { from, to -> moveApp(from, to) }, { drawer.open(add = false) }, { openSwitcher() }, { openSystem() })
         drawer = AppDrawer(this, sfx, { openItem(it) }, { addApps(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
@@ -1024,6 +1025,19 @@ class MainActivity : Activity(), NexusUi.NavHost {
             val info = CountdownLink.read(applicationContext)
             runOnUiThread { if (::hub.isInitialized) hub.countdown = info }
         }.start()
+    }
+
+    /**
+     * A new NEXUS starts with an empty home screen: nothing is placed on it for you (NEXUS's own games and the
+     * Countdown included, even if they're installed). Add what you want with ADD APP. A NEXUS already in use keeps
+     * its list as it is (one where apps were added or moved); this is decided once.
+     */
+    private fun startEmptyOnce() {
+        if (prefs.contains("startsEmpty")) return
+        val e = prefs.edit().putBoolean("startsEmpty", true)
+        if (!prefs.contains("custom") && !prefs.contains("order"))
+            e.putString("hiddenGames", builtIn.joinToString(",") { it.pkg }).putBoolean("countdownTileAdded", true)
+        e.apply()
     }
 
     /** The first time NEXUS finds the Countdown app, it gets a tile (just once: remove it like any other tile). */
