@@ -124,7 +124,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
     private fun alphabetical() = prefs.getBoolean("alphaOrder", false)
 
     /** Settings → Home screen → App order: A–Z, or the order you arranged them in (kept while A–Z is on). */
-    private fun toggleAlphabetical(back: () -> Unit = { homeScreenSettings() }) {
+    private fun toggleAlphabetical(back: () -> Unit = { homeSettings() }) {
         val az = !alphabetical()
         prefs.edit().putBoolean("alphaOrder", az).apply()
         refresh()
@@ -282,7 +282,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
             // The start-up show (and chime) plays when the phone has just been turned on, or when NEXUS is
             // started from its icon. When Android just brings NEXUS back as the Home app, it's there at once.
             val fromIcon = intent?.hasCategory(Intent.CATEGORY_LAUNCHER) == true && !isHomeIntent(intent)
-            if ((newBoot || fromIcon) && savedInstanceState == null) Thread { playChime() }.start()
+            if ((newBoot || fromIcon) && savedInstanceState == null && chimeAllowed()) Thread { playChime() }.start()
             else hub.skipIntro()
             // First time: show the guide once the start-up animation has finished
             if (!prefs.getBoolean("tutorialSeen", false)) waitThenTutorial()
@@ -821,11 +821,10 @@ class MainActivity : Activity(), NexusUi.NavHost {
         NexusUi.panel(this, "Home screen", null, listOfNotNull(
             NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
             NexusUi.Option("Style:  " + styleName()) { chooseHomeStyle() },
-            NexusUi.Option("App order:  " + (if (alphabetical()) "A–Z" else "your own")) { toggleAlphabetical() },
             if (homeStyle() != "tiles") null else NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
-            NexusUi.Option("Notifications:  " + notifSummary()) { notificationSettings(back = { homeScreenSettings() }) },
             NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
-            NexusUi.Option("Home screen when NEXUS is closed") { chooseNormalHome() }
+            NexusUi.Option("Home screen when NEXUS is closed") { chooseNormalHome() },
+            if (hub.games.isEmpty()) null else NexusUi.Option("Remove all apps from home screen", danger = true) { askClearHome() }
         ), cancel = "Back", back = { homeSettings() })
     }
 
@@ -874,8 +873,9 @@ class MainActivity : Activity(), NexusUi.NavHost {
     private fun soundSettings() {
         val amb = Ambience.enabled(this); val menu = prefs.getBoolean("menuSounds", true)
         NexusUi.panel(this, "Sound",
-            "Background sound: a deep, soft drone while you're on the home screen. It plays by itself on your media volume " +
-                "(silent or vibrate don't stop it), and pauses while music or videos play and during calls and alarms.",
+            "Background sound: a deep, soft drone while you're on the home screen. It plays on your media volume " +
+                "(silent or vibrate don't stop it), and pauses while music or videos play and during calls and alarms.\n\n" +
+                "Menu sounds: soft taps as you move around NEXUS, and the start-up chime (quiet while your phone is on silent or vibrate).",
             listOf(
                 NexusUi.Option("Background sound:  " + onOff(amb)) {
                     Ambience.setEnabled(this, !amb)
@@ -1028,16 +1028,52 @@ class MainActivity : Activity(), NexusUi.NavHost {
     }
 
     /**
-     * A new NEXUS starts with an empty home screen: nothing is placed on it for you (NEXUS's own games and the
-     * Countdown included, even if they're installed). Add what you want with ADD APP. A NEXUS already in use keeps
-     * its list as it is (one where apps were added or moved); this is decided once.
+     * A newly installed NEXUS starts with an empty home screen: nothing is placed on it for you (NEXUS's own games
+     * and the Countdown included, even if they're installed), and nothing comes back from an old NEXUS's backup
+     * either. Add what you want with ADD APP. A NEXUS that's being updated keeps its list as it is, unless nobody
+     * ever put anything on it themselves (only NEXUS did). Decided once per install: the mark is kept where
+     * Android's backups don't go, so a reinstall starts empty again.
      */
     private fun startEmptyOnce() {
-        if (prefs.contains("startsEmpty")) return
-        val e = prefs.edit().putBoolean("startsEmpty", true)
-        if (!prefs.contains("custom") && !prefs.contains("order"))
-            e.putString("hiddenGames", builtIn.joinToString(",") { it.pkg }).putBoolean("countdownTileAdded", true)
-        e.apply()
+        try {
+            val mark = java.io.File(noBackupFilesDir, "home_started")
+            if (mark.exists()) return
+            mark.createNewFile()
+            val pi = packageManager.getPackageInfo(packageName, 0)
+            val newInstall = pi.firstInstallTime == pi.lastUpdateTime
+            val untouched = !prefs.contains("order") && customPkgs().all { it == CountdownLink.PKG }
+            val fresh = newInstall || untouched
+            if (fresh) {
+                clearHomeList()
+                LockTrace.log(this, "home screen: starts empty (" + (if (newInstall) "new install" else "nothing added yet") + ")")
+            }
+            // Starting settings: someone new to NEXUS gets the quiet, hands-off ones (no background sound, the phone's
+            // own buttons in apps) and turns the rest on in Settings. A NEXUS already in use keeps what it had.
+            val e = prefs.edit()
+            for (key in listOf("ambience", "appButtons")) if (!prefs.contains(key)) e.putBoolean(key, !fresh)
+            e.apply()
+            NexusAccessibility.instance?.refreshAppButtons()
+        } catch (_: Exception) {}
+    }
+
+    /** Takes every app off the home screen (they stay on the phone); ADD APP puts back the ones wanted. */
+    private fun clearHomeList() {
+        prefs.edit().remove("custom").remove("order")
+            .putString("hiddenGames", builtIn.joinToString(",") { it.pkg })
+            .putBoolean("countdownTileAdded", true).apply()
+        entries.clear()
+    }
+
+    /** Settings → Home screen → Remove all apps: asks first. */
+    private fun askClearHome() {
+        NexusUi.panel(this, "Remove all apps?",
+            "This takes every app off NEXUS's home screen. The apps stay on your phone, and you can add the ones you " +
+                "want back with ADD APP.", listOf(
+                NexusUi.Option("Remove all", danger = true) {
+                    clearHomeList(); refresh()
+                    NexusUi.note(this, "Home screen cleared. Tap ADD APP to add apps")
+                }
+            ), cancel = "Back", back = { homeScreenSettings() })
     }
 
     /** The first time NEXUS finds the Countdown app, it gets a tile (just once: remove it like any other tile). */
@@ -1213,6 +1249,11 @@ class MainActivity : Activity(), NexusUi.NavHost {
         forgetApp(g.pkg)
         refresh()
     }
+
+    /** The start-up chime follows Menu sounds, and stays quiet while the phone is on silent or vibrate. */
+    private fun chimeAllowed(): Boolean = Sfx.on &&
+        (try { (getSystemService(AUDIO_SERVICE) as android.media.AudioManager).ringerMode } catch (_: Exception) { android.media.AudioManager.RINGER_MODE_NORMAL }) ==
+            android.media.AudioManager.RINGER_MODE_NORMAL
 
     /** A soft, airy start-up chord that swells in and fades away (generated, no sound files). */
     private fun playChime() {
