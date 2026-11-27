@@ -32,6 +32,10 @@ class MainActivity : Activity(), NexusUi.NavHost {
     /** Games the player added from their phone, in the order they were added. */
     private fun customPkgs(): List<String> = prefs.getString("custom", "")!!.split(",").filter { it.isNotBlank() }
 
+    /** NEXUS's own games taken off the home screen (Remove from NEXUS); adding one from All apps puts it back. */
+    private fun hiddenGames(): Set<String> = prefs.getString("hiddenGames", "")!!.split(",").filter { it.isNotBlank() }.toSet()
+    private fun isOwnGame(pkg: String) = builtIn.any { it.pkg == pkg }
+
     /**
      * Added apps' tiles (name and icon), read from Android once and kept: coming back to NEXUS doesn't
      * ask Android again. An app's tile is read afresh when it's installed, updated or removed.
@@ -44,8 +48,13 @@ class MainActivity : Activity(), NexusUi.NavHost {
     private fun forgetApp(pkg: String) { entries.remove(pkg); installed.remove(pkg) }
 
     private fun buildList(): List<GameEntry> {
-        val list = ArrayList(builtIn)
+        // NEXUS's own games only show on phones that have them installed (and unless they were removed)
+        val hidden = hiddenGames()
+        val list = ArrayList(builtIn.filter { g ->
+            g.pkg !in hidden && installed.getOrPut(g.pkg) { packageManager.getLaunchIntentForPackage(g.pkg) != null }
+        })
         for (pkg in customPkgs()) {
+            if (isOwnGame(pkg)) continue
             val known = entries[pkg]
             if (known != null) { list.add(known); continue }
             try {
@@ -74,7 +83,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         if (homeStyle() == "tiles") opts.add(NexusUi.Option("Tile size:  ${sizeName(g.tileW, g.tileH)}", primary = true) { chooseTileSize(g) })
         opts.add(NexusUi.Option("Open") { open(g) })
         if (g.installed) opts.add(AppActions.infoOption(this, g.pkg))
-        if (g.custom) opts.add(NexusUi.Option("Remove from NEXUS", danger = true) { removeGame(g) })
+        opts.add(NexusUi.Option("Remove from NEXUS", danger = true) { removeGame(g) })
         if (g.installed) AppActions.uninstallOption(this, g.pkg)?.let { opts.add(it) }
         NexusUi.panel(this, g.name, null, opts)
     }
@@ -168,7 +177,12 @@ class MainActivity : Activity(), NexusUi.NavHost {
         val have = hub.games.map { it.pkg }.toSet()
         val fresh = items.filter { it.pkg !in have }
         if (fresh.isEmpty()) return
-        prefs.edit().putString("custom", (customPkgs() + fresh.map { it.pkg }).joinToString(",")).apply()
+        // One of NEXUS's own games comes back with its own tile; any other app is added
+        val (own, others) = fresh.partition { isOwnGame(it.pkg) }
+        val e = prefs.edit()
+        if (others.isNotEmpty()) e.putString("custom", (customPkgs() + others.map { it.pkg }).joinToString(","))
+        if (own.isNotEmpty()) e.putString("hiddenGames", (hiddenGames() - own.map { it.pkg }.toSet()).joinToString(","))
+        e.apply()
         refresh()
         val msg = if (fresh.size == 1) "${fresh[0].label} added to NEXUS" else "${fresh.size} apps added to NEXUS"
         NexusUi.note(this, msg)
@@ -188,9 +202,12 @@ class MainActivity : Activity(), NexusUi.NavHost {
     }
 
     private fun removeGame(g: GameEntry) {
-        NexusUi.panel(this, "Remove ${g.name}?", "This only removes it from NEXUS. The app stays on your phone.", listOf(
+        NexusUi.panel(this, "Remove ${g.name}?", "This only removes it from NEXUS. The app stays on your phone, and you can add it back any time from ALL APPS.", listOf(
             NexusUi.Option("Remove", danger = true) {
-                prefs.edit().putString("custom", customPkgs().filter { it != g.pkg }.joinToString(",")).apply()
+                val e = prefs.edit()
+                if (g.custom) e.putString("custom", customPkgs().filter { it != g.pkg }.joinToString(","))
+                else e.putString("hiddenGames", (hiddenGames() + g.pkg).joinToString(","))
+                e.apply()
                 refresh()
             }
         ))
@@ -203,7 +220,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
             finish()
             return
         }
-        hub = HubView(this, builtIn, { open(it) }, { drawer.open(add = true) }, { appOptions(it) }, sfx, { homeSettings() },
+        hub = HubView(this, buildList(), { open(it) }, { drawer.open(add = true) }, { appOptions(it) }, sfx, { homeSettings() },
             { from, to -> moveApp(from, to) }, { drawer.open(add = false) }, { openSwitcher() }, { openSystem() })
         drawer = AppDrawer(this, sfx, { openItem(it) }, { addApps(it) }, { pkg -> hub.games.any { it.pkg == pkg } })
         hub.onPullDown = { pullShade() }
@@ -1177,13 +1194,10 @@ class MainActivity : Activity(), NexusUi.NavHost {
             else if (veiled) NexusAccessibility.instance?.cancelVeil()
             return
         }
-        // Not installed yet: open its download page
-        val tag = when (g.pkg) { "com.zombiedots.app" -> "zombie-build"; "com.ashenvow.app" -> "ashen-build"; "com.torquestreet.app" -> "racer-build"; else -> "synth-build" }
-        try {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/buickdriver2001-gif/countdown-app/releases?q=$tag&expanded=true")))
-        } catch (_: Exception) {
-            NexusUi.note(this, "Couldn't open the download page")
-        }
+        // Uninstalled a moment ago (before NEXUS heard): say so, and it leaves the list
+        NexusUi.note(this, "${g.name} isn't installed any more")
+        forgetApp(g.pkg)
+        refresh()
     }
 
     /** A soft, airy start-up chord that swells in and fades away (generated, no sound files). */
