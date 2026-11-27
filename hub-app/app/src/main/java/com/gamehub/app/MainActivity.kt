@@ -1036,21 +1036,27 @@ class MainActivity : Activity(), NexusUi.NavHost {
      */
     private fun startEmptyOnce() {
         try {
+            // (Second mark: lists Android brought back from another phone's NEXUS backup before NEXUS stopped being
+            // backed up are cleared once too)
             val mark = java.io.File(noBackupFilesDir, "home_started")
-            if (mark.exists()) return
-            mark.createNewFile()
+            val mark2 = java.io.File(noBackupFilesDir, "home_started2")
+            if (mark.exists() && mark2.exists()) return
+            mark.createNewFile(); mark2.createNewFile()
             val pi = packageManager.getPackageInfo(packageName, 0)
             val newInstall = pi.firstInstallTime == pi.lastUpdateTime
             val untouched = !prefs.contains("order") && customPkgs().all { it == CountdownLink.PKG }
-            val fresh = newInstall || untouched
+            val recent = System.currentTimeMillis() - pi.firstInstallTime < 14L * 24 * 60 * 60 * 1000
+            val fresh = newInstall || untouched || recent
             if (fresh) {
                 clearHomeList()
-                LockTrace.log(this, "home screen: starts empty (" + (if (newInstall) "new install" else "nothing added yet") + ")")
+                LockTrace.log(this, "home screen: starts empty (" + when {
+                    newInstall -> "new install"; untouched -> "nothing added yet"; else -> "installed recently: list from a backup cleared"
+                } + ")")
             }
             // Starting settings: someone new to NEXUS gets the quiet, hands-off ones (no background sound, the phone's
             // own buttons in apps) and turns the rest on in Settings. A NEXUS already in use keeps what it had.
             val e = prefs.edit()
-            for (key in listOf("ambience", "appButtons")) if (!prefs.contains(key)) e.putBoolean(key, !fresh)
+            for (key in listOf("ambience", "appButtons")) if (fresh || !prefs.contains(key)) e.putBoolean(key, !fresh)
             e.apply()
             NexusAccessibility.instance?.refreshAppButtons()
         } catch (_: Exception) {}

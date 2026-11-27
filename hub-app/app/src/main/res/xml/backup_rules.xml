@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Android's backups keep your NEXUS layout and settings, but never the pictures of your apps or the diagnostic logs -->
+<!-- NEXUS isn't backed up: a newly installed NEXUS always starts fresh, with an empty home screen -->
 <full-backup-content>
-    <exclude domain="file" path="snaps/" />
-    <exclude domain="file" path="lock_trace.txt" />
-    <exclude domain="file" path="problem_report.txt" />
-    <exclude domain="file" path="last_crash.txt" />
+    <exclude domain="root" path="." />
+    <exclude domain="file" path="." />
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
+    <exclude domain="external" path="." />
 </full-backup-content>
