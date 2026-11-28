@@ -71,7 +71,8 @@ object NexusUi {
 
     /**
      * [back]: this panel is a page of a bigger menu: its last row (named [cancel]) and the phone's Back go back to
-     * the page before (tapping outside still closes it).
+     * the page before. Tapping outside never closes a panel: it's closed with its own Back / Done row, or the phone's
+     * Back (a tap outside only gives the panel a little nudge, so it's clear it's still open).
      */
     fun panel(a: Activity, title: String, message: String? = null, options: List<Option>, cancel: String? = "Cancel",
               input: String? = null, onSelect: Boolean = true, back: (() -> Unit)? = null): EditText? {
@@ -121,7 +122,13 @@ object NexusUi {
         // Going from one page of a menu to the next: the backdrop stays as it is (no fading out and in again)
         val switching = System.currentTimeMillis() - lastClosedAt < 450
         val root = android.widget.FrameLayout(a)
-        root.addView(CrystalBackdrop(a, if (switching) 1f else 0f) { dialog.cancel() },
+        dialog.setCanceledOnTouchOutside(false)
+        root.addView(CrystalBackdrop(a, if (switching) 1f else 0f) {
+            col.animate().cancel()
+            col.animate().scaleX(1.025f).scaleY(1.025f).setDuration(90).withEndAction {
+                col.animate().scaleX(1f).scaleY(1f).setDuration(140).start()
+            }.start()
+        },
             android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         val pw = minOf(a.resources.displayMetrics.widthPixels - (40 * d).toInt(), (420 * d).toInt())
         // NEXUS's Back / Home / Recent buttons stay along the bottom, over the panel's backdrop
@@ -176,7 +183,7 @@ object NexusUi {
 
     /**
      * Behind a panel: the screen dims and glass crystals orbit slowly around the middle (PS2-style, an
-     * original design). Tapping anywhere outside the panel closes it.
+     * original design). Tapping outside the panel doesn't close it (see [panel]).
      */
     private class CrystalBackdrop(c: android.content.Context, startK: Float, private val onTap: () -> Unit) : View(c) {
         private var k = startK
