@@ -15,10 +15,12 @@ android {
         // after it is 1.0.1, 1.0.2, ... (the builds before it were the 1.N previews)
         val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         val first = 161
+        // (Builds that failed and were never released don't take an update number)
+        val notReleased = setOf(162)
         versionCode = build
         versionName = when {
             build == first -> "1.0"
-            build > first -> "1.0.${build - first}"
+            build > first -> "1.0.${build - first - notReleased.count { it < build }}"
             else -> "1.$build"
         }
     }

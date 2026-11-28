@@ -1060,8 +1060,8 @@ class MainActivity : Activity(), NexusUi.NavHost {
             emptyList(), cancel = "Back", back = { helpSettings() })
     }
 
-    /** The home screen's style: "ps2" (the List style), "grid" (the data grid) or "tiles". */
-    private fun homeStyle(): String = prefs.getString("homeStyle", "ps2").let { if (it in listOf("grid", "tiles", "archive", "dash", "desk")) it else "ps2" }
+    /** The home screen's style: "ps2" (the List style), "grid" (the data grid), "archive", "dash" (Dashboard), "desk" (Desktop) or "tiles". */
+    private fun homeStyle(): String = prefs.getString("homeStyle", "ps2").let { if (it != null && it in listOf("grid", "tiles", "archive", "dash", "desk")) it else "ps2" }
 
     private fun styleName(s: String = homeStyle()) = when (s) {
         "grid" -> "Data grid"; "tiles" -> "Tiles"; "archive" -> "Archive"; "dash" -> "Dashboard"; "desk" -> "Desktop"; else -> "List"
