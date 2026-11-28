@@ -214,17 +214,21 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         // Deep blue-black void with a soft horizon glow (or the archive's gray room; drawn once, then reused)
         c.drawBitmap(backdrop(), 0f, 0f, null)
 
-        if (archive) drawDust(c, intro)
-        else {
-            drawHaze(c, dt, intro)
-            world.quality = quality
-            world.draw(c, width, height, dt, intro, 0.6f, if (ps2Menu) 0.62f else if (dataGrid) 0.7f else 0.8f)
+        when {
+            archive -> drawDust(c, intro)
+            dashboard -> drawRibbons(c, intro)
+            desktop -> {}
+            else -> {
+                drawHaze(c, dt, intro)
+                world.quality = quality
+                world.draw(c, width, height, dt, intro, 0.6f, if (ps2Menu) 0.62f else if (dataGrid) 0.7f else 0.8f)
+            }
         }
         // (A panel open: the menu steps back; the panel's own layer shows the crystals)
         crystalK = if (panelOpen) min(1f, crystalK + dt * 2.5f) else max(0f, crystalK - dt * 3f)
         // Crystals over the towers, in the open space above the menu: a carousel seen from a little above
         // (they make way for a panel's own crystals while one is open)
-        if (ps2Menu) {
+        if (ps2Menu && !dashboard) {
             homeCrystalK = if (panelOpen) max(0f, homeCrystalK - dt * 3f) else min(1f, homeCrystalK + dt * 1.2f)
             val ck = homeCrystalK * intro * 0.85f
             // (Notification boxes at the top: the crystals step back behind them while they're there)
@@ -446,19 +450,22 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     private var bgBmp: android.graphics.Bitmap? = null
-    /** Whether [bgBmp] is the archive's gray room. */
-    private var bgArchive = false
+    /** Which style's background [bgBmp] is. */
+    private var bgArchive = ""
+    private fun styleKey() = when { archive -> "archive"; dashboard -> "dash"; desktop -> "desk"; else -> "" }
 
     private fun backdrop(): android.graphics.Bitmap {
         val cur = bgBmp
-        if (cur != null && cur.width == width && cur.height == height && bgArchive == archive) return cur
+        if (cur != null && cur.width == width && cur.height == height && bgArchive == styleKey()) return cur
         cur?.recycle()
         val w = width.toFloat(); val h = height.toFloat()
         val b = android.graphics.Bitmap.createBitmap(width.coerceAtLeast(1), height.coerceAtLeast(1), android.graphics.Bitmap.Config.ARGB_8888)
         val c = Canvas(b)
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        bgArchive = archive
+        bgArchive = styleKey()
         if (archive) { grayRoom(c, w, h, p); bgBmp = b; return b }
+        if (dashboard) { slateRoom(c, w, h, p); bgBmp = b; return b }
+        if (desktop) { deskWallpaper(c, w, h, p); bgBmp = b; return b }
         p.shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(Color.rgb(2, 3, 10), Color.rgb(6, 12, 34), Color.rgb(1, 2, 6)), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
         c.drawRect(0f, 0f, w, h, p)
         p.shader = RadialGradient(w / 2, h * 0.45f, w * 0.9f, intArrayOf(Color.argb(80, 40, 90, 220), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
@@ -979,6 +986,17 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
      * app opens.
      */
     var archive = false
+    /**
+     * Dashboard home style (with the list's scrolling): each app a big panel; the one in the middle grows, lights up
+     * bright with a green edge and glows, the others step back, over dark slate with ribbons of light flowing past.
+     */
+    var dashboard = false
+    /**
+     * Desktop home style (with the data grid's taps): icons with their names under them on a desktop wallpaper,
+     * four across, a highlight box around the one selected, and a taskbar along the bottom with a start button
+     * (All apps), Add app, and the time and date.
+     */
+    var desktop = false
     /** PS2 menu: room above the first line and below the last, so each can sit in the middle. */
     private var listPad = 0f
     /** PS2 menu: the distance from one line to the next. */
@@ -1025,13 +1043,14 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val list = ps2Menu
         val grid = dataGrid && !list
         // (Data grid: a little more room at the top, for the chosen app's name)
-        listTop = if (grid) max(h * 0.13f, 104 * d) else max(h * 0.12f, 88 * d); listBottom = h - 76 * d - navInset
-        val gap = if (list) 4 * d else if (grid) 14 * d else 10 * d
+        listTop = if (grid && !desktop) max(h * 0.13f, 104 * d) else max(h * 0.12f, 88 * d); listBottom = h - 76 * d - navInset
+        val gap = if (list) (if (dashboard) 12 * d else 4 * d) else if (grid) (if (desktop) 6 * d else 14 * d) else 10 * d
         val left = 18 * d; val right = w - 18 * d
-        val cols = if (list) 1 else if (grid) 3 else gridCols.coerceIn(2, 6)
+        val cols = if (list) 1 else if (grid) (if (desktop) 4 else 3) else gridCols.coerceIn(2, 6)
         layoutCols = cols
         cellW = (right - left - gap * (cols - 1)) / cols
-        cellH = if (list) 56 * d else if (grid) cellW else ((listBottom - listTop - gap * (gridRows - 1)) / gridRows).coerceIn(cellW * 0.7f, cellW * 1.3f)
+        cellH = if (list) (if (dashboard) 88 * d else 56 * d) else if (grid) (if (desktop) cellW * 1.22f else cellW)
+                else ((listBottom - listTop - gap * (gridRows - 1)) / gridRows).coerceIn(cellW * 0.7f, cellW * 1.3f)
         // (The chosen app's icon keeps turning; faster as it opens)
         if (grid) gridSpin = (gridSpin + dt * (if (launchFlash > 0f) (if (archive) 1150f else 760f) else if (archive) 80f else 95f)) % 360f
         // (Nothing chosen: the next one chosen starts its turn facing you)
@@ -1177,8 +1196,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             if (ar.left.isNaN() || (moveIndex < 0 && !settling)) ar.set(tr)
             else ar.set(ar.left + (tr.left - ar.left) * k, ar.top + (tr.top - ar.top) * k, ar.right + (tr.right - ar.right) * k, ar.bottom + (tr.bottom - ar.bottom) * k)
             if (idx != moveIndex && ar.bottom > listTop - 10 * d && ar.top < listBottom + 10 * d) {
-                if (list) drawListItem(c, games[idx], ar, idx == downRow && !dragging && moveIndex < 0 && !longFired, a,
+                if (list && dashboard) drawDashItem(c, games[idx], ar, idx == downRow && !dragging && moveIndex < 0 && !longFired, a,
                     if (idx == launchIdx && launchFlash > 0f) 1f - launchFlash / LAUNCH_LEN else -1f, idx == selected && moveIndex < 0)
+                else if (list) drawListItem(c, games[idx], ar, idx == downRow && !dragging && moveIndex < 0 && !longFired, a,
+                    if (idx == launchIdx && launchFlash > 0f) 1f - launchFlash / LAUNCH_LEN else -1f, idx == selected && moveIndex < 0)
+                else if (grid && desktop) drawDesktopCell(c, games[idx], ar, idx == selected && moveIndex < 0,
+                    idx == downRow && !dragging && moveIndex < 0 && !longFired, a, idx)
                 else if (grid && archive) {
                     // (The one opening flies out of the list: drawn after it, unclipped)
                     if (idx == selected && launchFlash > 0f) { flyFrom.set(ar); flyIdx = idx }
@@ -1198,7 +1221,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         else flyRect.setEmpty()
         flyIdx = -1
         // Data grid: the chosen app's name at the top
-        if (grid) drawGridTitle(c, w, listTop - 18 * d, a)
+        if (grid && !desktop) drawGridTitle(c, w, listTop - 18 * d, a)
         // No apps on the home screen at all: say how to add some
         if (games.isEmpty()) {
             text.textAlign = Paint.Align.CENTER; text.letterSpacing = 0.08f
@@ -1216,7 +1239,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             val tw = min(g.tileW, cols) * stepX - gap; val th = rowsFor(g, cols) * stepY - gap
             val r = RectF(lastX - grabFx * tw, moveY - grabFy * th, lastX - grabFx * tw + tw, moveY - grabFy * th + th)
             c.save(); c.scale(1.05f, 1.05f, r.centerX(), r.centerY())
-            if (list) drawListItem(c, g, r, false, a, -1f, false)
+            if (list && dashboard) drawDashItem(c, g, r, false, a, -1f, false)
+            else if (list) drawListItem(c, g, r, false, a, -1f, false)
+            else if (grid && desktop) drawDesktopCell(c, g, r, true, false, a, moveIndex)
             else if (grid && archive) drawArchiveCell(c, g, r, true, false, a, moveIndex)
             else if (grid) drawDataCell(c, g, r, true, false, a, moveIndex)
             else {
@@ -1258,11 +1283,14 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val bx0 = w / 2 - (pw * 2 + gapB) / 2
         val barTop = h - 54 * d - navInset; val barBottom = h - 18 * d - navInset
         recentRect.setEmpty()
-        addRect.set(bx0, barTop, bx0 + pw, barBottom)
-        allAppsRect.set(bx0 + pw + gapB, barTop, bx0 + pw * 2 + gapB, barBottom)
         systemRect.setEmpty()
-        bottomPill(c, addRect, "ADD APP", 3, a)
-        bottomPill(c, allAppsRect, "ALL APPS", 2, a)
+        if (desktop) drawTaskbar(c, w, h, a)
+        else {
+            addRect.set(bx0, barTop, bx0 + pw, barBottom)
+            allAppsRect.set(bx0 + pw + gapB, barTop, bx0 + pw * 2 + gapB, barBottom)
+            bottomPill(c, addRect, "ADD APP", 3, a)
+            bottomPill(c, allAppsRect, "ALL APPS", 2, a)
+        }
         // Recent Apps asked for with no apps open stays here: say so briefly, just above the bottom bar
         val since = android.os.SystemClock.uptimeMillis() - nothingOpenAt
         if (since in 0 until NOTE_MS) {
@@ -1696,6 +1724,242 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             c.drawLine(x1, y1, x1 - l, y1, line); c.drawLine(x1, y1, x1, y1 - l, line)
         }
         c.restore()
+    }
+
+    // ------------------------------------------------------------------ dashboard (panels and ribbons of light)
+    private val dashR = RectF()
+    private val ribbon = Path()
+    private var ribbonShaders: Array<LinearGradient>? = null
+    private var ribbonW = -1f
+    private val nameCache = HashMap<String, String>()
+
+    /** The dashboard's room: dark slate with a faint green-white light from above. */
+    private fun slateRoom(c: Canvas, w: Float, h: Float, p: Paint) {
+        p.shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(Color.rgb(36, 44, 46), Color.rgb(20, 28, 30), Color.rgb(8, 12, 13)), null, Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p)
+        p.shader = RadialGradient(w / 2, h * 0.18f, w * 1.0f, intArrayOf(Color.argb(60, 190, 235, 200), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p)
+        p.shader = RadialGradient(w / 2, h * 0.5f, max(w, h) * 0.8f, intArrayOf(Color.TRANSPARENT, Color.TRANSPARENT, Color.argb(120, 0, 0, 0)),
+            floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p)
+        p.shader = null
+    }
+
+    /** Dashboard: three soft ribbons of light flowing slowly across behind the panels. */
+    private fun drawRibbons(c: Canvas, intro: Float) {
+        val w = width.toFloat(); val h = height.toFloat()
+        if (ribbonShaders == null || ribbonW != w) {
+            ribbonW = w
+            val cols = intArrayOf(Color.rgb(150, 230, 120), Color.rgb(210, 245, 220), Color.rgb(90, 200, 170))
+            ribbonShaders = Array(3) { i -> LinearGradient(0f, 0f, w, 0f, intArrayOf(Color.TRANSPARENT, cols[i], cols[i], Color.TRANSPARENT), floatArrayOf(0f, 0.3f, 0.7f, 1f), Shader.TileMode.CLAMP) }
+        }
+        val sh = ribbonShaders ?: return
+        for (i in 0 until 3) {
+            val base = h * (0.34f + 0.2f * i); val amp = h * (0.05f + 0.02f * i)
+            val sp = 0.18f + 0.07f * i; val ph = i * 1.9f
+            ribbon.reset()
+            val steps = 24
+            for (k in 0..steps) {
+                val x = w * k / steps
+                val y = base + amp * sin(x / w * 5.2f + t * sp + ph) + amp * 0.4f * sin(x / w * 11f - t * sp * 1.6f)
+                if (k == 0) ribbon.moveTo(x, y) else ribbon.lineTo(x, y)
+            }
+            for (k in steps downTo 0) {
+                val x = w * k / steps
+                val th = (10 + 16 * (0.5f + 0.5f * sin(x / w * 7f + t * sp * 1.3f + ph))) * d
+                val y = base + amp * sin(x / w * 5.2f + t * sp + ph) + amp * 0.4f * sin(x / w * 11f - t * sp * 1.6f) + th
+                ribbon.lineTo(x, y)
+            }
+            ribbon.close()
+            fill.shader = sh[i]; fill.color = Color.WHITE; fill.alpha = (34 * intro).toInt()
+            c.drawPath(ribbon, fill)
+            fill.shader = null
+        }
+    }
+
+    /** A colour [k] of the way from [a] to [b]. */
+    private fun mix(a: Int, b: Int, k: Float): Int {
+        val q = k.coerceIn(0f, 1f)
+        return Color.argb((Color.alpha(a) + (Color.alpha(b) - Color.alpha(a)) * q).toInt(), (Color.red(a) + (Color.red(b) - Color.red(a)) * q).toInt(),
+            (Color.green(a) + (Color.green(b) - Color.green(a)) * q).toInt(), (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * q).toInt())
+    }
+
+    /** [name] shortened with … to fit [maxW] at text size [size] (worked out once, then remembered). */
+    private fun fitName(name: String, maxW: Float, size: Float): String {
+        val key = name + "|" + maxW.toInt() + "|" + size.toInt()
+        nameCache[key]?.let { return it }
+        boxTp.typeface = text.typeface; boxTp.textSize = size; boxTp.letterSpacing = 0.02f
+        val out = android.text.TextUtils.ellipsize(name, boxTp, maxW, android.text.TextUtils.TruncateAt.END).toString()
+        if (nameCache.size > 400) nameCache.clear()
+        nameCache[key] = out
+        return out
+    }
+
+    /**
+     * One app on the dashboard: a big panel. The nearer the middle, the bigger and brighter: in the middle it's a
+     * light panel with a green edge and dark writing; away from it, dark glass. Chosen: its edge breathes. Opening:
+     * it flashes and grows.
+     */
+    private fun drawDashItem(c: Canvas, g: GameEntry, r: RectF, pressed: Boolean, a0: Float, launching: Float, chosen: Boolean) {
+        val k = if (launching >= 0f) 1f else listFocus(r)
+        val a = a0 * (0.3f + 0.7f * listFade(r))
+        if (a <= 0.01f) return
+        val sc = (0.86f + 0.14f * k) * (if (pressed) 0.96f else 1f) * (if (launching >= 0f) 1f + 0.06f * launching else 1f)
+        c.save(); c.scale(sc, sc, r.centerX(), r.centerY())
+        dashR.set(r.left + 4 * d, r.top, r.right - 4 * d, r.bottom)
+        val rad = 14 * d
+        if (k > 0.05f) glow(c, dashR.centerX(), dashR.centerY(), dashR.width() * 0.5f, (80 * k * a).toInt())
+        val panel = mix(Color.argb(160, 24, 36, 40), Color.argb(240, 232, 240, 236), k)
+        fill.color = Color.argb((Color.alpha(panel) * a).toInt(), Color.red(panel), Color.green(panel), Color.blue(panel))
+        c.drawRoundRect(dashR, rad, rad, fill)
+        // A soft shine across the top half
+        c.save(); c.clipRect(dashR.left, dashR.top, dashR.right, dashR.centerY())
+        fill.color = Color.argb((26 * a).toInt(), 255, 255, 255); c.drawRoundRect(dashR, rad, rad, fill)
+        c.restore()
+        // The green edge on the left, brighter in the middle (breathing while chosen)
+        val breathe = if (chosen) 0.75f + 0.25f * sin(t * 4.5f) else 1f
+        fill.color = Color.argb(((90 + 165 * k) * a * breathe).toInt(), 126, 206, 70)
+        tmpRect.set(dashR.left, dashR.top + rad * 0.6f, dashR.left + 5 * d, dashR.bottom - rad * 0.6f)
+        c.drawRoundRect(tmpRect, 2.5f * d, 2.5f * d, fill)
+        line.strokeWidth = (if (chosen) 2f else 1f) * d
+        line.color = if (chosen) Color.argb((220 * a * breathe).toInt(), 126, 206, 70) else Color.argb((60 * a).toInt(), 255, 255, 255)
+        c.drawRoundRect(dashR, rad, rad, line)
+        // The icon, big, and the name
+        val isz = dashR.height() * 0.62f
+        iconR.set(dashR.left + 20 * d, dashR.centerY() - isz / 2, dashR.left + 20 * d + isz, dashR.centerY() + isz / 2)
+        drawSpinIcon(c, g, iconR, a * (if (g.installed) 1f else 0.45f))
+        val tx = iconR.right + 16 * d
+        val size = 18 * d
+        val name = fitName(g.name, dashR.right - 16 * d - tx, size)
+        text.textAlign = Paint.Align.LEFT; text.textSize = size; text.letterSpacing = 0.02f
+        val tc = mix(Color.rgb(225, 235, 230), Color.rgb(22, 32, 30), k)
+        text.color = Color.argb((245 * a).toInt(), Color.red(tc), Color.green(tc), Color.blue(tc))
+        c.drawText(name, tx, dashR.centerY() + (if (chosen) -2 * d else 6 * d), text)
+        if (chosen) {
+            text.textSize = 11 * d; text.letterSpacing = 0.14f
+            text.color = Color.argb((200 * a).toInt(), 70, 140, 40)
+            c.drawText("TAP AGAIN TO OPEN", tx, dashR.centerY() + 17 * d, text)
+        }
+        // Opening: a white flash over the panel
+        if (launching >= 0f) {
+            fill.color = Color.argb((200 * (1f - launching) * a0).toInt(), 255, 255, 255)
+            c.drawRoundRect(dashR, rad, rad, fill)
+        }
+        text.textAlign = Paint.Align.CENTER
+        c.restore()
+    }
+
+    // ------------------------------------------------------------------ desktop (icons, wallpaper, taskbar)
+    private val taskR = RectF()
+    private val hexPath = Path()
+    private val labelCache = HashMap<String, Array<String>>()
+
+    /** The desktop's wallpaper: deep blue into teal, with two soft blooms of light (an original design). */
+    private fun deskWallpaper(c: Canvas, w: Float, h: Float, p: Paint) {
+        p.shader = LinearGradient(0f, 0f, w * 0.4f, h, intArrayOf(Color.rgb(10, 34, 82), Color.rgb(16, 66, 124), Color.rgb(6, 26, 58)), null, Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p)
+        p.shader = RadialGradient(w * 0.68f, h * 0.46f, w * 0.95f, intArrayOf(Color.argb(130, 80, 170, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p)
+        p.shader = RadialGradient(w * 0.22f, h * 0.7f, w * 0.75f, intArrayOf(Color.argb(90, 120, 90, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p)
+        p.shader = LinearGradient(0f, h * 0.2f, w, h * 0.55f, intArrayOf(Color.TRANSPARENT, Color.argb(36, 255, 255, 255), Color.TRANSPARENT), floatArrayOf(0.2f, 0.5f, 0.8f), Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p)
+        p.shader = null
+    }
+
+    /** An app's name for under its desktop icon: one line, or two (the second shortened with … if it must be). */
+    private fun deskLabel(name: String, maxW: Float, size: Float): Array<String> {
+        val key = name + "|" + maxW.toInt() + "|" + size.toInt()
+        labelCache[key]?.let { return it }
+        boxTp.typeface = text.typeface; boxTp.textSize = size; boxTp.letterSpacing = 0.01f
+        val out: Array<String> = if (boxTp.measureText(name) <= maxW) arrayOf(name) else {
+            // Break at the last space that fits, else wherever it fills the line
+            var cut = name.length
+            while (cut > 1 && boxTp.measureText(name, 0, cut) > maxW) cut--
+            val sp = name.lastIndexOf(' ', cut)
+            val first = if (sp > 0) name.substring(0, sp) else name.substring(0, cut)
+            val rest = name.substring(first.length).trim()
+            arrayOf(first, android.text.TextUtils.ellipsize(rest, boxTp, maxW, android.text.TextUtils.TruncateAt.END).toString())
+        }
+        if (labelCache.size > 400) labelCache.clear()
+        labelCache[key] = out
+        return out
+    }
+
+    /** One app on the desktop: its icon and name; selected, a soft highlight box around both. Opening: it grows. */
+    private fun drawDesktopCell(c: Canvas, g: GameEntry, r: RectF, sel: Boolean, pressed: Boolean, a: Float, idx: Int) {
+        if (selected != selIndex) { selIndex = selected; selSince = t }
+        val selK = if (sel) min(1f, (t - selSince) / 0.15f) else 0f
+        if (selK > 0f || pressed) {
+            tmpRect.set(r.left + 2 * d, r.top + 2 * d, r.right - 2 * d, r.bottom - 2 * d)
+            fill.color = Color.argb(((if (pressed) 70 else 46) * max(selK, if (pressed) 1f else 0f) * a).toInt(), 200, 225, 255)
+            c.drawRoundRect(tmpRect, 7 * d, 7 * d, fill)
+            line.strokeWidth = 1f * d; line.color = Color.argb((120 * selK * a).toInt(), 220, 235, 255)
+            c.drawRoundRect(tmpRect, 7 * d, 7 * d, line)
+        }
+        val opening = if (sel && launchFlash > 0f) (1f - launchFlash / LAUNCH_LEN).coerceIn(0f, 1f) else 0f
+        val isz = r.width() * 0.52f * (1f + 0.3f * opening)
+        val cx = r.centerX(); val iy = r.top + r.height() * 0.1f + r.width() * 0.26f
+        // A soft shadow under the icon
+        spinR.set(cx - isz * 0.36f, iy + isz * 0.46f, cx + isz * 0.36f, iy + isz * 0.56f)
+        fill.color = Color.argb((60 * a).toInt(), 0, 0, 10); c.drawOval(spinR, fill)
+        iconR.set(cx - isz / 2, iy - isz / 2, cx + isz / 2, iy + isz / 2)
+        drawSpinIcon(c, g, iconR, a * (1f - 0.6f * opening) * (if (g.installed) 1f else 0.45f))
+        // The name under it, white with a soft shadow (as on a desktop), one or two lines
+        val size = 11.5f * d
+        val lines = deskLabel(g.name, r.width() - 8 * d, size)
+        text.textAlign = Paint.Align.CENTER; text.textSize = size; text.letterSpacing = 0.01f
+        text.color = Color.argb((245 * a).toInt(), 255, 255, 255)
+        text.setShadowLayer(3 * d, 0f, 1 * d, Color.argb((170 * a).toInt(), 0, 0, 0))
+        val ly = r.top + r.height() * 0.1f + r.width() * 0.52f + 16 * d
+        for ((i, ln) in lines.withIndex()) c.drawText(ln, cx, ly + i * (size + 2 * d), text)
+        text.clearShadowLayer()
+    }
+
+    /**
+     * The desktop's taskbar along the bottom: a start button (NEXUS's own mark) that opens All apps, Add app, and the
+     * time and date on the right.
+     */
+    private fun drawTaskbar(c: Canvas, w: Float, h: Float, a: Float) {
+        val barH = 54 * d
+        val top = h - barH - navInset
+        taskR.set(0f, top, w, h - navInset)
+        fill.color = Color.argb((205 * a).toInt(), 12, 18, 30); c.drawRect(taskR, fill)
+        line.strokeWidth = 1f * d; line.color = Color.argb((55 * a).toInt(), 255, 255, 255)
+        c.drawLine(0f, top, w, top, line)
+        // Start: a hexagon with a dot in it (NEXUS's own mark), opening All apps
+        val bs = 42 * d
+        allAppsRect.set(10 * d, top + (barH - bs) / 2, 10 * d + bs, top + (barH + bs) / 2)
+        fill.color = Color.argb((34 * a).toInt(), 200, 225, 255); c.drawRoundRect(allAppsRect, 8 * d, 8 * d, fill)
+        val hx = allAppsRect.centerX(); val hy = allAppsRect.centerY(); val hr = 11 * d
+        hexPath.reset()
+        for (i in 0..5) {
+            val ang = Math.PI / 3 * i - Math.PI / 2
+            val px = hx + hr * cos(ang).toFloat(); val py = hy + hr * sin(ang).toFloat()
+            if (i == 0) hexPath.moveTo(px, py) else hexPath.lineTo(px, py)
+        }
+        hexPath.close()
+        line.strokeWidth = 2f * d; line.color = Color.argb((235 * a).toInt(), 140, 200, 255); c.drawPath(hexPath, line)
+        fill.color = Color.argb((235 * a).toInt(), 140, 200, 255); c.drawCircle(hx, hy, 3 * d, fill)
+        // Add app
+        text.textSize = 12.5f * d; text.letterSpacing = 0.04f
+        val label = "Add app"
+        val lw = text.measureText(label)
+        addRect.set(allAppsRect.right + 8 * d, allAppsRect.top, allAppsRect.right + 8 * d + 30 * d + lw, allAppsRect.bottom)
+        fill.color = Color.argb((22 * a).toInt(), 200, 225, 255); c.drawRoundRect(addRect, 8 * d, 8 * d, fill)
+        line.strokeWidth = 1.6f * d; line.color = Color.argb((230 * a).toInt(), 220, 235, 255)
+        val px0 = addRect.left + 14 * d; val pcy = addRect.centerY()
+        c.drawLine(px0 - 5 * d, pcy, px0 + 5 * d, pcy, line); c.drawLine(px0, pcy - 5 * d, px0, pcy + 5 * d, line)
+        text.textAlign = Paint.Align.LEFT; text.color = Color.argb((235 * a).toInt(), 230, 238, 255)
+        c.drawText(label, px0 + 11 * d, pcy + 4.5f * d, text)
+        // The time and the date, on the right
+        updateClock()
+        text.textAlign = Paint.Align.RIGHT
+        text.textSize = 13 * d; text.color = Color.argb((240 * a).toInt(), 235, 242, 255)
+        c.drawText(clockText, w - 14 * d, top + 24 * d, text)
+        text.textSize = 11 * d; text.color = Color.argb((190 * a).toInt(), 200, 215, 240)
+        c.drawText(dateText, w - 14 * d, top + 41 * d, text)
+        text.textAlign = Paint.Align.CENTER
     }
 
     // ------------------------------------------------------------------ archive (gray room, 3D blocks)

@@ -20,16 +20,16 @@ public final class SoundBank {
     // ------------------------------------------------------------------ the choices (ids are saved; names are shown)
 
     /** Scrolling and tapping sounds (the same set for both, so each can be its own). */
-    public static final String[] CLICK_IDS = {"glass", "soft", "wood", "bubble", "crystal", "pulse", "retro", "drop", "thock", "off"};
-    public static final String[] CLICK_NAMES = {"Glass", "Soft click", "Wood", "Bubble", "Crystal", "Pulse", "Retro", "Water drop", "Key thock", "Off"};
+    public static final String[] CLICK_IDS = {"glass", "soft", "wood", "bubble", "crystal", "pulse", "retro", "drop", "thock", "airy", "mouse", "off"};
+    public static final String[] CLICK_NAMES = {"Glass", "Soft click", "Wood", "Bubble", "Crystal", "Pulse", "Retro", "Water drop", "Key thock", "Airy blip", "Mouse click", "Off"};
 
     /** Opening an app. */
-    public static final String[] OPEN_IDS = {"rise", "chord", "swell", "whoosh", "bell", "arcade", "harp", "sparkle", "portal", "off"};
-    public static final String[] OPEN_NAMES = {"Rising glass", "Bright chord", "Warm swell", "Whoosh", "Deep bell", "Arcade", "Harp", "Sparkle", "Portal", "Off"};
+    public static final String[] OPEN_IDS = {"rise", "chord", "swell", "whoosh", "bell", "arcade", "harp", "sparkle", "portal", "swoosh", "ding", "off"};
+    public static final String[] OPEN_NAMES = {"Rising glass", "Bright chord", "Warm swell", "Whoosh", "Deep bell", "Arcade", "Harp", "Sparkle", "Portal", "Bright swoosh", "Soft ding", "Off"};
 
     /** The home screen's background music. */
-    public static final String[] BG_IDS = {"drone", "pad", "night", "ocean", "stars", "rain", "pulse", "musicbox"};
-    public static final String[] BG_NAMES = {"Deep drone", "Warm pad", "Night wind", "Ocean", "Starlight", "Soft rain", "Slow pulse", "Music box"};
+    public static final String[] BG_IDS = {"drone", "pad", "night", "ocean", "stars", "rain", "pulse", "musicbox", "dash", "desk"};
+    public static final String[] BG_NAMES = {"Deep drone", "Warm pad", "Night wind", "Ocean", "Starlight", "Soft rain", "Slow pulse", "Music box", "Dashboard", "Desktop"};
 
     public static String name(String[] ids, String[] names, String id) {
         for (int i = 0; i < ids.length; i++) if (ids[i].equals(id)) return names[i];
@@ -50,6 +50,8 @@ public final class SoundBank {
             case "retro": return retroBlip();
             case "drop": return waterDrop();
             case "thock": return thock();
+            case "airy": return airyBlip();
+            case "mouse": return mouseClick();
             default: return null;
         }
     }
@@ -201,6 +203,48 @@ public final class SoundBank {
         return finish(space(y, 0.3f, 0.6f, 0.08f), len, 0.04f, 0.13f);
     }
 
+    /** A soft, glossy synth blip with a breath of air, for the Dashboard style. */
+    private static short[] airyBlip() {
+        float len = 0.3f; int n = (int) (RATE * len);
+        Random r = new Random(41);
+        float[] y = new float[n];
+        float hp = 0, px = 0;
+        for (int i = 0; i < n; i++) {
+            float t = (float) i / RATE;
+            float att = Math.min(1f, t / 0.002f);
+            float tone = (float) (Math.sin(TAU * 1568 * t) * Math.exp(-t * 34f) * 0.5f
+                + Math.sin(TAU * 2349.3 * t) * Math.exp(-t * 52f) * 0.22f
+                + Math.sin(TAU * 3136 * t) * Math.exp(-t * 80f) * 0.08f);
+            float nz = r.nextFloat() * 2f - 1f;
+            hp = 0.8f * (hp + nz - px); px = nz;
+            float air = (float) (hp * Math.exp(-t * 120f) * 0.09f);
+            y[i] = (tone + air) * att;
+        }
+        return finish(space(y, 0.6f, 0.35f, 0.25f), len, 0.06f, 0.11f);
+    }
+
+    /** A crisp little click and its release, like a computer mouse, for the Desktop style. */
+    private static short[] mouseClick() {
+        float len = 0.09f; int n = (int) (RATE * len);
+        Random r = new Random(43);
+        float[] y = new float[n];
+        float low = 0, band = 0;
+        float fk = (float) (2 * Math.sin(Math.PI * 3200 / RATE));
+        for (int i = 0; i < n; i++) {
+            float t = (float) i / RATE;
+            // The press, then a softer release 32 ms later
+            float e1 = (float) Math.exp(-t * 900f);
+            float t2 = t - 0.032f;
+            float e2 = t2 > 0 ? (float) Math.exp(-t2 * 1100f) * 0.45f : 0f;
+            float in = (r.nextFloat() * 2f - 1f) * (e1 + e2);
+            float high = in - low - 0.35f * band;
+            band += fk * high; low += fk * band;
+            float knock = (float) (Math.sin(TAU * 2100 * t) * Math.exp(-t * 500f)) * 0.3f;
+            y[i] = band * 0.8f + knock;
+        }
+        return finish(y, len, 0.02f, 0.11f);
+    }
+
     // ------------------------------------------------------------------ opening an app
 
     /** The sound for opening an app, or null for "off" (or an unknown id). */
@@ -215,6 +259,8 @@ public final class SoundBank {
             case "harp": return harp();
             case "sparkle": return sparkle();
             case "portal": return portal();
+            case "swoosh": return brightSwoosh();
+            case "ding": return softDing();
             default: return null;
         }
     }
@@ -398,6 +444,50 @@ public final class SoundBank {
         return finish(space(y, 0.7f, 0.5f, 0.3f), len, 0.25f, 0.15f);
     }
 
+    /** A bright rising swoosh of air with three quick synth notes climbing over it, for the Dashboard style. */
+    private static short[] brightSwoosh() {
+        float len = 1.0f; int n = (int) (RATE * len);
+        Random r = new Random(47);
+        float[] y = new float[n];
+        float low = 0, band = 0;
+        float[][] notes = {{0.05f, 659.25f}, {0.11f, 987.77f}, {0.17f, 1318.51f}};
+        for (int i = 0; i < n; i++) {
+            float t = (float) i / RATE;
+            double fc = 600 + 3800 * Math.pow(Math.min(1.0, t / 0.3), 1.3);
+            float fk = (float) (2 * Math.sin(Math.PI * fc / RATE));
+            float in = r.nextFloat() * 2f - 1f;
+            float high = in - low - 0.6f * band;
+            band += fk * high; low += fk * band;
+            float air = band * (t < 0.34f ? (float) Math.pow(Math.sin(Math.PI * t / 0.34f), 1.4) : 0f) * 0.35f;
+            float v = 0;
+            for (float[] nt : notes) {
+                float tt = t - nt[0];
+                if (tt < 0) continue;
+                float env = Math.min(1f, tt / 0.004f) * (float) Math.exp(-tt * 4.5f);
+                // A soft, bright synth voice: a few harmonics
+                v += (float) (Math.sin(TAU * nt[1] * tt) + 0.35 * Math.sin(TAU * 2 * nt[1] * tt) + 0.12 * Math.sin(TAU * 3 * nt[1] * tt)) * env * 0.4f;
+            }
+            y[i] = air + v;
+        }
+        return finish(space(y, 0.72f, 0.4f, 0.35f), len, 0.2f, 0.15f);
+    }
+
+    /** One gentle, clear ding, for the Desktop style. */
+    private static short[] softDing() {
+        float len = 1.2f; int n = (int) (RATE * len);
+        float[] y = new float[n];
+        float f = 1046.5f;
+        for (int i = 0; i < n; i++) {
+            float t = (float) i / RATE;
+            float att = Math.min(1f, t / 0.002f);
+            float t2 = t - 0.09f;
+            float second = t2 > 0 ? (float) (Math.sin(TAU * 1567.98 * t2) * Math.exp(-t2 * 4.2f)) * Math.min(1f, t2 / 0.002f) * 0.45f : 0f;
+            y[i] = (float) (Math.sin(TAU * f * t) * Math.exp(-t * 4.8f) * 0.6f + Math.sin(TAU * f * 2.0 * t) * Math.exp(-t * 9f) * 0.12f
+                + Math.sin(TAU * f * 3.01 * t) * Math.exp(-t * 16f) * 0.05f) * att + second;
+        }
+        return finish(space(y, 0.6f, 0.45f, 0.22f), len, 0.25f, 0.15f);
+    }
+
     // ------------------------------------------------------------------ background music
 
     /**
@@ -417,6 +507,8 @@ public final class SoundBank {
             case "rain": softRain(out, n); break;
             case "pulse": slowPulse(out, n); break;
             case "musicbox": musicBox(out, n); break;
+            case "dash": dashboard(out, n); break;
+            case "desk": desktop(out, n); break;
             default: drone(out, n); break;
         }
         // How loud: set by the whole sound (as each loop was made to sound), before the deep lows go
@@ -639,6 +731,57 @@ public final class SoundBank {
             }
             float bed = 0.12f * padNote(130.81, t, 0.3) + 0.08f * padNote(196, t, 0.7);
             out[i] = v + bed;
+        }
+    }
+
+    /** Bright and airy for the Dashboard style: a wide major chord breathing slowly, with glints drifting over it. */
+    private static void dashboard(float[] out, int n) {
+        double[] ch = {130.81, 196, 293.66, 329.63, 392, 587.33};
+        float[] amp = {0.4f, 0.34f, 0.28f, 0.26f, 0.2f, 0.12f};
+        float[] nz = noise(n, 53);
+        double[] glint = {1568, 1760, 2093, 2349.3, 2637};
+        Random gr = new Random(59);
+        double[][] glints = new double[24][2];
+        for (int g = 0; g < glints.length; g++) { glints[g][0] = gr.nextDouble() * LOOP_S; glints[g][1] = q(glint[gr.nextInt(glint.length)]); }
+        float lp = 0;
+        for (int i = 0; i < out.length; i++) {
+            double t = (double) i / RATE, p = ph(t), tl = t % LOOP_S;
+            float pad = 0;
+            for (int k = 0; k < ch.length; k++) pad += padNote(ch[k], t, k * 0.17) * amp[k] * (float) (0.8 + 0.2 * Math.sin(TAU * (p * (k % 3 + 1)) + k));
+            float g = 0;
+            for (double[] gl : glints) for (double tt : new double[]{tl - gl[0], tl + LOOP_S - gl[0]}) {
+                if (tt >= 0 && tt < 3) g += (float) (sn(gl[1] * tt) * Math.exp(-tt * 2.2) * Math.min(1.0, tt / 0.01)) * 0.045f;
+            }
+            lp += 0.06f * (nz[i % n] - lp);
+            out[i] = pad + g + lp * 0.35f * (float) (0.6 + 0.4 * Math.sin(TAU * p * 2));
+        }
+    }
+
+    /** Calm, soft chords for the Desktop style, like a gentle electric piano: four chords, four seconds each. */
+    private static void desktop(float[] out, int n) {
+        // F major 7, G 6, E minor 7, A minor 7 (an original progression)
+        double[][] chords = {{174.61, 220, 261.63, 329.63}, {196, 246.94, 293.66, 329.63}, {164.81, 196, 246.94, 293.66}, {220, 261.63, 329.63, 392}};
+        double bar = (double) LOOP_S / chords.length;
+        for (int i = 0; i < out.length; i++) {
+            double t = (double) i / RATE;
+            float v = 0;
+            long now = (long) Math.floor(t / bar);
+            // This chord and the one before it, still ringing (counted straight through, so it carries over the loop)
+            for (int back = 0; back < 2; back++) {
+                long k = now - back;
+                if (k < 0) break;
+                double[] c = chords[(int) (k % chords.length)];
+                for (int j = 0; j < c.length; j++) {
+                    // The notes of each chord rolled a little, like a hand on keys
+                    double tt = t - k * bar - j * 0.035;
+                    if (tt < 0 || tt > 6) continue;
+                    double f = c[j];
+                    double env = Math.exp(-tt * 0.7) * Math.min(1.0, tt / 0.006);
+                    v += (float) ((sn(f * tt) + 0.25 * sn(2 * f * tt) * Math.exp(-tt * 1.5) + 0.08 * sn(3 * f * tt) * Math.exp(-tt * 3)) * env) * 0.22f;
+                }
+            }
+            float trem = (float) (0.88 + 0.12 * Math.sin(TAU * ph(t) * 24)); // (a slow shimmer, 1.5 times a second)
+            out[i] = v * trem;
         }
     }
 

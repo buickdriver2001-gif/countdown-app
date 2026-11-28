@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Bundle
 import kotlin.math.PI
 import kotlin.math.exp
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
@@ -164,9 +165,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         }
         val grid = prefs.getString("grid", "4x6")!!.split("x")
         hub.gridCols = grid.getOrNull(0)?.toIntOrNull() ?: 4; hub.gridRows = grid.getOrNull(1)?.toIntOrNull() ?: 6
-        hub.ps2Menu = homeStyle() == "ps2"
-        hub.dataGrid = homeStyle() == "grid" || homeStyle() == "archive"
-        hub.archive = homeStyle() == "archive"
+        styleFlags(homeStyle())
         hub.notifIcons = NexusNotifications.barOn(this)
         hub.notifBoxes = NexusNotifications.boxesOn(this)
         hub.games = list
@@ -576,6 +575,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_LOCK_PHOTO) { if (resultCode == RESULT_OK) data?.data?.let { saveLockPhoto(it) }; return }
         if (requestCode != REQ_HOME) return
         if (HomeMode.isDefault(this)) { NexusUi.note(this, "NEXUS is now your home screen"); return }
         // Answered instantly = Android has stopped asking (it was declined before): open the setting instead
@@ -671,6 +671,10 @@ class MainActivity : Activity(), NexusUi.NavHost {
                 lockSettings()
             })
             opts.add(NexusUi.Option("Send a test notification") { sendTestNotification() })
+            // What's behind it all
+            opts.add(NexusUi.Option("Background", value = LockActivity.BACKGROUNDS.first { it.first == LockActivity.background(this) }.second, more = true) {
+                chooseLockBackground()
+            })
             // What's playing in a music app
             val music = LockActivity.musicOn(this)
             opts.add(NexusUi.Option("Music playing", value = onOff(music)) {
@@ -680,6 +684,72 @@ class MainActivity : Activity(), NexusUi.NavHost {
             })
         }
         NexusUi.panel(this, "NEXUS lock screen", msg, opts, cancel = "Back", back = { homeSettings() })
+    }
+
+    /** Settings → Lock screen → Background: one of NEXUS's, or a photo of your own (picked with the phone's photo picker). */
+    private fun chooseLockBackground() {
+        val cur = LockActivity.background(this)
+        val hasPhoto = LockActivity.photoFile(this).exists()
+        val opts = ArrayList<NexusUi.Option>()
+        val keys = ArrayList<String>()
+        fun mark(k: String) { for ((j, o) in opts.withIndex()) if (keys[j] != "pick") o.setValue(if (keys[j] == k) "✓" else "") }
+        for ((k, name) in LockActivity.BACKGROUNDS) {
+            if (k == "photo" && !hasPhoto) continue
+            keys.add(k)
+            opts.add(NexusUi.Option(name, value = if (k == cur) "✓" else "") { LockActivity.setBackground(this, k); mark(k) })
+        }
+        keys.add("pick")
+        opts.add(NexusUi.Option(if (hasPhoto) "Pick a different photo…" else "Pick a photo…", more = true) { NexusUi.dismissAll(this); pickLockPhoto() })
+        NexusUi.panel(this, "Lock screen background",
+            "Turn your screen off and on to see it. A photo stays on your phone only, softly darkened behind the clock so " +
+                "everything reads.", opts, cancel = "Back", onSelect = false, back = { lockSettings() })
+    }
+
+    /** The phone's own photo picker (no permission needed: NEXUS only gets the one photo you pick). */
+    private fun pickLockPhoto() {
+        val i = if (android.os.Build.VERSION.SDK_INT >= 33) Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).setType("image/*")
+                else Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE)
+        try { startActivityForResult(i, REQ_LOCK_PHOTO) }
+        catch (_: Exception) {
+            try { startActivityForResult(Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE), REQ_LOCK_PHOTO) }
+            catch (_: Exception) { NexusUi.note(this, "Couldn't open your photos") }
+        }
+    }
+
+    /** Keeps a screen-sized copy of the picked photo (the right way up) for the lock screen. */
+    private fun saveLockPhoto(uri: android.net.Uri) {
+        val app = applicationContext
+        val dm = resources.displayMetrics
+        val longSide = max(dm.widthPixels, dm.heightPixels).coerceAtLeast(1280)
+        NexusUi.note(this, "Setting your lock screen photo…")
+        Bg.thread {
+            val ok = try {
+                // How big it is, then read it at about screen size
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                app.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+                var sample = 1
+                while (max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= longSide) sample *= 2
+                var bmp = app.contentResolver.openInputStream(uri)?.use {
+                    android.graphics.BitmapFactory.decodeStream(it, null, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+                } ?: throw IllegalStateException("unreadable")
+                // Turned the way the camera held it
+                val turn = try {
+                    app.contentResolver.openInputStream(uri)?.use { s ->
+                        when (android.media.ExifInterface(s).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1)) {
+                            6 -> 90f; 3 -> 180f; 8 -> 270f; else -> 0f
+                        }
+                    } ?: 0f
+                } catch (_: Exception) { 0f }
+                if (turn != 0f) bmp = android.graphics.Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, android.graphics.Matrix().apply { postRotate(turn) }, true)
+                val f = LockActivity.photoFile(app)
+                java.io.FileOutputStream(f).use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) }
+                true
+            } catch (_: Throwable) { false }
+            runOnUiThread {
+                if (ok) { LockActivity.setBackground(app, "photo"); NexusUi.note(this, "Lock screen photo set. Turn your screen off and on to see it", long = true); chooseLockBackground() }
+                else NexusUi.note(this, "That photo couldn't be used")
+            }
+        }.start()
     }
 
     /** Shows (or hides) the Back / Home / Recent buttons in the chosen order, and makes room for them. */
@@ -981,7 +1051,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
                 "• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n" +
                 "• Tap ADD APP to add apps to NEXUS: tick as many as you like, then tap ADD.\n" +
                 "• Swipe down from the top (or tap the top bar) for your phone's notification panel. With Notification access, the top bar shows which apps have notifications and the newest show as boxes at the top of the home screen: tap to open, swipe sideways to clear (Settings → Notifications).\n" +
-                "• Settings → Style & layout → Style: List (one app per line), Data grid (glass blocks with spinning icons), Archive (3D blocks in a gray room) or Tiles. Settings → App order: A–Z or your own.\n" +
+                "• Settings → Style & layout → Style: List (one app per line), Data grid (glass blocks with spinning icons), Archive (3D blocks in a gray room), Dashboard (big sliding panels), Desktop (icons and a taskbar) or Tiles. Settings → App order: A–Z or your own.\n" +
                 "• Settings → Sounds & music: pick the scrolling, tapping and opening sounds and the home screen music, and how loud each is.\n" +
                 "• Recent Apps (the square button, once the helper is on): tap a card to switch to that app, swipe it up to close the app, or tap beside the cards to go home. With no apps open, it takes you to the home screen. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent Apps helper).\n" +
                 "• Buttons in apps: NEXUS's Back, Home and Recent buttons in place of the phone's own (needs 3-button navigation).\n" +
@@ -991,17 +1061,38 @@ class MainActivity : Activity(), NexusUi.NavHost {
     }
 
     /** The home screen's style: "ps2" (the List style), "grid" (the data grid) or "tiles". */
-    private fun homeStyle(): String = prefs.getString("homeStyle", "ps2").let { if (it == "grid" || it == "tiles" || it == "archive") it else "ps2" }
+    private fun homeStyle(): String = prefs.getString("homeStyle", "ps2").let { if (it in listOf("grid", "tiles", "archive", "dash", "desk")) it else "ps2" }
 
-    private fun styleName(s: String = homeStyle()) = when (s) { "grid" -> "Data grid"; "tiles" -> "Tiles"; "archive" -> "Archive"; else -> "List" }
+    private fun styleName(s: String = homeStyle()) = when (s) {
+        "grid" -> "Data grid"; "tiles" -> "Tiles"; "archive" -> "Archive"; "dash" -> "Dashboard"; "desk" -> "Desktop"; else -> "List"
+    }
+
+    /** How the home screen draws each style (the dashboard scrolls like the list; the archive and desktop tap like the data grid). */
+    private fun styleFlags(s: String) {
+        hub.ps2Menu = s == "ps2" || s == "dash"
+        hub.dataGrid = s == "grid" || s == "archive" || s == "desk"
+        hub.archive = s == "archive"; hub.dashboard = s == "dash"; hub.desktop = s == "desk"
+    }
+
+    /**
+     * The sounds made for a style (the dashboard's airy blips and swoosh and its bright music; the desktop's clicks,
+     * ding and soft chords), switched on with it. Null: the style keeps whatever sounds are chosen.
+     */
+    private fun styleSounds(s: String): Array<String>? = when (s) {
+        "dash" -> arrayOf("airy", "airy", "swoosh", "dash")
+        "desk" -> arrayOf("soft", "mouse", "ding", "desk")
+        else -> null
+    }
 
     /** Settings → Style & layout → Style: the list, the data grid, the archive or tiles (switches as you tap). */
     private fun chooseHomeStyle() {
-        val keys = listOf("ps2", "grid", "archive", "tiles")
+        val keys = listOf("ps2", "grid", "archive", "dash", "desk", "tiles")
         val about = mapOf(
             "ps2" to "Your apps one per line, the one in the middle glowing brightest.",
             "grid" to "Glass blocks with each app's icon floating inside.",
             "archive" to "3D blocks over a soft gray room: tap one and it spins, tap again and it flies in.",
+            "dash" to "Big panels that slide past, the one in the middle lit up, over flowing ribbons of light. Comes with its own sounds.",
+            "desk" to "Icons with their names on a desktop, and a taskbar with the clock. Comes with its own sounds.",
             "tiles" to "A grid of tiles in sizes you pick.")
         val opts = ArrayList<NexusUi.Option>()
         for (k in keys) opts.add(NexusUi.Option(styleName(k), value = if (k == homeStyle()) "✓" else "") {
@@ -1015,8 +1106,15 @@ class MainActivity : Activity(), NexusUi.NavHost {
 
     private fun applyHomeStyle(s: String) {
         prefs.edit().putString("homeStyle", s).apply()
-        hub.ps2Menu = s == "ps2"; hub.dataGrid = s == "grid" || s == "archive"; hub.archive = s == "archive"
+        styleFlags(s)
         hub.styleChanged()
+        // Its own sounds come with it (they can still be changed in Sounds & music)
+        styleSounds(s)?.let { set ->
+            Sfx.setChoice(this, Sfx.SCROLL, set[0]); Sfx.setChoice(this, Sfx.TAP, set[1]); Sfx.setChoice(this, Sfx.OPEN, set[2])
+            if (Ambience.style(this) != set[3]) { Ambience.setStyle(this, set[3]); if (Ambience.enabled(this)) ambience.restyle() }
+            sfx.preview(Sfx.OPEN, set[2])
+            NexusUi.note(this, styleName(s) + " sounds on. Change them any time in Sounds & music")
+        }
     }
 
     /** NEXUS buttons in all apps: on or off. It needs the helper, and the phone's 3-button navigation. */
@@ -1311,6 +1409,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         /** The "helper stopped" note is shown at most once each time NEXUS starts. */
         @Volatile private var helperWarned = false
         private const val REQ_HOME = 41
+        private const val REQ_LOCK_PHOTO = 42
         private const val REQ_NOTIFY = 42
     }
 

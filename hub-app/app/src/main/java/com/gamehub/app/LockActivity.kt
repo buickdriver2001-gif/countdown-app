@@ -366,6 +366,15 @@ class LockActivity : Activity() {
         fun unlockToHome(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("unlockToHome", false)
 
         /** Seconds left alone before it fades out and the screen turns off (0 = the phone's own screen timeout). */
+        /** Settings → Lock screen → Background: one of [BACKGROUNDS] ("photo": the person's own, see [photoFile]). */
+        fun background(c: Context): String = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getString("lockBg", "world")
+            ?.takeIf { k -> BACKGROUNDS.any { it.first == k } } ?: "world"
+        fun setBackground(c: Context, k: String) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit().putString("lockBg", k).apply()
+        val BACKGROUNDS = listOf("world" to "NEXUS world", "gray" to "Gray room", "midnight" to "Midnight", "aurora" to "Aurora",
+            "ember" to "Ember", "black" to "Black", "photo" to "Your photo")
+        /** The photo picked for the lock screen (kept only on the phone, made screen-sized). */
+        fun photoFile(c: Context) = java.io.File(c.filesDir, "lock_photo.jpg")
+
         /** Settings → Lock screen → Music: what's playing shows on the lock screen. */
         fun musicOn(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("lockMusic", true)
         fun offAfterSec(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getInt("lockOffSec", 8)
@@ -647,7 +656,7 @@ class LockView(private val a: LockActivity) : View(a) {
     private val sortedFaces = arrayOf(0, 1, 2, 3, 4, 5)
     private var bg: Bitmap? = null
 
-    fun restart() { t = 0f; lastNs = 0L; reset(); loadFaces(); notified = false; previewed = false; invalidate() }
+    fun restart() { t = 0f; lastNs = 0L; reset(); loadFaces(); loadBackground(); notified = false; previewed = false; invalidate() }
     private var notified = false
 
     /**
@@ -717,6 +726,73 @@ class LockView(private val a: LockActivity) : View(a) {
             while (out.size < 6) out.add(empty)
             post { faces = out }
         }.start()
+    }
+
+    // ---- The other backgrounds (Settings → Lock screen → Background), each painted once and reused
+    /** Which background, read when the lock screen comes up (Settings may have changed it). */
+    private var bgKind = "world"
+    private var plainBg: Bitmap? = null
+    private var plainKind = ""
+    private var photo: Bitmap? = null
+    private var photoStamp = -1L
+    private val photoDst = RectF()
+    private val photoPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private var scrim: LinearGradient? = null
+    private var scrimH = -1f
+
+    /** Called as the lock screen comes up: picks up a background (or photo) changed in Settings. */
+    fun loadBackground() {
+        bgKind = LockActivity.background(context)
+        if (bgKind != "photo") { photo?.recycle(); photo = null; photoStamp = -1L; return }
+        val f = LockActivity.photoFile(context)
+        val stamp = if (f.exists()) f.lastModified() else -1L
+        if (stamp == photoStamp && photo != null) return
+        photo?.recycle(); photo = null; photoStamp = stamp
+        if (stamp < 0) return
+        photo = try { android.graphics.BitmapFactory.decodeFile(f.absolutePath) } catch (_: Throwable) { null }
+    }
+
+    private fun photoBmp(): Bitmap? = photo?.takeIf { !it.isRecycled }
+
+    /** Darker at the top (behind the clock) and the bottom, a little over the rest, so the words always read. */
+    private fun scrimShader(h: Float): LinearGradient {
+        scrim?.let { if (scrimH == h) return it }
+        scrimH = h
+        return LinearGradient(0f, 0f, 0f, h, intArrayOf(Color.argb(150, 0, 0, 0), Color.argb(80, 0, 0, 0), Color.argb(95, 0, 0, 0), Color.argb(170, 0, 0, 0)),
+            floatArrayOf(0f, 0.35f, 0.7f, 1f), Shader.TileMode.CLAMP).also { scrim = it }
+    }
+
+    private fun plainBackdrop(kind: String): Bitmap {
+        val cur = plainBg
+        if (cur != null && cur.width == width && cur.height == height && plainKind == kind) return cur
+        cur?.recycle()
+        val w = width.toFloat(); val h = height.toFloat()
+        val b = Bitmap.createBitmap(width.coerceAtLeast(1), height.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        val c = Canvas(b)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        fun grad(vararg cols: Int) { p.shader = LinearGradient(0f, 0f, 0f, h, cols, null, Shader.TileMode.CLAMP); c.drawRect(0f, 0f, w, h, p); p.shader = null }
+        fun light(x: Float, y: Float, r: Float, col: Int) { p.shader = RadialGradient(x, y, r, col, Color.TRANSPARENT, Shader.TileMode.CLAMP); c.drawRect(0f, 0f, w, h, p); p.shader = null }
+        when (kind) {
+            "gray" -> { grad(Color.rgb(78, 82, 90), Color.rgb(56, 59, 66), Color.rgb(30, 32, 37)); light(w / 2, h * 0.3f, w * 0.95f, Color.argb(60, 235, 238, 245)) }
+            "midnight" -> { grad(Color.rgb(6, 10, 30), Color.rgb(12, 22, 58), Color.rgb(3, 5, 16)); light(w * 0.7f, h * 0.2f, w * 0.8f, Color.argb(70, 90, 120, 255)) }
+            "aurora" -> {
+                grad(Color.rgb(4, 14, 22), Color.rgb(6, 26, 34), Color.rgb(2, 8, 12))
+                light(w * 0.25f, h * 0.22f, w * 0.85f, Color.argb(90, 40, 220, 170)); light(w * 0.85f, h * 0.38f, w * 0.7f, Color.argb(70, 80, 140, 255))
+            }
+            "ember" -> {
+                grad(Color.rgb(20, 8, 10), Color.rgb(36, 12, 14), Color.rgb(10, 4, 6))
+                light(w * 0.5f, h * 0.85f, w * 0.95f, Color.argb(110, 255, 110, 50)); light(w * 0.2f, h * 0.2f, w * 0.6f, Color.argb(40, 255, 160, 90))
+            }
+            else -> c.drawColor(Color.BLACK)
+        }
+        if (kind != "black") {
+            // A soft darker edge all round
+            p.shader = RadialGradient(w / 2, h * 0.45f, max(w, h) * 0.78f, intArrayOf(Color.TRANSPARENT, Color.TRANSPARENT, Color.argb(120, 0, 0, 0)),
+                floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+            c.drawRect(0f, 0f, w, h, p); p.shader = null
+        }
+        plainBg = b; plainKind = kind
+        return b
     }
 
     private fun backdrop(): Bitmap {
@@ -790,10 +866,26 @@ class LockView(private val a: LockActivity) : View(a) {
         val introK = if (previewing || previewed) 1f else min(1f, t / LockActivity.INTRO_LEN)
         val intro = 1f - (1f - introK) * (1f - introK) * (1f - introK)
         val lift = -dragY // content follows the finger up
-        c.drawBitmap(backdrop(), 0f, 0f, null)
-        // The world: grey glass towers and balls of coloured light, the same as behind the home screen
-        // (A little softer than it used to be: the towers' glass and edges now catch more light)
-        world.draw(c, width, height, dt, intro, 0.64f, 0.78f)
+        // The background chosen in Settings → Lock screen → Background
+        val kind = bgKind
+        val photo = if (kind == "photo") photoBmp() else null
+        when {
+            photo != null -> {
+                // The photo filling the screen (cut to fit, never stretched), softly darkened so everything reads
+                val sc = max(w / photo.width, h / photo.height)
+                val pw = photo.width * sc; val ph = photo.height * sc
+                photoDst.set((w - pw) / 2, (h - ph) / 2, (w + pw) / 2, (h + ph) / 2)
+                c.drawBitmap(photo, null, photoDst, photoPaint)
+                fill.shader = scrimShader(h); fill.color = Color.WHITE; c.drawRect(0f, 0f, w, h, fill); fill.shader = null
+            }
+            kind == "world" || kind == "photo" -> {
+                c.drawBitmap(backdrop(), 0f, 0f, null)
+                // The world: grey glass towers and balls of coloured light, the same as behind the home screen
+                // (A little softer than it used to be: the towers' glass and edges now catch more light)
+                world.draw(c, width, height, dt, intro, 0.64f, 0.78f)
+            }
+            else -> c.drawBitmap(plainBackdrop(kind), 0f, 0f, null)
+        }
         // Lift the black wake-up cover only once the NEXUS lock screen is really what's on screen:
         // the screen is lit, and NEXUS has the focus (it doesn't while the phone's own lock screen is
         // still drawn on top). The fade-in then starts from black, so the switch is seamless.
