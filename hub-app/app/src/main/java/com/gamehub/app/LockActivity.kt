@@ -511,6 +511,10 @@ class LockView(private val a: LockActivity) : View(a) {
     private var swipeIdx = -1
     private var swipeDx = 0f
     private var swiping = false
+    /** The card the finger went down on (it can be swiped once the finger moves sideways), or -1. */
+    private var downCard = -1
+    /** A card let go of short of flying off: it's springing back into place. */
+    private var springBack = false
     private var flyKey: String? = null
     private var flyX = 0f
     private var flyDir = 0f
@@ -527,9 +531,9 @@ class LockView(private val a: LockActivity) : View(a) {
                 flyKey?.let { goneKeys.add(it) }
                 flyKey = null; flyItem = null; flyX = 0f; swipeIdx = -1
             }
-        } else if (!swiping && swipeIdx >= 0) {
+        } else if (springBack) {
             swipeDx *= kotlin.math.exp(-dt * 16f)
-            if (kotlin.math.abs(swipeDx) < 0.5f * d) { swipeDx = 0f; swipeIdx = -1 }
+            if (kotlin.math.abs(swipeDx) < 0.5f * d) { swipeDx = 0f; swipeIdx = -1; springBack = false }
         }
     }
 
@@ -982,15 +986,15 @@ class LockView(private val a: LockActivity) : View(a) {
                     musicR.contains(e.x, e.y) -> 0; else -> -1
                 }
                 swiping = false
-                if (pressed >= 0 && flyKey == null) { swipeIdx = pressed; swipeDx = 0f }
+                downCard = if (flyKey == null) pressed else -1
                 swipeVel?.recycle(); swipeVel = android.view.VelocityTracker.obtain().also { it.addMovement(e) }
             }
             MotionEvent.ACTION_MOVE -> {
                 swipeVel?.addMovement(e)
                 val dx = e.x - downX; val dy = e.y - downY
                 // Sideways on a notification: it's being swiped away (not the swipe up to unlock)
-                if (!swiping && !asked && swipeIdx >= 0 && flyKey == null && kotlin.math.abs(dx) > 12 * d && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.2f) {
-                    swiping = true; pressed = -1; musicPressed = -1; dragY = 0f
+                if (!swiping && !asked && downCard >= 0 && flyKey == null && kotlin.math.abs(dx) > 12 * d && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.2f) {
+                    swiping = true; springBack = false; swipeIdx = downCard; pressed = -1; musicPressed = -1; dragY = 0f
                 }
                 if (swiping) { swipeDx = dx; invalidate(); return true }
                 dragY = max(0f, downY - e.y)
@@ -1009,7 +1013,8 @@ class LockView(private val a: LockActivity) : View(a) {
                     if (cd != null && far && cd.item.clearable) {
                         flyKey = cd.item.key; flyItem = cd.item; flyX = swipeDx; flyDir = if (swipeDx >= 0f) 1f else -1f
                         performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
-                    }
+                    } else springBack = true
+                    downCard = -1
                     // (Not far enough, or one the app keeps: it springs back)
                     invalidate()
                     return true
@@ -1032,7 +1037,7 @@ class LockView(private val a: LockActivity) : View(a) {
                     a.openMusic()
                     return true
                 }
-                if (flyKey == null && !swiping) swipeIdx = -1
+                downCard = -1
                 // A tap on a notification: unlock with the phone's own PIN / fingerprint, then it opens
                 if (!asked && tapped >= 0 && quick) {
                     shownCards.getOrNull(tapped)?.let { cd ->
@@ -1043,7 +1048,8 @@ class LockView(private val a: LockActivity) : View(a) {
                 }
             }
             MotionEvent.ACTION_CANCEL -> {
-                dragging = false; pressed = -1; musicPressed = -1; swiping = false
+                if (swiping) springBack = true
+                dragging = false; pressed = -1; musicPressed = -1; swiping = false; downCard = -1
                 swipeVel?.recycle(); swipeVel = null
             }
         }
