@@ -35,6 +35,8 @@ import kotlin.math.sin
 class LockActivity : Activity() {
 
     private lateinit var view: LockView
+    /** What's playing in a music app (shown on the lock screen unless switched off in Settings). */
+    lateinit var music: NowPlaying
     /** The swipe up asked Android to unlock, and it hasn't answered yet. */
     private var unlockAsked = false
 
@@ -61,6 +63,7 @@ class LockActivity : Activity() {
         }
         if (android.os.Build.VERSION.SDK_INT >= 30) window.setDecorFitsSystemWindows(false)
         view = LockView(this)
+        music = NowPlaying(this) { view.postInvalidate() }
         // A black layer on top, see-through until the lock screen is left alone (then it fades it out)
         shade = View(this).apply { setBackgroundColor(Color.BLACK); alpha = 0f }
         setContentView(android.widget.FrameLayout(this).apply { addView(view); addView(shade) })
@@ -85,6 +88,7 @@ class LockActivity : Activity() {
         lastUse = android.os.SystemClock.uptimeMillis(); seenItems = NexusNotifications.items; sleepFailed = false
         view.removeCallbacks(idleCheck); view.postDelayed(idleCheck, 250)
         NexusNotifications.refresh()
+        if (musicOn(this) && NexusNotifications.granted(this)) music.start() else music.stop()
         view.restart()
         // The screen is on: hand the wake-up cover a picture of this lock screen right away, so it shows
         // the moment the screen lights up instead of black while Android finishes handing over the screen
@@ -144,6 +148,7 @@ class LockActivity : Activity() {
 
     override fun onStop() {
         super.onStop()
+        music.stop()
         resetShade()
         showing = false
         LockTrace.log(this, "  lock screen hidden")
@@ -187,7 +192,7 @@ class LockActivity : Activity() {
 
     /** Is the lock screen lit, in front and simply being looked at? */
     private fun watching(): Boolean =
-        showing && !isFinishing && !unlockAsked && pendingOpen == null && hasWindowFocus() &&
+        showing && !isFinishing && !unlockAsked && pendingOpen == null && !pendingMusic && hasWindowFocus() &&
             getSystemService(android.os.PowerManager::class.java)?.isInteractive == true &&
             window.decorView.display?.state == android.view.Display.STATE_ON
 
@@ -228,6 +233,32 @@ class LockActivity : Activity() {
         requestUnlock()
     }
 
+    /** The song tapped on the lock screen: the music app opens once the phone has been unlocked. */
+    private var pendingMusic = false
+    private var musicIntent: android.app.PendingIntent? = null
+    private var musicPkg: String? = null
+
+    fun openMusic() {
+        pendingMusic = true; musicIntent = music.sessionActivity(); musicPkg = music.info?.pkg
+        requestUnlock()
+    }
+
+    private fun sendMusic() {
+        val pi = musicIntent
+        var ok = false
+        if (pi != null) ok = try {
+            val opts = if (android.os.Build.VERSION.SDK_INT >= 34)
+                @Suppress("DEPRECATION") android.app.ActivityOptions.makeBasic()
+                    .setPendingIntentBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED).toBundle()
+            else null
+            pi.send(this, 0, null, null, null, null, opts); true
+        } catch (_: Exception) { false }
+        if (!ok) musicPkg?.let { p ->
+            try { packageManager.getLaunchIntentForPackage(p)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } } catch (_: Exception) {}
+        }
+        musicIntent = null; musicPkg = null
+    }
+
     /** Opens what a notification leads to (as if it had been tapped in the notification shade). */
     private fun sendNotification(item: NexusNotifications.Item) {
         val pi = item.intent
@@ -256,8 +287,8 @@ class LockActivity : Activity() {
         askingUnlock = true; NexusAccessibility.instance?.updateLockStrip()
         km.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
             override fun onDismissSucceeded() { askingUnlock = false; afterUnlock(byNexus = true) }
-            override fun onDismissCancelled() { unlockAsked = false; askingUnlock = false; pendingOpen = null; view.reset(); NexusAccessibility.instance?.updateLockStrip() }
-            override fun onDismissError() { unlockAsked = false; askingUnlock = false; pendingOpen = null; view.reset(); NexusAccessibility.instance?.updateLockStrip() }
+            override fun onDismissCancelled() { unlockAsked = false; askingUnlock = false; pendingOpen = null; pendingMusic = false; view.reset(); NexusAccessibility.instance?.updateLockStrip() }
+            override fun onDismissError() { unlockAsked = false; askingUnlock = false; pendingOpen = null; pendingMusic = false; view.reset(); NexusAccessibility.instance?.updateLockStrip() }
         })
     }
 
@@ -265,6 +296,15 @@ class LockActivity : Activity() {
     private fun afterUnlock(byNexus: Boolean) {
         askingUnlock = false
         if (isFinishing) return
+        // The song was tapped here: open the music app
+        if (pendingMusic) {
+            pendingMusic = false
+            LockTrace.log(this, "  unlocked: opening the music app")
+            sendMusic()
+            finish()
+            @Suppress("DEPRECATION") overridePendingTransition(0, 0)
+            return
+        }
         // A notification was tapped here: open it (not the NEXUS home screen)
         pendingOpen?.let { item ->
             pendingOpen = null
@@ -326,6 +366,8 @@ class LockActivity : Activity() {
         fun unlockToHome(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("unlockToHome", false)
 
         /** Seconds left alone before it fades out and the screen turns off (0 = the phone's own screen timeout). */
+        /** Settings → Lock screen → Music: what's playing shows on the lock screen. */
+        fun musicOn(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("lockMusic", true)
         fun offAfterSec(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getInt("lockOffSec", 8)
 
         /** Whether the NEXUS lock screen is switched on (off unless the user turns it on). */
@@ -405,17 +447,26 @@ class LockView(private val a: LockActivity) : View(a) {
     }
 
     /** Draws the notification cards from [top]; returns where they end (or [top] if there are none). */
-    private fun drawCards(c: Canvas, w: Float, top: Float, maxBottom: Float, fade: Float): Float {
+    private fun drawCards(c: Canvas, w: Float, top: Float, maxBottom: Float, fade0: Float, room: Float = maxBottom): Float {
         cardRects.clear()
         buildCards(w)
-        if (cards.isEmpty()) return top
+        // (A card swiped away stays gone while the app lets go of it)
+        val now = NexusNotifications.items
+        if (goneKeys.isNotEmpty()) goneKeys.retainAll(now.map { it.key }.toSet())
+        val vis = if (goneKeys.isEmpty()) cards else cards.filter { it.item.key !in goneKeys }
+        shownCards = vis
+        advanceSwipe(w)
+        if (vis.isEmpty()) return top
         val ch = 64 * d; val gap = 8 * d
-        val fit = (((maxBottom - top) + gap) / (ch + gap)).toInt().coerceIn(1, 4)
-        val shown = min(fit, cards.size)
+        val fit = (((min(maxBottom, room) - top) + gap) / (ch + gap)).toInt().coerceIn(if (room > top + ch) 1 else 0, 4)
+        val shown = min(fit, vis.size)
         var y = top
         for (i in 0 until shown) {
-            val cd = cards[i]
-            cardR.set(16 * d, y, w - 16 * d, y + ch)
+            val cd = vis[i]
+            // Being swiped (or flying off, or springing back): it moves sideways and fades as it goes
+            val off = if (cd.item.key == flyKey) flyX else if (i == swipeIdx) swipeDx else 0f
+            val fade = fade0 * (1f - kotlin.math.abs(off) / w).coerceIn(0f, 1f)
+            cardR.set(16 * d + off, y, w - 16 * d + off, y + ch)
             cardRects.add(cardPool[i].apply { set(cardR) })
             val press = if (pressed == i) 1.6f else 1f
             fill.color = Color.argb((min(255f, 64 * press) * fade).toInt(), 30, 60, 140)
@@ -442,14 +493,147 @@ class LockView(private val a: LockActivity) : View(a) {
             }
             y += ch + gap
         }
-        if (cards.size > shown) {
+        if (vis.size > shown) {
             text.textAlign = Paint.Align.CENTER; text.textSize = 11.5f * d; text.letterSpacing = 0.12f
-            text.color = Color.argb((140 * fade).toInt(), 170, 200, 245)
-            c.drawText("+ ${cards.size - shown} more", w / 2, y + 10 * d, text)
+            text.color = Color.argb((140 * fade0).toInt(), 170, 200, 245)
+            c.drawText("+ ${vis.size - shown} more", w / 2, y + 10 * d, text)
             y += 18 * d
         }
         text.textAlign = Paint.Align.CENTER
         return y
+    }
+
+    // ---- Swiping a notification away: it follows the finger sideways; far enough (or flicked) and it flies off and
+    // is cleared, otherwise it springs back. One the app won't let go of always springs back.
+    private var frameDt = 0f
+    private val goneKeys = HashSet<String>()
+    private var shownCards: List<Card> = emptyList()
+    private var swipeIdx = -1
+    private var swipeDx = 0f
+    private var swiping = false
+    private var flyKey: String? = null
+    private var flyX = 0f
+    private var flyDir = 0f
+    private var flyItem: NexusNotifications.Item? = null
+    private var swipeVel: android.view.VelocityTracker? = null
+
+    /** Moves a card flying off or springing back on by a frame; a card that's flown off is cleared. */
+    private fun advanceSwipe(w: Float) {
+        val dt = frameDt
+        if (flyKey != null) {
+            flyX += flyDir * 2600 * d * dt
+            if (kotlin.math.abs(flyX) >= w || dt == 0f && kotlin.math.abs(flyX) >= w * 0.9f) {
+                flyItem?.let { NexusNotifications.dismissAll(it.keys) }
+                flyKey?.let { goneKeys.add(it) }
+                flyKey = null; flyItem = null; flyX = 0f; swipeIdx = -1
+            }
+        } else if (!swiping && swipeIdx >= 0) {
+            swipeDx *= kotlin.math.exp(-dt * 16f)
+            if (kotlin.math.abs(swipeDx) < 0.5f * d) { swipeDx = 0f; swipeIdx = -1 }
+        }
+    }
+
+    // ---- Music: what's playing (album art, song, artist, how far in) with previous / play-pause / next. The
+    // buttons work without unlocking (as on the phone's own lock screen); tapping the song unlocks, then opens it.
+    private val musicR = RectF()
+    private val prevR = RectF()
+    private val playR = RectF()
+    private val nextR = RectF()
+    private val artR = RectF()
+    private val artPath = android.graphics.Path()
+    private val glyph = android.graphics.Path()
+    private val artPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private var musicFor: NowPlaying.Info? = null
+    private var musicW = -1f
+    private var mHead = ""
+    private var mTitle = ""
+    private var mArtist = ""
+    /** What the finger went down on: 0 the song, 1 previous, 2 play / pause, 3 next (or -1). */
+    private var musicPressed = -1
+
+    /** Draws the music card from [top]; returns where what comes after it starts (or [top] if nothing's playing). */
+    private fun drawMusic(c: Canvas, w: Float, top: Float, fade: Float): Float {
+        musicR.setEmpty(); prevR.setEmpty(); playR.setEmpty(); nextR.setEmpty()
+        val m = a.music.info ?: return top
+        val ch = 128 * d
+        musicR.set(16 * d, top, w - 16 * d, top + ch)
+        val press = if (musicPressed == 0) 1.5f else 1f
+        fill.color = Color.argb((min(255f, 78 * press) * fade).toInt(), 30, 60, 140)
+        c.drawRoundRect(musicR, 18 * d, 18 * d, fill)
+        line.strokeWidth = 1f * d; line.color = Color.argb((110 * fade).toInt(), 140, 190, 255)
+        c.drawRoundRect(musicR, 18 * d, 18 * d, line)
+        // Album art (or a note, if the app has none)
+        val asz = 72 * d
+        artR.set(musicR.left + 14 * d, musicR.top + 14 * d, musicR.left + 14 * d + asz, musicR.top + 14 * d + asz)
+        val art = m.art
+        if (art != null && !art.isRecycled) {
+            artPath.reset(); artPath.addRoundRect(artR, 10 * d, 10 * d, android.graphics.Path.Direction.CW)
+            c.save(); c.clipPath(artPath)
+            artPaint.alpha = (255 * fade).toInt().coerceIn(0, 255)
+            c.drawBitmap(art, null, artR, artPaint)
+            c.restore()
+        } else {
+            fill.color = Color.argb((90 * fade).toInt(), 60, 100, 200); c.drawRoundRect(artR, 10 * d, 10 * d, fill)
+            val nx = artR.centerX(); val ny = artR.centerY()
+            fill.color = Color.argb((220 * fade).toInt(), 200, 225, 255)
+            c.drawCircle(nx - 6 * d, ny + 9 * d, 6 * d, fill)
+            c.drawRect(nx - 1 * d, ny - 14 * d, nx + 1.5f * d, ny + 9 * d, fill)
+            c.drawRect(nx - 1 * d, ny - 14 * d, nx + 10 * d, ny - 10 * d, fill)
+        }
+        // The words, shortened to fit (worked out when the song or the width changes)
+        val tx = artR.right + 14 * d; val tw = musicR.right - 14 * d - tx
+        if (m !== musicFor || w != musicW) {
+            musicFor = m; musicW = w
+            tp.typeface = light; tp.letterSpacing = 0.12f; tp.textSize = 10.5f * d
+            mHead = android.text.TextUtils.ellipsize(m.app.uppercase() + if (m.playing) "" else "  ·  PAUSED", tp, tw, android.text.TextUtils.TruncateAt.END).toString()
+            tp.letterSpacing = 0.01f; tp.textSize = 15.5f * d
+            mTitle = android.text.TextUtils.ellipsize(m.title, tp, tw, android.text.TextUtils.TruncateAt.END).toString()
+            tp.textSize = 13 * d
+            mArtist = android.text.TextUtils.ellipsize(m.artist, tp, tw, android.text.TextUtils.TruncateAt.END).toString()
+        }
+        text.textAlign = Paint.Align.LEFT; text.typeface = light
+        text.textSize = 10.5f * d; text.letterSpacing = 0.12f; text.color = Color.argb((150 * fade).toInt(), 170, 200, 245)
+        c.drawText(mHead, tx, musicR.top + 30 * d, text)
+        text.letterSpacing = 0.01f
+        text.textSize = 15.5f * d; text.color = Color.argb((245 * fade).toInt(), 240, 245, 255)
+        c.drawText(mTitle, tx, musicR.top + 52 * d, text)
+        text.textSize = 13 * d; text.color = Color.argb((180 * fade).toInt(), 205, 220, 245)
+        c.drawText(mArtist, tx, musicR.top + 71 * d, text)
+        // How far into the song
+        val py = musicR.top + 84 * d
+        if (m.duration > 0L) {
+            val k = (m.positionNow().toFloat() / m.duration).coerceIn(0f, 1f)
+            line.strokeWidth = 2.5f * d
+            line.color = Color.argb((50 * fade).toInt(), 200, 220, 255); c.drawLine(tx, py, tx + tw, py, line)
+            line.color = Color.argb((220 * fade).toInt(), 170, 210, 255); c.drawLine(tx, py, tx + tw * k, py, line)
+        }
+        // Previous, play / pause, next
+        val cx = tx + tw / 2; val cy = musicR.top + 106 * d; val bw = 44 * d
+        playR.set(cx - bw / 2, cy - bw / 2, cx + bw / 2, cy + bw / 2)
+        prevR.set(playR.left - 12 * d - bw, playR.top, playR.left - 12 * d, playR.bottom)
+        nextR.set(playR.right + 12 * d, playR.top, playR.right + 12 * d + bw, playR.bottom)
+        fill.color = Color.argb(((if (musicPressed == 2) 90 else 45) * fade).toInt(), 140, 190, 255)
+        c.drawCircle(cx, cy, 19 * d, fill)
+        val col = Color.argb((235 * fade).toInt(), 235, 242, 255)
+        fill.color = col
+        if (m.playing) {
+            c.drawRect(cx - 6.5f * d, cy - 8 * d, cx - 2f * d, cy + 8 * d, fill)
+            c.drawRect(cx + 2f * d, cy - 8 * d, cx + 6.5f * d, cy + 8 * d, fill)
+        } else {
+            glyph.reset(); glyph.moveTo(cx - 5 * d, cy - 9 * d); glyph.lineTo(cx + 9 * d, cy); glyph.lineTo(cx - 5 * d, cy + 9 * d); glyph.close()
+            c.drawPath(glyph, fill)
+        }
+        for (side in 0..1) {
+            val r = if (side == 0) prevR else nextR
+            val bx = r.centerX(); val sg = if (side == 0) -1f else 1f
+            fill.color = if (musicPressed == (if (side == 0) 1 else 3)) Color.argb((255 * fade).toInt(), 255, 255, 255) else col
+            glyph.reset()
+            glyph.moveTo(bx - sg * 6 * d, cy - 7 * d); glyph.lineTo(bx + sg * 4 * d, cy); glyph.lineTo(bx - sg * 6 * d, cy + 7 * d); glyph.close()
+            c.drawPath(glyph, fill)
+            c.drawRect(min(bx + sg * 4 * d, bx + sg * 6.5f * d), cy - 7 * d, max(bx + sg * 4 * d, bx + sg * 6.5f * d), cy + 7 * d, fill)
+        }
+        text.textAlign = Paint.Align.CENTER
+        return musicR.bottom + 10 * d
     }
 
     private val glowShader = RadialGradient(0f, 0f, 1f, Color.rgb(60, 120, 255), Color.TRANSPARENT, Shader.TileMode.CLAMP)
@@ -593,6 +777,7 @@ class LockView(private val a: LockActivity) : View(a) {
         // Time stands still while making the cover's picture, and while the cover still shows that picture
         val hold = previewing || (previewed && !notified && android.os.SystemClock.uptimeMillis() < holdUntil)
         val dt = if (lastNs == 0L || hold) 0f else min(0.05f, (now - lastNs) / 1e9f)
+        frameDt = dt
         if (!previewing) lastNs = now
         t += dt
         val w = width.toFloat(); val h = height.toFloat()
@@ -674,7 +859,9 @@ class LockView(private val a: LockActivity) : View(a) {
         // Notifications, under the clock (only if NEXUS has notification access and you've allowed them here)
         val handleY = h - 70 * d
         val cardsTop = clockY + 92 * d + lift * 0.4f
-        val cardsEnd = drawCards(c, w, cardsTop, handleY - 170 * d, fade)
+        val musicEnd = drawMusic(c, w, cardsTop, fade)
+        val cardsEnd = if (musicEnd > cardsTop) drawCards(c, w, musicEnd, max(musicEnd + 64 * d, handleY - 170 * d), fade, room = handleY - 170 * d)
+                       else drawCards(c, w, cardsTop, handleY - 170 * d, fade)
         val hasCards = cardsEnd > cardsTop
         // The cube: in its usual place, or lower and a little smaller when there are notifications
         val cubeTarget = if (hasCards) (cardsEnd + handleY) / 2f - 6 * d else h * 0.6f
@@ -790,26 +977,75 @@ class LockView(private val a: LockActivity) : View(a) {
             MotionEvent.ACTION_DOWN -> {
                 downY = e.y; downX = e.x; downAt = e.eventTime; dragging = true
                 pressed = cardRects.indexOfFirst { it.contains(e.x, e.y) }
+                musicPressed = when {
+                    playR.contains(e.x, e.y) -> 2; prevR.contains(e.x, e.y) -> 1; nextR.contains(e.x, e.y) -> 3
+                    musicR.contains(e.x, e.y) -> 0; else -> -1
+                }
+                swiping = false
+                if (pressed >= 0 && flyKey == null) { swipeIdx = pressed; swipeDx = 0f }
+                swipeVel?.recycle(); swipeVel = android.view.VelocityTracker.obtain().also { it.addMovement(e) }
             }
             MotionEvent.ACTION_MOVE -> {
+                swipeVel?.addMovement(e)
+                val dx = e.x - downX; val dy = e.y - downY
+                // Sideways on a notification: it's being swiped away (not the swipe up to unlock)
+                if (!swiping && !asked && swipeIdx >= 0 && flyKey == null && kotlin.math.abs(dx) > 12 * d && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.2f) {
+                    swiping = true; pressed = -1; musicPressed = -1; dragY = 0f
+                }
+                if (swiping) { swipeDx = dx; invalidate(); return true }
                 dragY = max(0f, downY - e.y)
-                if (kotlin.math.abs(e.y - downY) > 10 * d || kotlin.math.abs(e.x - downX) > 10 * d) pressed = -1
+                if (kotlin.math.abs(dy) > 10 * d || kotlin.math.abs(dx) > 10 * d) { pressed = -1; musicPressed = -1 }
                 if (!asked && dragY > height * 0.18f) { asked = true; performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY); a.requestUnlock() }
             }
             MotionEvent.ACTION_UP -> {
                 dragging = false
+                swipeVel?.addMovement(e); swipeVel?.computeCurrentVelocity(1000)
+                val vx = swipeVel?.xVelocity ?: 0f
+                swipeVel?.recycle(); swipeVel = null
+                if (swiping) {
+                    swiping = false
+                    val cd = shownCards.getOrNull(swipeIdx)
+                    val far = kotlin.math.abs(swipeDx) > width * 0.3f || (kotlin.math.abs(vx) > 900 * d && vx * swipeDx > 0f)
+                    if (cd != null && far && cd.item.clearable) {
+                        flyKey = cd.item.key; flyItem = cd.item; flyX = swipeDx; flyDir = if (swipeDx >= 0f) 1f else -1f
+                        performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+                    }
+                    // (Not far enough, or one the app keeps: it springs back)
+                    invalidate()
+                    return true
+                }
                 val tapped = pressed
                 pressed = -1
+                val mp = musicPressed
+                musicPressed = -1
+                val quick = e.eventTime - downAt < 600
+                // The music buttons: straight away, no unlocking
+                if (!asked && mp > 0 && quick) {
+                    when (mp) { 1 -> a.music.previous(); 2 -> a.music.playPause(); else -> a.music.next() }
+                    performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+                    return true
+                }
+                // The song itself: unlock with the phone's own PIN / fingerprint, then the music app opens
+                if (!asked && mp == 0 && quick) {
+                    asked = true
+                    performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+                    a.openMusic()
+                    return true
+                }
+                if (flyKey == null && !swiping) swipeIdx = -1
                 // A tap on a notification: unlock with the phone's own PIN / fingerprint, then it opens
-                if (!asked && tapped >= 0 && e.eventTime - downAt < 600) {
-                    cards.getOrNull(tapped)?.let { cd ->
+                if (!asked && tapped >= 0 && quick) {
+                    shownCards.getOrNull(tapped)?.let { cd ->
                         asked = true
                         performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
                         a.openNotification(cd.item)
                     }
                 }
             }
-            MotionEvent.ACTION_CANCEL -> { dragging = false; pressed = -1 }
+            MotionEvent.ACTION_CANCEL -> {
+                dragging = false; pressed = -1; musicPressed = -1; swiping = false
+                swipeVel?.recycle(); swipeVel = null
+            }
         }
         return true
     }

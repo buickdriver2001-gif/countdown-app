@@ -16,8 +16,8 @@ import kotlin.math.pow
 import kotlin.math.sin
 
 /**
- * The home screen's background sound: a deep, slowly breathing drone with a soft low wash swelling under it,
- * in the spirit of an old console menu (made up on the phone from scratch: no recordings). It loops seamlessly
+ * The home screen's background music: one of NEXUS's own loops (the deep drone, a warm pad, night wind, the
+ * ocean...; made up on the phone from scratch, see [SoundBank]), chosen in Settings → Sound. It loops seamlessly
  * and costs almost nothing to play (the phone loops it by itself).
  *
  * Plays by itself whenever the NEXUS home screen is in front (on the media volume, so silent or vibrate
@@ -55,13 +55,18 @@ class Ambience(private val c: Context) {
             note("waiting: other sound playing")
             h.postDelayed(retry, retryDelay()); return
         }
-        val data = pcm
+        val want = style(c)
+        val data = pcm?.takeIf { pcmStyle == want }
         if (data == null) {
             if (!building) {
                 building = true
                 Bg.thread {
-                    val made = try { synth() } catch (_: Throwable) { null }
-                    h.post { building = false; if (made != null) { pcm = made; if (wanted) start() } }
+                    val made = try { SoundBank.background(want) } catch (_: Throwable) { null }
+                    h.post {
+                        building = false
+                        if (made != null && want == style(c)) { pcm = made; pcmStyle = want }
+                        if (wanted) start()
+                    }
                 }.start()
             }
             return
@@ -94,6 +99,15 @@ class Ambience(private val c: Context) {
     /** What it last did, for "Report a problem" (each change once, not every look). */
     private var lastNote = ""
     private fun note(what: String) { if (what != lastNote) { lastNote = what; try { LockTrace.log(c, "background sound: $what") } catch (_: Throwable) {} } }
+
+    /** Settings → Sound picked other music: the old loop goes, and the new one is made and fades in (if wanted). */
+    fun restyle() {
+        h.removeCallbacks(fader); h.removeCallbacks(retry)
+        try { track?.stop() } catch (_: Throwable) {}
+        try { track?.release() } catch (_: Throwable) {}
+        track = null; vol = 0f; target = 0f
+        if (wanted) start()
+    }
 
     /** Stops at once and lets go of the sound. */
     fun release() {
@@ -192,59 +206,19 @@ class Ambience(private val c: Context) {
         /** How often it checks whether it can come back after stepping aside. */
         private const val RETRY_MS = 5000L
         @Volatile private var pcm: ShortArray? = null
+        /** Which music [pcm] is. */
+        @Volatile private var pcmStyle = ""
 
         fun enabled(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getBoolean("ambience", true)
         fun setEnabled(c: Context, on: Boolean) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit().putBoolean("ambience", on).apply()
-        /** Background volume: 0.3 low, 0.6 medium (the start), 1 high. */
+        /** Background volume, 0.2 to 1 (Medium, 0.6, to start with). */
         fun volume(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getFloat("ambienceVol", 0.6f)
         fun setVolume(c: Context, v: Float) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit().putFloat("ambienceVol", v).apply()
-        fun volumeName(v: Float) = when { v < 0.45f -> "Low"; v < 0.8f -> "Medium"; else -> "High" }
+        /** Which music plays (one of [SoundBank.BG_IDS]). */
+        fun style(c: Context): String = c.getSharedPreferences("hub", Context.MODE_PRIVATE).getString("ambienceStyle", "drone")
+            ?.takeIf { it in SoundBank.BG_IDS } ?: "drone"
+        fun setStyle(c: Context, id: String) = c.getSharedPreferences("hub", Context.MODE_PRIVATE).edit().putString("ambienceStyle", id).apply()
+        fun styleName(c: Context): String = SoundBank.name(SoundBank.BG_IDS, SoundBank.BG_NAMES, style(c))
 
-        /**
-         * Makes the loop: a deep drone (a low tone of 55 Hz with its harmonics, played twice a quarter of a
-         * hertz apart so it slowly beats and breathes), a soft pad an octave and a fifth above it, and a gentle
-         * low wash of filtered noise that swells and recedes twice a loop. Every movement repeats exactly
-         * every 16 s and the end is blended into the start, so it loops without a seam.
-         */
-        fun synth(): ShortArray {
-            val n = RATE * LOOP_S
-            val x = RATE * 2
-            val out = FloatArray(n + x)
-            val rnd = java.util.Random(7)
-            val lut = FloatArray(8192) { sin(it * 2.0 * PI / 8192).toFloat() }
-            // A sine by cycles (not radians): one table look-up
-            fun sn(cycles: Double): Float { val f = cycles - kotlin.math.floor(cycles); return lut[(f * 8192).toInt() and 8191] }
-            val harm = FloatArray(9) { if (it == 0) 0f else 1f / it.toFloat().pow(1.25f) }
-            var lp = 0f; var lp2 = 0f; var brown = 0f
-            val tau = 2.0 * PI
-            for (i in 0 until n + x) {
-                val t = i.toDouble() / RATE
-                val ph = (t % LOOP_S) / LOOP_S
-                // The drone
-                var drone = 0f
-                for (k in 1..8) drone += harm[k] * (sn(k * 55.0 * t + k * 0.11) + sn(k * 55.25 * t + k * 0.3)) * 0.5f
-                val trem = (0.8 + 0.2 * sin(tau * ph * 2 + 0.3)).toFloat()
-                // The pad
-                val pad = 0.4f * (sn(110.0 * t) + sn(110.25 * t + 0.16)) * 0.5f + 0.28f * (sn(165.0 * t + 0.06) + sn(165.25 * t + 0.35)) * 0.5f
-                // The wash: noise through a soft low-pass that opens (to ~650 Hz) and closes slowly
-                val w = rnd.nextFloat() * 2f - 1f
-                val cut = 250.0 + 400.0 * (0.5 - 0.5 * cos(tau * ph * 2))
-                val a = (1.0 - exp(-tau * cut / RATE)).toFloat()
-                lp += a * (w - lp); lp2 += a * (lp - lp2)
-                val swell = (0.25 + 0.75 * (0.5 - 0.5 * cos(tau * ph * 2 - 0.5)).pow(1.5)).toFloat()
-                brown = (brown + 0.02f * w) * 0.995f
-                out[i] = drone * 0.55f * trem + pad * 0.35f + lp2 * 1.6f * swell + brown * 0.5f
-            }
-            // Blend the extra two seconds back over the start (equal power), so the loop has no seam
-            for (i in 0 until x) {
-                val k = i.toFloat() / x
-                val a = sin(k * PI / 2).toFloat(); val b = cos(k * PI / 2).toFloat()
-                out[i] = out[i] * a + out[n + i] * b
-            }
-            var peak = 1e-6f
-            for (i in 0 until n) peak = maxOf(peak, abs(out[i]))
-            val g = 0.7f * 32767f / peak
-            return ShortArray(n) { (out[it] * g).toInt().coerceIn(-32767, 32767).toShort() }
-        }
     }
 }

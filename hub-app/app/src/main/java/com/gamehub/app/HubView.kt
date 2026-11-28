@@ -211,12 +211,15 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val w = width.toFloat(); val h = height.toFloat()
         val intro = min(1f, t / introLen)
 
-        // Deep blue-black void with a soft horizon glow (drawn once, then reused)
+        // Deep blue-black void with a soft horizon glow (or the archive's gray room; drawn once, then reused)
         c.drawBitmap(backdrop(), 0f, 0f, null)
 
-        drawHaze(c, dt, intro)
-        world.quality = quality
-        world.draw(c, width, height, dt, intro, 0.6f, if (ps2Menu) 0.62f else if (dataGrid) 0.7f else 0.8f)
+        if (archive) drawDust(c, intro)
+        else {
+            drawHaze(c, dt, intro)
+            world.quality = quality
+            world.draw(c, width, height, dt, intro, 0.6f, if (ps2Menu) 0.62f else if (dataGrid) 0.7f else 0.8f)
+        }
         // (A panel open: the menu steps back; the panel's own layer shows the crystals)
         crystalK = if (panelOpen) min(1f, crystalK + dt * 2.5f) else max(0f, crystalK - dt * 3f)
         // Crystals over the towers, in the open space above the menu: a carousel seen from a little above
@@ -242,16 +245,22 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 c.drawRect(-row.centerX() / rad, -row.centerY() / rad, (w - row.centerX()) / rad, (h - row.centerY()) / rad, fill); fill.shader = null
                 c.restore()
             }
-            fill.color = Color.argb((255 * (k * k)).toInt().coerceIn(0, 255), 2, 4, 14)
+            if (archive) fill.color = Color.argb((235 * (k * k)).toInt().coerceIn(0, 255), 40, 42, 47)
+            else fill.color = Color.argb((255 * (k * k)).toInt().coerceIn(0, 255), 2, 4, 14)
             c.drawRect(0f, 0f, w, h, fill)
             // The app starts opening just after the glow begins (no waiting for the animation to finish);
-            // the rest of the animation plays underneath as the app rises in over it
-            if (k >= LAUNCH_START || launchFlash <= 0f) { val p = pending; pending = null; p?.let(onPick) }
+            // the rest of the animation plays underneath as the app rises in over it. (Archive: it grows out of the
+            // block where it's flown to.)
+            if (k >= LAUNCH_START || launchFlash <= 0f) {
+                if (archive && pending != null && !flyRect.isEmpty) launchRect.set(flyRect)
+                val p = pending; pending = null; p?.let(onPick)
+            }
         }
         if (enterFade > 0f) {
             enterFade -= dt
             val r = (enterFade / ENTER_LEN).coerceIn(0f, 1f)
-            fill.color = Color.argb((255 * r * r).toInt(), 2, 4, 14)
+            if (archive) fill.color = Color.argb((235 * r * r).toInt(), 40, 42, 47)
+            else fill.color = Color.argb((255 * r * r).toInt(), 2, 4, 14)
             c.drawRect(0f, 0f, w, h, fill)
         }
         // Fade in from black at start-up
@@ -437,15 +446,19 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     }
 
     private var bgBmp: android.graphics.Bitmap? = null
+    /** Whether [bgBmp] is the archive's gray room. */
+    private var bgArchive = false
 
     private fun backdrop(): android.graphics.Bitmap {
         val cur = bgBmp
-        if (cur != null && cur.width == width && cur.height == height) return cur
+        if (cur != null && cur.width == width && cur.height == height && bgArchive == archive) return cur
         cur?.recycle()
         val w = width.toFloat(); val h = height.toFloat()
         val b = android.graphics.Bitmap.createBitmap(width.coerceAtLeast(1), height.coerceAtLeast(1), android.graphics.Bitmap.Config.ARGB_8888)
         val c = Canvas(b)
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        bgArchive = archive
+        if (archive) { grayRoom(c, w, h, p); bgBmp = b; return b }
         p.shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(Color.rgb(2, 3, 10), Color.rgb(6, 12, 34), Color.rgb(1, 2, 6)), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
         c.drawRect(0f, 0f, w, h, p)
         p.shader = RadialGradient(w / 2, h * 0.45f, w * 0.9f, intArrayOf(Color.argb(80, 40, 90, 220), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
@@ -959,6 +972,13 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
      * again to open it. Uses the tiles' grid underneath (scrolling, holding to move, the notification boxes).
      */
     var dataGrid = false
+    /**
+     * Archive home style (with [dataGrid]'s layout and taps): a soft gray room with dust drifting through it, each app
+     * a solid 3D block (its icon on the front, shaded sides) floating over its shadow. Tap one to choose it: it lifts,
+     * glows and turns all the way round. Tap it again: it spins up and flies toward you as the others fade, then the
+     * app opens.
+     */
+    var archive = false
     /** PS2 menu: room above the first line and below the last, so each can sit in the middle. */
     private var listPad = 0f
     /** PS2 menu: the distance from one line to the next. */
@@ -1013,7 +1033,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         cellW = (right - left - gap * (cols - 1)) / cols
         cellH = if (list) 56 * d else if (grid) cellW else ((listBottom - listTop - gap * (gridRows - 1)) / gridRows).coerceIn(cellW * 0.7f, cellW * 1.3f)
         // (The chosen app's icon keeps turning; faster as it opens)
-        if (grid) gridSpin = (gridSpin + dt * (if (launchFlash > 0f) 760f else 95f)) % 360f
+        if (grid) gridSpin = (gridSpin + dt * (if (launchFlash > 0f) (if (archive) 1150f else 760f) else if (archive) 80f else 95f)) % 360f
         // (Nothing chosen: the next one chosen starts its turn facing you)
         if (selected < 0) gridSpinFor = -2
         val stepX = cellW + gap; val stepY = cellH + gap
@@ -1056,7 +1076,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             }
             // (A–Z order: the others stay where they are, and it goes back to its place)
             target = if (canReorder) hit.coerceIn(0, rest.size) else moveIndex.coerceIn(0, rest.size)
-            if (target != lastTarget) { if (lastTarget >= 0) sfx.tick(); lastTarget = target }
+            if (target != lastTarget) { if (lastTarget >= 0) sfx.scroll(); lastTarget = target }
             order.addAll(rest); order.add(target, moveIndex)
             pos = pack(order, cols)
         } else {
@@ -1121,7 +1141,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                 val now = android.os.SystemClock.uptimeMillis()
                 if (lastCentred >= 0 && a > 0.5f && now - lastTickAt > 48) {
                     lastTickAt = now
-                    sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                    sfx.scroll(); performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
                 }
                 lastCentred = centred
             }
@@ -1159,6 +1179,12 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             if (idx != moveIndex && ar.bottom > listTop - 10 * d && ar.top < listBottom + 10 * d) {
                 if (list) drawListItem(c, games[idx], ar, idx == downRow && !dragging && moveIndex < 0 && !longFired, a,
                     if (idx == launchIdx && launchFlash > 0f) 1f - launchFlash / LAUNCH_LEN else -1f, idx == selected && moveIndex < 0)
+                else if (grid && archive) {
+                    // (The one opening flies out of the list: drawn after it, unclipped)
+                    if (idx == selected && launchFlash > 0f) { flyFrom.set(ar); flyIdx = idx }
+                    else drawArchiveCell(c, games[idx], ar, idx == selected && moveIndex < 0,
+                        idx == downRow && !dragging && moveIndex < 0 && !longFired, a * archiveFade(), idx)
+                }
                 else if (grid) drawDataCell(c, games[idx], ar, idx == selected && moveIndex < 0,
                     idx == downRow && !dragging && moveIndex < 0 && !longFired, a, idx)
                 else drawTile(c, games[idx], ar, idx == selected && moveIndex < 0, a)
@@ -1167,6 +1193,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         for (hi in games.indices) rows.add(hitPool[hi])
         if (settling) { settleT -= dt; if (settleT <= 0f) settling = false }
         c.restore()
+        // Archive: the app being opened, flying toward you
+        if (archive && flyIdx >= 0 && launchFlash > 0f) games.getOrNull(flyIdx)?.let { drawArchiveFly(c, it, w, h, a) }
+        else flyRect.setEmpty()
+        flyIdx = -1
         // Data grid: the chosen app's name at the top
         if (grid) drawGridTitle(c, w, listTop - 18 * d, a)
         // No apps on the home screen at all: say how to add some
@@ -1187,6 +1217,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             val r = RectF(lastX - grabFx * tw, moveY - grabFy * th, lastX - grabFx * tw + tw, moveY - grabFy * th + th)
             c.save(); c.scale(1.05f, 1.05f, r.centerX(), r.centerY())
             if (list) drawListItem(c, g, r, false, a, -1f, false)
+            else if (grid && archive) drawArchiveCell(c, g, r, true, false, a, moveIndex)
             else if (grid) drawDataCell(c, g, r, true, false, a, moveIndex)
             else {
                 glow(c, r.centerX(), r.centerY(), max(r.width(), r.height()) * 0.9f, 150)
@@ -1667,6 +1698,169 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         c.restore()
     }
 
+    // ------------------------------------------------------------------ archive (gray room, 3D blocks)
+    private val flyFrom = RectF()
+    /** Where the block flying out (an app opening from the archive) is now: the app grows out of it. */
+    private val flyRect = RectF()
+    private var flyIdx = -1
+    private val faceM = android.graphics.Matrix()
+    private val backM = android.graphics.Matrix()
+    private val blockSrc = FloatArray(8)
+    private val blockF = FloatArray(8)
+    private val blockB = FloatArray(8)
+    private val sidePath = android.graphics.Path()
+    private val plateR = RectF()
+    private val iconR = RectF()
+    private val faceOrder = IntArray(4)
+    private val faceNear = FloatArray(4)
+    private val plateShader = LinearGradient(0f, 0f, 0f, 1f, Color.rgb(246, 247, 250), Color.rgb(192, 196, 204), Shader.TileMode.CLAMP)
+    private val plateMat = android.graphics.Matrix()
+    private val dustSeed: FloatArray by lazy { val r = java.util.Random(3); FloatArray(48 * 4) { r.nextFloat() } }
+
+    /** While an app opens from the archive, the other blocks fade away. */
+    private fun archiveFade(): Float = if (launchFlash > 0f) (launchFlash / LAUNCH_LEN).coerceIn(0f, 1f) else 1f
+
+    /** The archive's room: a soft gray, lit from above the middle, with a faint horizon and a darker floor. */
+    private fun grayRoom(c: Canvas, w: Float, h: Float, p: Paint) {
+        p.shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(Color.rgb(98, 102, 110), Color.rgb(82, 86, 94), Color.rgb(60, 63, 70), Color.rgb(36, 38, 43)),
+            floatArrayOf(0f, 0.4f, 0.66f, 1f), Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p)
+        p.shader = RadialGradient(w / 2, h * 0.3f, w * 0.95f, intArrayOf(Color.argb(70, 235, 238, 245), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p)
+        val hy = h * 0.66f
+        p.shader = LinearGradient(0f, hy, 0f, h, intArrayOf(Color.TRANSPARENT, Color.argb(70, 0, 0, 0)), null, Shader.TileMode.CLAMP)
+        c.drawRect(0f, hy, w, h, p)
+        p.shader = LinearGradient(0f, 0f, w, 0f, intArrayOf(Color.TRANSPARENT, Color.argb(46, 255, 255, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        c.drawRect(0f, hy - 0.75f * d, w, hy + 0.75f * d, p)
+        p.shader = RadialGradient(w / 2, h * 0.45f, max(w, h) * 0.78f, intArrayOf(Color.TRANSPARENT, Color.TRANSPARENT, Color.argb(130, 14, 15, 18)),
+            floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, h, p)
+        p.shader = null
+    }
+
+    /** Archive: specks of dust drifting slowly up through the light. */
+    private fun drawDust(c: Canvas, intro: Float) {
+        val w = width.toFloat(); val h = height.toFloat()
+        val sd = dustSeed
+        for (i in 0 until 48) {
+            val sx = sd[i * 4]; val sy = sd[i * 4 + 1]; val ss = sd[i * 4 + 2]; val sp = sd[i * 4 + 3]
+            val speed = 0.006f + 0.018f * sp
+            val y = ((sy - t * speed) % 1f + 1f) % 1f
+            val x = sx * w + sin(t * (0.2f + sp * 0.3f) + i) * 14 * d
+            val k = 0.4f + 0.6f * (1f - y)
+            fill.color = Color.argb((intro * (18 + 50 * ss) * k).toInt().coerceIn(0, 255), 240, 242, 248)
+            c.drawCircle(x, y * h, (0.8f + 2.2f * ss) * d, fill)
+        }
+    }
+
+    /** One face of a block: turned [angle] degrees about the upright, [z] in front of (−) or behind (+) its middle. */
+    private fun faceMatrix(m: android.graphics.Matrix, angle: Float, z: Float, cx: Float, cy: Float) {
+        cam.save(); cam.rotateY(angle); cam.translate(0f, 0f, z); cam.getMatrix(m); cam.restore()
+        m.preTranslate(-cx, -cy); m.postTranslate(cx, cy)
+    }
+
+    /**
+     * One app in the archive: a block floating over its shadow, swaying a little. Chosen: it lifts, glows, turns all
+     * the way round, and a soft ring of light shows on the floor under it.
+     */
+    private fun drawArchiveCell(c: Canvas, g: GameEntry, r: RectF, sel: Boolean, pressed: Boolean, a: Float, idx: Int) {
+        if (a <= 0.01f) return
+        if (selected != selIndex) { selIndex = selected; selSince = t }
+        val selK = if (sel) min(1f, (t - selSince) / 0.25f) else 0f
+        if (sel && gridSpinFor != idx) { gridSpinFor = idx; gridSpin = 0f }
+        val size = min(r.width(), r.height()) * 0.56f * (if (pressed) 0.94f else 1f) * (1f + 0.08f * selK)
+        val cx = r.centerX()
+        val cy = r.centerY() - 4 * d + sin(t * 1.5f + idx * 0.9f) * 2.5f * d - 7 * d * selK
+        val angle = if (sel) gridSpin else sin(t * 0.8f + idx * 1.3f) * 24f
+        drawBlock(c, g, cx, cy, size, angle, a, selK, r.bottom - r.height() * 0.1f)
+    }
+
+    /** Archive: the app being opened spins up and flies toward you, growing, to the middle of the screen. */
+    private fun drawArchiveFly(c: Canvas, g: GameEntry, w: Float, h: Float, a: Float) {
+        val k = (1f - launchFlash / LAUNCH_LEN).coerceIn(0f, 1f)
+        val e = k * k * (3f - 2f * k)
+        val s0 = min(flyFrom.width(), flyFrom.height()) * 0.56f * 1.08f
+        val x0 = flyFrom.centerX(); val y0 = flyFrom.centerY() - 11 * d
+        val cx = x0 + (w / 2 - x0) * e
+        val cy = y0 + (h * 0.44f - y0) * e
+        val size = s0 * (1f + 1.7f * e * e)
+        glow(c, cx, cy, size * (1.2f + e), (140 * a * (1f - 0.5f * k)).toInt())
+        drawBlock(c, g, cx, cy, size, gridSpin, a, 1f, -1f)
+        flyRect.set(cx - size / 2, cy - size / 2, cx + size / 2, cy + size / 2)
+    }
+
+    /**
+     * A solid block of size [s] (its depth a fifth of that) turned [angle] degrees, its icon on the front. Its four
+     * upright faces are drawn farthest first, judged by how tall their edges look (the nearer an edge, the taller),
+     * so it reads as solid from every side. [floorY] > 0: its shadow (and, chosen, a ring of light) on the floor there.
+     */
+    private fun drawBlock(c: Canvas, g: GameEntry, cx: Float, cy: Float, s: Float, angle: Float, a: Float, selK: Float, floorY: Float) {
+        val half = s / 2; val depth = s * 0.2f
+        val rad = s * 0.1f
+        faceMatrix(faceM, angle, -depth / 2, cx, cy)
+        faceMatrix(backM, angle, depth / 2, cx, cy)
+        // The upright edges (left top, left bottom, right top, right bottom), a little in from the rounded corners
+        val ey = half - rad * 0.5f
+        blockSrc[0] = cx - half; blockSrc[1] = cy - ey; blockSrc[2] = cx - half; blockSrc[3] = cy + ey
+        blockSrc[4] = cx + half; blockSrc[5] = cy - ey; blockSrc[6] = cx + half; blockSrc[7] = cy + ey
+        faceM.mapPoints(blockF, blockSrc); backM.mapPoints(blockB, blockSrc)
+        fun len(p: FloatArray, i: Int) = kotlin.math.hypot(p[i + 2] - p[i], p[i + 3] - p[i + 1])
+        val fl = len(blockF, 0); val fr = len(blockF, 4); val bl = len(blockB, 0); val br = len(blockB, 4)
+        // Shadow and floor light first
+        if (floorY > 0f) {
+            var minX = Float.MAX_VALUE; var maxX = -Float.MAX_VALUE
+            for (i in 0 until 8 step 2) { minX = min(minX, min(blockF[i], blockB[i])); maxX = max(maxX, max(blockF[i], blockB[i])) }
+            val sw = (maxX - minX) * 0.5f * 0.62f
+            spinR.set(cx - sw, floorY - 3.5f * d, cx + sw, floorY + 3.5f * d)
+            fill.color = Color.argb((85 * a).toInt(), 8, 9, 12); c.drawOval(spinR, fill)
+            if (selK > 0f) {
+                spinR.set(cx - half * 0.95f, floorY - 6 * d, cx + half * 0.95f, floorY + 6 * d)
+                line.strokeWidth = 1.5f * d; line.color = Color.argb((150 * a * selK).toInt(), 235, 240, 250)
+                c.drawOval(spinR, line)
+            }
+        }
+        if (selK > 0f) glow(c, cx, cy, s * 1.05f, (70 * a * selK).toInt())
+        // Farthest face first: 0 front, 1 back, 2 left side, 3 right side
+        faceNear[0] = fl + fr; faceNear[1] = bl + br; faceNear[2] = fl + bl; faceNear[3] = fr + br
+        for (i in 0 until 4) faceOrder[i] = i
+        for (i in 1 until 4) { var j = i; while (j > 0 && faceNear[faceOrder[j - 1]] > faceNear[faceOrder[j]]) { val tmp = faceOrder[j]; faceOrder[j] = faceOrder[j - 1]; faceOrder[j - 1] = tmp; j-- } }
+        val alpha = (255 * a).toInt().coerceIn(0, 255)
+        for (f in faceOrder) when (f) {
+            0, 1 -> {
+                c.save(); c.concat(if (f == 0) faceM else backM)
+                plateR.set(cx - half, cy - half, cx + half, cy + half)
+                if (f == 0) {
+                    plateMat.setScale(1f, s); plateMat.postTranslate(0f, cy - half); plateShader.setLocalMatrix(plateMat)
+                    fill.color = Color.argb(alpha, 255, 255, 255); fill.shader = plateShader
+                    c.drawRoundRect(plateR, rad, rad, fill); fill.shader = null
+                    line.strokeWidth = 1f * d; line.color = Color.argb((50 * a).toInt(), 0, 0, 0)
+                    c.drawRoundRect(plateR, rad, rad, line)
+                    val ins = s * 0.13f
+                    iconR.set(plateR.left + ins, plateR.top + ins, plateR.right - ins, plateR.bottom - ins)
+                    drawSpinIcon(c, g, iconR, a * (if (g.installed) 1f else 0.45f))
+                } else {
+                    fill.color = Color.argb(alpha, 146, 150, 158)
+                    c.drawRoundRect(plateR, rad, rad, fill)
+                    val ins = s * 0.13f
+                    iconR.set(plateR.left + ins, plateR.top + ins, plateR.right - ins, plateR.bottom - ins)
+                    drawSpinIcon(c, g, iconR, a * 0.22f)
+                }
+                c.restore()
+            }
+            else -> {
+                val i = if (f == 2) 0 else 4
+                sidePath.reset()
+                sidePath.moveTo(blockF[i], blockF[i + 1]); sidePath.lineTo(blockF[i + 2], blockF[i + 3])
+                sidePath.lineTo(blockB[i + 2], blockB[i + 3]); sidePath.lineTo(blockB[i], blockB[i + 1]); sidePath.close()
+                // Lit from the left: a side on the left of the block is lighter
+                val mid = (blockF[i] + blockB[i]) / 2
+                val lit = mid < cx
+                fill.color = if (lit) Color.argb(alpha, 176, 180, 188) else Color.argb(alpha, 112, 116, 124)
+                c.drawPath(sidePath, fill)
+            }
+        }
+    }
+
     /** An app's icon on its own (built-in apps' icons on their little card). */
     private fun drawSpinIcon(c: Canvas, g: GameEntry, r: RectF, a: Float) {
         val dr = g.drawable
@@ -1706,7 +1900,8 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
         val name = titleText
         text.textAlign = Paint.Align.LEFT; text.textSize = 19 * d; text.letterSpacing = 0.06f
         text.color = Color.argb((240 * a * k).toInt(), 235, 242, 255)
-        text.setShadowLayer(10 * d, 0f, 0f, Color.argb((200 * a * k).toInt(), 80, 140, 255))
+        if (archive) text.setShadowLayer(6 * d, 0f, 1 * d, Color.argb((150 * a * k).toInt(), 20, 22, 28))
+        else text.setShadowLayer(10 * d, 0f, 0f, Color.argb((200 * a * k).toInt(), 80, 140, 255))
         c.drawText(name, 20 * d + (1f - k) * 8 * d, base, text)
         text.clearShadowLayer()
     }
@@ -2203,9 +2398,9 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
             A11Y_GEAR -> { sfx.tick(); onSettings() }
             in A11Y_BOX until A11Y_BOX + MAX_BOXES -> {
                 val i = id - A11Y_BOX; val b = boxes.getOrNull(i) ?: return false
-                sfx.confirm(); onNotification(b.item, RectF(boxRects[i]))
+                sfx.open(); onNotification(b.item, RectF(boxRects[i]))
             }
-            else -> { val g = games.getOrNull(id) ?: return false; sfx.confirm(); onPick(g) }
+            else -> { val g = games.getOrNull(id) ?: return false; sfx.open(); onPick(g) }
         }
         return true
     }
@@ -2483,7 +2678,7 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                         // A flick glides on: the notifications if they took the last of the swipe, otherwise the list
                         if (boxInner && innerMax > 0f) innerVel = -vy else scrollVel = -vy
                     } else if (tap && !caught && !longFired && launchFlash <= 0f && t > readyT) {
-                        if (b != null && bi < boxShown && !boxRects[bi].isEmpty) { sfx.confirm(); onNotification(b.item, RectF(boxRects[bi])) }
+                        if (b != null && bi < boxShown && !boxRects[bi].isEmpty) { sfx.open(); onNotification(b.item, RectF(boxRects[bi])) }
                     }
                     boxSwiping = false; boxVertical = false; boxInner = false; dragging = false; downRow = -1
                     tracker?.recycle(); tracker = null
@@ -2527,19 +2722,19 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
                             selected = r
                             snapTo = target // (it ticks as each app passes the middle on the way)
                             if (kotlin.math.abs(target - scroll) <= listStep * 0.45f) {
-                                sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                                sfx.scroll(); performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
                             }
                         } else {
                             snapTo = target
-                            sfx.confirm()
+                            sfx.open()
                             performHapticFeedback(if (android.os.Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.CONFIRM else android.view.HapticFeedbackConstants.VIRTUAL_KEY)
                             launchIdx = r; pending = games[r]; launchFlash = LAUNCH_LEN; rows.getOrNull(r)?.let { launchRect.set(it) }
                         }
                         performClick()
                     } else if (r >= 0 && r == downRow) {
-                        if (r != selected) { selected = r; sfx.tick(); performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK) }
+                        if (r != selected) { selected = r; sfx.scroll(); performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK) }
                         else {
-                            sfx.confirm()
+                            sfx.open()
                             performHapticFeedback(if (android.os.Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.CONFIRM else android.view.HapticFeedbackConstants.VIRTUAL_KEY)
                             pending = games[r]; launchFlash = LAUNCH_LEN; rows.getOrNull(r)?.let { launchRect.set(it) }
                         }
@@ -2596,10 +2791,10 @@ class HubView(context: Context, var games: List<GameEntry>, private val onPick: 
     val launchRect = RectF()
 
     /** Tile tap → the screen settles into the dark (then the app rises out of it). */
-    private val LAUNCH_LEN = 0.34f
+    private val LAUNCH_LEN: Float get() = if (archive) 0.62f else 0.34f
     /** How far into the launch glow the app is asked to open. */
     /** How far into the confirm flash the app starts opening (long enough to see it was chosen; then NEXUS's fade). */
-    private val LAUNCH_START = 0.35f
+    private val LAUNCH_START: Float get() = if (archive) 0.55f else 0.35f
     /** Coming back from an app: a short fade up from the dark. */
     private val ENTER_LEN = 0.32f
 }

@@ -165,7 +165,8 @@ class MainActivity : Activity(), NexusUi.NavHost {
         val grid = prefs.getString("grid", "4x6")!!.split("x")
         hub.gridCols = grid.getOrNull(0)?.toIntOrNull() ?: 4; hub.gridRows = grid.getOrNull(1)?.toIntOrNull() ?: 6
         hub.ps2Menu = homeStyle() == "ps2"
-        hub.dataGrid = homeStyle() == "grid"
+        hub.dataGrid = homeStyle() == "grid" || homeStyle() == "archive"
+        hub.archive = homeStyle() == "archive"
         hub.notifIcons = NexusNotifications.barOn(this)
         hub.notifBoxes = NexusNotifications.boxesOn(this)
         hub.games = list
@@ -502,12 +503,12 @@ class MainActivity : Activity(), NexusUi.NavHost {
             opts.add(NexusUi.Option("1.  Turn on helper", primary = true) { openAccessibility() })
             opts.add(NexusUi.Option("2.  Allow restricted settings (if asked)") { openAppInfo() })
         } else opts.add(NexusUi.Option("Turn helper off") { openAccessibility() })
-        opts.add(NexusUi.Option("Square button opens NEXUS Recent Apps:  " + (if (replace) "ON" else "OFF")) {
+        opts.add(NexusUi.Option("Square button opens NEXUS Recent Apps:  " + onOff(replace)) {
             prefs.edit().putBoolean("replaceRecents", !replace).apply()
             openAppsSettings()
         })
         val full = NexusAccessibility.fullCloseOn(this)
-        opts.add(NexusUi.Option("Fully close apps you swipe away:  " + (if (full) "ON" else "OFF")) {
+        opts.add(NexusUi.Option("Fully close apps you swipe away:  " + onOff(full)) {
             prefs.edit().putBoolean("fullClose", !full).apply()
             openAppsSettings()
         })
@@ -634,7 +635,10 @@ class MainActivity : Activity(), NexusUi.NavHost {
             "Left alone, it fades out and the screen turns off (after 8 seconds unless you change it below).\n\n" +
             "Notifications: NEXUS can show them on its lock screen too (tap one, unlock, and it opens). It follows the same " +
             "privacy rules as your phone's lock screen: apps set to stay off the lock screen never appear, and with " +
-            "\"Hide sensitive content\" private notifications only show the app's name. Nothing is stored or sent anywhere." +
+            "\"Hide sensitive content\" private notifications only show the app's name. Swipe one sideways to clear it. " +
+            "Nothing is stored or sent anywhere.\n\n" +
+            "Music playing: what's on in Apple Music (or any music app) shows with its album art, and play, pause and skip " +
+            "work without unlocking. Tap the song to unlock and open it." +
             (if (!helper) "\n\nNeeds the Recent Apps helper switched on (Settings → Recent Apps helper)." else "")
         val opts = ArrayList<NexusUi.Option>()
         if (!helper) opts.add(NexusUi.Option("Turn on helper first", primary = true) { openAppsSettings() })
@@ -667,6 +671,13 @@ class MainActivity : Activity(), NexusUi.NavHost {
                 lockSettings()
             })
             opts.add(NexusUi.Option("Send a test notification") { sendTestNotification() })
+            // What's playing in a music app
+            val music = LockActivity.musicOn(this)
+            opts.add(NexusUi.Option("Music playing", value = onOff(music)) {
+                prefs.edit().putBoolean("lockMusic", !music).apply()
+                NexusNotifications.refresh()
+                lockSettings()
+            })
         }
         NexusUi.panel(this, "NEXUS lock screen", msg, opts, cancel = "Back", back = { homeSettings() })
     }
@@ -787,52 +798,56 @@ class MainActivity : Activity(), NexusUi.NavHost {
         }.start()
     }
 
-    private fun onOff(b: Boolean) = if (b) "ON" else "OFF"
+    private fun onOff(b: Boolean) = if (b) "On" else "Off"
 
     /** The gear: NEXUS settings, in a few plain sections (each opens its own page; Back returns here). */
     private fun homeSettings() {
         val isHome = HomeMode.isDefault(this)
         val version = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Exception) { "" }
         val helper = when {
-            Recents.serviceOn(this) && helperRunning() -> "ON"
-            Recents.serviceOn(this) -> "STOPPED"
-            else -> "OFF"
+            Recents.serviceOn(this) && helperRunning() -> "On"
+            Recents.serviceOn(this) -> "Stopped"
+            else -> "Off"
         }
-        val amb = Ambience.enabled(this); val menu = prefs.getBoolean("menuSounds", true)
-        val sound = when { amb && menu -> "ON"; amb -> "background only"; menu -> "menu only"; else -> "OFF" }
-        NexusUi.panel(this, "Settings", "Version $version", listOfNotNull(
+        val back = { homeSettings() }
+        NexusUi.panel(this, "Settings", "NEXUS $version", listOfNotNull(
             if (!isHome) NexusUi.Option("Make NEXUS my home screen", primary = true) { openHomeSettings() } else null,
-            NexusUi.Option("Home screen:  " + styleName()) { homeScreenSettings() },
-            NexusUi.Option("App order:  " + (if (alphabetical()) "A–Z" else "your own")) { toggleAlphabetical(back = { homeSettings() }) },
-            NexusUi.Option("Notifications:  " + notifSummary()) { notificationSettings(back = { homeSettings() }) },
-            NexusUi.Option("Lock screen:  " + onOff(LockActivity.enabled(this))) { lockSettings() },
-            NexusUi.Option("Recent Apps helper:  $helper") { openAppsSettings() },
-            NexusUi.Option("Buttons in apps:  " + onOff(NexusAccessibility.appButtonsOn(this))) { buttonSettings() },
-            NexusUi.Option("Sound:  $sound") { soundSettings() },
-            NexusUi.Option("Help") { helpSettings() },
-            NexusUi.Option("System: device info & tests") { openSystem() },
+            NexusUi.Option.header("Home screen"),
+            NexusUi.Option("Style & layout", value = styleName(), more = true) { homeScreenSettings() },
+            NexusUi.Option("App order", value = if (alphabetical()) "A–Z" else "Your own") { toggleAlphabetical(back = back) },
+            NexusUi.Option("Notifications", value = notifSummary(), more = true) { notificationSettings(back = back) },
+            NexusUi.Option.header("Sound"),
+            NexusUi.Option("Sounds & music", value = soundSummary(), more = true) { soundSettings() },
+            NexusUi.Option.header("Phone"),
+            NexusUi.Option("Lock screen", value = onOff(LockActivity.enabled(this)), more = true) { lockSettings() },
+            NexusUi.Option("Recent Apps helper", value = helper, more = true) { openAppsSettings() },
+            NexusUi.Option("Buttons in apps", value = onOff(NexusAccessibility.appButtonsOn(this)), more = true) { buttonSettings() },
+            NexusUi.Option.header("More"),
+            NexusUi.Option("Help & guide", more = true) { helpSettings() },
+            NexusUi.Option("Device info & tests", more = true) { openSystem() },
             NexusUi.Option("Close NEXUS", danger = true) { askClose() }
         ), cancel = "Done")
     }
 
-    /** Settings → Home screen. */
+    /** Settings → Style & layout. */
     private fun homeScreenSettings() {
         val isHome = HomeMode.isDefault(this)
-        NexusUi.panel(this, "Home screen", null, listOfNotNull(
-            NexusUi.Option(if (isHome) "NEXUS is your home screen  ✓" else "Make NEXUS my home screen", primary = !isHome) { openHomeSettings() },
-            NexusUi.Option("Style:  " + styleName()) { chooseHomeStyle() },
-            if (homeStyle() != "tiles") null else NexusUi.Option("Grid size:  ${prefs.getString("grid", "4x6")!!.replace("x", " × ")}") { chooseGrid() },
-            NexusUi.Option("Match wallpaper to NEXUS") { askWallpaper() },
-            NexusUi.Option("Home screen when NEXUS is closed") { chooseNormalHome() },
+        NexusUi.panel(this, "Style & layout", null, listOfNotNull(
+            if (isHome) null else NexusUi.Option("Make NEXUS my home screen", primary = true) { openHomeSettings() },
+            NexusUi.Option("Style", value = styleName(), more = true) { chooseHomeStyle() },
+            if (homeStyle() != "tiles") null else NexusUi.Option("Grid size", value = prefs.getString("grid", "4x6")!!.replace("x", " × "), more = true) { chooseGrid() },
+            NexusUi.Option("Match wallpaper to NEXUS", more = true) { askWallpaper() },
+            NexusUi.Option("Home screen when NEXUS is closed", more = true) { chooseNormalHome() },
+            if (isHome) NexusUi.Option("NEXUS is your home screen", value = "✓") { openHomeSettings() } else null,
             if (hub.games.isEmpty()) null else NexusUi.Option("Remove all apps from home screen", danger = true) { askClearHome() }
         ), cancel = "Back", back = { homeSettings() })
     }
 
     /** What NEXUS shows of your notifications on the home screen, in a word or two (for the Settings lists). */
     private fun notifSummary(): String {
-        if (!NexusNotifications.granted(this)) return "allow access"
+        if (!NexusNotifications.granted(this)) return "Allow access"
         val boxes = NexusNotifications.boxesOn(this); val icons = NexusNotifications.barOn(this)
-        return when { boxes && icons -> "boxes & icons"; boxes -> "boxes"; icons -> "icons"; else -> "OFF" }
+        return when { boxes && icons -> "Boxes & icons"; boxes -> "Boxes"; icons -> "Icons"; else -> "Off" }
     }
 
     /** Settings → Notifications: the boxes at the top of the home screen and the icons in the status bar. */
@@ -869,31 +884,86 @@ class MainActivity : Activity(), NexusUi.NavHost {
             ), cancel = "Back", back = { homeSettings() })
     }
 
-    /** Settings → Sound. */
-    private fun soundSettings() {
-        val amb = Ambience.enabled(this); val menu = prefs.getBoolean("menuSounds", true)
-        NexusUi.panel(this, "Sound",
-            "Background sound: a deep, soft drone while you're on the home screen. It plays on your media volume " +
-                "(silent or vibrate don't stop it), and pauses while music or videos play and during calls and alarms.\n\n" +
-                "Menu sounds: soft taps as you move around NEXUS, and the start-up chime (quiet while your phone is on silent or vibrate).",
-            listOf(
-                NexusUi.Option("Background sound:  " + onOff(amb)) {
-                    Ambience.setEnabled(this, !amb)
-                    if (!amb) ambience.start() else ambience.stop()
-                    soundSettings()
-                },
-                NexusUi.Option("Background volume:  " + Ambience.volumeName(Ambience.volume(this))) {
-                    val v = Ambience.volume(this)
-                    Ambience.setVolume(this, when { v < 0.45f -> 0.6f; v < 0.8f -> 1f; else -> 0.3f })
-                    ambience.refreshVolume()
-                    soundSettings()
-                },
-                NexusUi.Option("Menu sounds:  " + onOff(menu)) {
-                    prefs.edit().putBoolean("menuSounds", !menu).apply(); Sfx.on = !menu
-                    soundSettings()
-                }
-            ), cancel = "Back", back = { homeSettings() })
+    /** Settings: the sounds in a word or two. */
+    private fun soundSummary(): String {
+        val music = Ambience.enabled(this)
+        return when {
+            Sfx.on && music -> Ambience.styleName(this)
+            music -> Ambience.styleName(this) + ", no clicks"
+            Sfx.on -> "Clicks only"
+            else -> "Off"
+        }
     }
+
+    /** Settings → Sounds & music: each sound picked from a list (tap to hear it), and how loud. */
+    private fun soundSettings() {
+        val menu = Sfx.on; val music = Ambience.enabled(this)
+        fun click(id: String) = SoundBank.name(SoundBank.CLICK_IDS, SoundBank.CLICK_NAMES, id)
+        NexusUi.panel(this, "Sounds & music", "Tap a sound to choose it; you'll hear each one as you pick it.", listOfNotNull(
+            NexusUi.Option.header("Menu sounds"),
+            NexusUi.Option("Menu sounds", value = onOff(menu)) { Sfx.setOn(this, !menu); soundSettings() },
+            if (!menu) null else NexusUi.Option("Scrolling", value = click(Sfx.scrollId), more = true) { chooseSound(Sfx.SCROLL) },
+            if (!menu) null else NexusUi.Option("Tapping", value = click(Sfx.tapId), more = true) { chooseSound(Sfx.TAP) },
+            if (!menu) null else NexusUi.Option("Opening an app", value = SoundBank.name(SoundBank.OPEN_IDS, SoundBank.OPEN_NAMES, Sfx.openId), more = true) { chooseSound(Sfx.OPEN) },
+            if (!menu) null else NexusUi.Option("Volume", value = Sfx.dots(Sfx.volume), more = true) { chooseVolume(music = false) },
+            NexusUi.Option.header("Home screen music"),
+            NexusUi.Option("Music", value = if (music) Ambience.styleName(this) else "Off", more = true) { chooseMusic() },
+            if (!music) null else NexusUi.Option("Volume", value = Sfx.dots(Ambience.volume(this)), more = true) { chooseVolume(music = true) }
+        ), cancel = "Back", back = { homeSettings() })
+    }
+
+    /** Picking the scrolling, tapping or opening sound: each plays as it's tapped, and the panel stays open. */
+    private fun chooseSound(kind: Int) {
+        val open = kind == Sfx.OPEN
+        val ids = if (open) SoundBank.OPEN_IDS else SoundBank.CLICK_IDS
+        val names = if (open) SoundBank.OPEN_NAMES else SoundBank.CLICK_NAMES
+        val title = when (kind) { Sfx.SCROLL -> "Scrolling sound"; Sfx.TAP -> "Tapping sound"; else -> "Opening an app" }
+        val opts = ArrayList<NexusUi.Option>()
+        for (i in ids.indices) opts.add(NexusUi.Option(names[i], value = if (ids[i] == Sfx.choice(kind)) "✓" else "", sound = false) {
+            Sfx.setChoice(this, kind, ids[i])
+            if (ids[i] != "off") sfx.preview(kind, ids[i])
+            for ((j, o) in opts.withIndex()) o.setValue(if (j == i) "✓" else "")
+        })
+        NexusUi.panel(this, title, "Tap one to hear it. The one with ✓ is in use.", opts,
+            cancel = "Back", onSelect = false, back = { soundSettings() })
+    }
+
+    /** Picking the home screen music (or none): it switches as you tap, so you hear it at once. */
+    private fun chooseMusic() {
+        val ids = SoundBank.BG_IDS.toList() + "off"
+        val names = SoundBank.BG_NAMES.toList() + "Off"
+        fun cur() = if (Ambience.enabled(this)) Ambience.style(this) else "off"
+        val opts = ArrayList<NexusUi.Option>()
+        for (i in ids.indices) opts.add(NexusUi.Option(names[i], value = if (ids[i] == cur()) "✓" else "", sound = false) {
+            if (ids[i] == "off") { Ambience.setEnabled(this, false); ambience.stop() }
+            else {
+                val was = Ambience.enabled(this)
+                Ambience.setEnabled(this, true); Ambience.setStyle(this, ids[i])
+                ambience.restyle(); if (!was) ambience.start()
+            }
+            for ((j, o) in opts.withIndex()) o.setValue(if (j == i) "✓" else "")
+        })
+        NexusUi.panel(this, "Home screen music",
+            "Plays softly while you're on the home screen, on your media volume, and pauses for music, videos, calls and " +
+                "alarms. Tap one to hear it.", opts, cancel = "Back", onSelect = false, back = { soundSettings() })
+    }
+
+    /** How loud the menu sounds (or the music) are: five steps, heard as you tap. */
+    private fun chooseVolume(music: Boolean) {
+        val now = if (music) Ambience.volume(this) else Sfx.volume
+        val opts = ArrayList<NexusUi.Option>()
+        for (i in Sfx.LEVELS.indices) {
+            val v = Sfx.LEVELS[i]
+            opts.add(NexusUi.Option(Sfx.LEVEL_NAMES[i], value = Sfx.dots(v) + if (i == Sfx.level(now)) "  ✓" else "     ", sound = false) {
+                if (music) { Ambience.setVolume(this, v); ambience.refreshVolume() }
+                else { Sfx.setVolume(this, v); sfx.preview(Sfx.TAP, Sfx.tapId.takeIf { it != "off" } ?: "glass", v) }
+                for ((j, o) in opts.withIndex()) o.setValue(Sfx.dots(Sfx.LEVELS[j]) + if (j == i) "  ✓" else "     ")
+            })
+        }
+        NexusUi.panel(this, if (music) "Music volume" else "Menu sounds volume",
+            "Of your phone's media volume. Tap one to hear it.", opts, cancel = "Back", onSelect = false, back = { soundSettings() })
+    }
+
 
     /** Settings → Help. */
     private fun helpSettings() {
@@ -911,7 +981,8 @@ class MainActivity : Activity(), NexusUi.NavHost {
                 "• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n" +
                 "• Tap ADD APP to add apps to NEXUS: tick as many as you like, then tap ADD.\n" +
                 "• Swipe down from the top (or tap the top bar) for your phone's notification panel. With Notification access, the top bar shows which apps have notifications and the newest show as boxes at the top of the home screen: tap to open, swipe sideways to clear (Settings → Notifications).\n" +
-                "• Settings → Home screen → Style: List (one app per line), Data grid (glass blocks with spinning icons) or Tiles. App order: A–Z or your own.\n" +
+                "• Settings → Style & layout → Style: List (one app per line), Data grid (glass blocks with spinning icons), Archive (3D blocks in a gray room) or Tiles. Settings → App order: A–Z or your own.\n" +
+                "• Settings → Sounds & music: pick the scrolling, tapping and opening sounds and the home screen music, and how loud each is.\n" +
                 "• Recent Apps (the square button, once the helper is on): tap a card to switch to that app, swipe it up to close the app, or tap beside the cards to go home. With no apps open, it takes you to the home screen. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent Apps helper).\n" +
                 "• Buttons in apps: NEXUS's Back, Home and Recent buttons in place of the phone's own (needs 3-button navigation).\n" +
                 "• Close NEXUS (in Settings) and Home goes to your normal home screen; open NEXUS from its icon to make it your home again.\n\n" +
@@ -920,27 +991,32 @@ class MainActivity : Activity(), NexusUi.NavHost {
     }
 
     /** The home screen's style: "ps2" (the List style), "grid" (the data grid) or "tiles". */
-    private fun homeStyle(): String = prefs.getString("homeStyle", "ps2").let { if (it == "grid" || it == "tiles") it else "ps2" }
+    private fun homeStyle(): String = prefs.getString("homeStyle", "ps2").let { if (it == "grid" || it == "tiles" || it == "archive") it else "ps2" }
 
-    private fun styleName(s: String = homeStyle()) = when (s) { "grid" -> "Data grid"; "tiles" -> "Tiles"; else -> "List" }
+    private fun styleName(s: String = homeStyle()) = when (s) { "grid" -> "Data grid"; "tiles" -> "Tiles"; "archive" -> "Archive"; else -> "List" }
 
-    /** Settings → Home screen → Style: the list, the data grid, or tiles. */
+    /** Settings → Style & layout → Style: the list, the data grid, the archive or tiles (switches as you tap). */
     private fun chooseHomeStyle() {
-        val cur = homeStyle()
+        val keys = listOf("ps2", "grid", "archive", "tiles")
+        val about = mapOf(
+            "ps2" to "Your apps one per line, the one in the middle glowing brightest.",
+            "grid" to "Glass blocks with each app's icon floating inside.",
+            "archive" to "3D blocks over a soft gray room: tap one and it spins, tap again and it flies in.",
+            "tiles" to "A grid of tiles in sizes you pick.")
+        val opts = ArrayList<NexusUi.Option>()
+        for (k in keys) opts.add(NexusUi.Option(styleName(k), value = if (k == homeStyle()) "✓" else "") {
+            applyHomeStyle(k)
+            for ((i, o) in opts.withIndex()) o.setValue(if (keys[i] == k) "✓" else "")
+        })
         NexusUi.panel(this, "Home screen style",
-            "List: your apps one per line, the one in the middle glowing brightest.\n" +
-                "Data grid: your apps as glass blocks with their icons floating inside. Tap one to choose it (its icon spins), tap it again to open it.\n" +
-                "Tiles: a grid of tiles in sizes you pick.",
-            listOf("ps2", "grid", "tiles").map { k ->
-                NexusUi.Option((if (k == cur) "✓  " else "     ") + styleName(k), primary = k == cur) { setHomeStyle(k) }
-            }, cancel = "Back", back = { homeScreenSettings() })
+            keys.joinToString("\n") { styleName(it) + ": " + about[it] } + "\n\nTap one to switch to it.",
+            opts, cancel = "Back", onSelect = false, back = { homeScreenSettings() })
     }
 
-    private fun setHomeStyle(s: String) {
+    private fun applyHomeStyle(s: String) {
         prefs.edit().putString("homeStyle", s).apply()
-        hub.ps2Menu = s == "ps2"; hub.dataGrid = s == "grid"
+        hub.ps2Menu = s == "ps2"; hub.dataGrid = s == "grid" || s == "archive"; hub.archive = s == "archive"
         hub.styleChanged()
-        homeScreenSettings()
     }
 
     /** NEXUS buttons in all apps: on or off. It needs the helper, and the phone's 3-button navigation. */

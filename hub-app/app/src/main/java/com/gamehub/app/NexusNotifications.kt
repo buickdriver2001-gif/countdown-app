@@ -128,12 +128,17 @@ class NexusNotifications : NotificationListenerService() {
             // Groups that have their own notifications showing (their summary card would only repeat them)
             val withChildren = all.filter { it.notification.flags and Notification.FLAG_GROUP_SUMMARY == 0 }.map { it.groupKey }.toHashSet()
 
-            class Acc(val sbn: StatusBarNotification, val content: Boolean) { var count = 1 }
+            class Acc(var sbn: StatusBarNotification, var content: Boolean) {
+                var count = 0; val keys = ArrayList<String>(); var clearable = false
+            }
             val byApp = LinkedHashMap<String, Acc>()
+            // (A music player shows as the lock screen's music card instead, when that's on)
+            val musicCard = LockActivity.musicOn(this)
             for (sbn in all) {
                 val n = sbn.notification ?: continue
                 if (sbn.packageName == packageName && n.channelId != TEST_CHANNEL) continue
                 if (n.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_FOREGROUND_SERVICE) != 0) continue
+                if (musicCard && n.extras?.containsKey(Notification.EXTRA_MEDIA_SESSION) == true) continue
                 if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0 && sbn.groupKey in withChildren) continue
                 if (leftOut(sbn)) continue
                 var vis = n.visibility
@@ -147,12 +152,11 @@ class NexusNotifications : NotificationListenerService() {
                 }
                 if (vis == Notification.VISIBILITY_SECRET) continue // the app or you said: not on the lock screen
                 val content = vis == Notification.VISIBILITY_PUBLIC || mode == "content"
-                val acc = byApp[sbn.packageName]
-                if (acc == null) byApp[sbn.packageName] = Acc(sbn, content)
-                else {
-                    acc.count++
-                    if (sbn.postTime > acc.sbn.postTime) byApp[sbn.packageName] = Acc(sbn, content).also { it.count = acc.count }
-                }
+                val acc = byApp.getOrPut(sbn.packageName) { Acc(sbn, content) }
+                acc.count++
+                if (sbn.postTime > acc.sbn.postTime) { acc.sbn = sbn; acc.content = content }
+                acc.keys.add(sbn.key)
+                if (n.flags and Notification.FLAG_NO_CLEAR == 0) acc.clearable = true
             }
 
             items = byApp.values.sortedByDescending { it.sbn.postTime }.map { a ->
@@ -169,7 +173,7 @@ class NexusNotifications : NotificationListenerService() {
                     else -> title to text
                 }
                 Item(a.sbn.key, a.sbn.packageName, app, t1, t2, a.count, a.sbn.postTime, n.contentIntent,
-                    n.flags and Notification.FLAG_AUTO_CANCEL != 0)
+                    n.flags and Notification.FLAG_AUTO_CANCEL != 0, keys = a.keys.toList(), clearable = a.clearable)
             }
         } catch (_: Throwable) { /* never let a strange notification break anything */ }
     }

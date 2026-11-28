@@ -99,7 +99,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
                 // Enter / Go on the keyboard opens the first match
                 val q = text.toString().trim().lowercase()
                 val first = if (q.isEmpty() || addMode) null else apps.firstOrNull { it.label.lowercase().startsWith(q) } ?: apps.firstOrNull { it.label.lowercase().contains(q) }
-                if (first != null) { sfx.confirm(); onOpen(first) }
+                if (first != null) { sfx.open(); onOpen(first) }
                 true
             }
             addTextChangedListener(object : TextWatcher {
@@ -361,7 +361,7 @@ class AppDrawer(private val a: Activity, private val sfx: Sfx,
                 if (!picked.add(item.pkg)) picked.remove(item.pkg)
                 updateBar(); refreshCell(item.pkg)
                 box.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
-            } else { sfx.confirm(); lastTapped = box; onOpen(item) }
+            } else { sfx.open(); lastTapped = box; onOpen(item) }
         }
         box.setOnLongClickListener {
             sfx.tick()

@@ -31,7 +31,21 @@ object NexusUi {
         setStroke((1 * d).toInt().coerceAtLeast(1), Color.argb(if (strong) 200 else 110, 140, 190, 255))
     }
 
-    class Option(val label: String, val primary: Boolean = false, val danger: Boolean = false, val action: () -> Unit)
+    /**
+     * One row of a panel. [value]: what it's set to, shown on the right (a label written "Name:  value" is split the
+     * same way); [more]: it opens another page (a › on the right); [sound]: it plays the tap sound (off for rows that
+     * play a sound of their own). [setValue] changes the value shown while the panel stays open.
+     */
+    class Option(val label: String, val primary: Boolean = false, val danger: Boolean = false, val value: String? = null,
+                 val more: Boolean = false, val sound: Boolean = true, val action: () -> Unit) {
+        internal var valueView: TextView? = null
+        fun setValue(v: String) { valueView?.text = v }
+        companion object {
+            /** A small heading between groups of rows (not a button). */
+            fun header(title: String) = Option(HEADER + title) {}
+            internal const val HEADER = "\u0000"
+        }
+    }
 
     /**
      * A NEXUS screen with NEXUS's own Back / Home / Recent buttons along the bottom: panels over it show the same
@@ -86,8 +100,14 @@ object NexusUi {
         } else null
         if (field != null) col.addView(field, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = (12 * d).toInt() })
         val list = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
-        for (o in options) list.addView(row(a, o.label, o.primary, o.danger) { if (onSelect) dialog.dismiss(); o.action() })
-        if (cancel != null) list.addView(row(a, if (back != null) "‹  $cancel" else cancel, false, false, quiet = true) { dialog.dismiss(); back?.invoke() })
+        val host0 = a as? NavHost
+        for (o in options) {
+            if (o.label.startsWith(Option.HEADER)) { list.addView(header(a, o.label.removePrefix(Option.HEADER))); continue }
+            list.addView(row(a, o) { if (o.sound) host0?.navTick(); if (onSelect) dialog.dismiss(); o.action() })
+        }
+        if (cancel != null) list.addView(row(a, Option(if (back != null) "‹  $cancel" else cancel) {}, quiet = true) {
+            host0?.navTick(); dialog.dismiss(); back?.invoke()
+        })
         if (back != null) dialog.setOnKeyListener { _, code, e ->
             if (code == android.view.KeyEvent.KEYCODE_BACK && e.action == android.view.KeyEvent.ACTION_UP) { dialog.dismiss(); back(); true }
             else code == android.view.KeyEvent.KEYCODE_BACK
@@ -231,19 +251,60 @@ object NexusUi {
         return mine.isNotEmpty()
     }
 
-    private fun row(a: Activity, label: String, primary: Boolean, danger: Boolean, quiet: Boolean = false, click: () -> Unit): View {
+    /** A group heading: small, spaced-out capitals in a soft blue, with a little room above it. */
+    private fun header(a: Activity, title: String): View {
         val d = a.resources.displayMetrics.density
         return TextView(a).apply {
-            text = label
-            textSize = 15f; typeface = light; letterSpacing = 0.06f
-            setTextColor(when { danger -> Color.rgb(255, 150, 130); quiet -> MUTED; else -> TEXT })
+            text = title.uppercase(); textSize = 11f; typeface = light; letterSpacing = 0.22f
+            setTextColor(Color.argb(200, 140, 190, 255))
+            setPadding((4 * d).toInt(), (14 * d).toInt(), 0, (2 * d).toInt())
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            if (android.os.Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true
+        }
+    }
+
+    /** A row: its name on the left, and what it's set to (or a › for another page) on the right. */
+    private fun row(a: Activity, o: Option, quiet: Boolean = false, click: () -> Unit): View {
+        val d = a.resources.displayMetrics.density
+        // "Name:  value" written in one label: shown as name and value
+        val split = o.value == null && o.label.contains(":  ")
+        val name = if (split) o.label.substringBefore(":  ") else o.label
+        val value = if (split) o.label.substringAfter(":  ") else o.value
+        val box = LinearLayout(a).apply {
+            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding((14 * d).toInt(), 0, (14 * d).toInt(), 0)
-            minHeight = (48 * d).toInt()
-            background = if (primary) glass(d, 6f, strong = true) else if (quiet) null else glass(d, 6f)
+            setPadding((14 * d).toInt(), 0, (12 * d).toInt(), 0)
+            minimumHeight = (48 * d).toInt()
+            background = if (o.primary) glass(d, 6f, strong = true) else if (quiet) null else glass(d, 6f)
             isClickable = true
             setOnClickListener { click() }
+            contentDescription = if (value.isNullOrEmpty()) name else "$name, $value"
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = (6 * d).toInt() }
         }
+        box.addView(TextView(a).apply {
+            text = name
+            textSize = 15f; typeface = light; letterSpacing = 0.06f
+            setTextColor(when { o.danger -> Color.rgb(255, 150, 130); quiet -> MUTED; else -> TEXT })
+            setPadding(0, (12 * d).toInt(), (8 * d).toInt(), (12 * d).toInt())
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val v = TextView(a).apply {
+            text = value ?: ""
+            textSize = 14f; typeface = light; letterSpacing = 0.04f
+            setTextColor(BLUE); gravity = Gravity.END
+            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            visibility = if (value == null && !o.more) View.GONE else View.VISIBLE
+        }
+        o.valueView = v
+        box.addView(v, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            width = ViewGroup.LayoutParams.WRAP_CONTENT
+        })
+        if (o.more) box.addView(TextView(a).apply {
+            text = "›"; textSize = 20f; typeface = light; setTextColor(MUTED)
+            setPadding((10 * d).toInt(), 0, 0, (2 * d).toInt())
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        })
+        return box
     }
 }

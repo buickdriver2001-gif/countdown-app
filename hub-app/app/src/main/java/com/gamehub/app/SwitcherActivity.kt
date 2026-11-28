@@ -245,7 +245,7 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
     fun openCentered() {
         val l = live()
         if (l.isEmpty() || opening != null) return
-        sfx.confirm()
+        sfx.open()
         openWithZoom(l[pos.roundToInt().coerceIn(0, l.size - 1)].pkg)
     }
     private var vel = 0f
@@ -674,7 +674,7 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
         // A tap beside the cards (not one that only stopped them sliding): home, like tapping outside the phone's own
         val card = cardAt(x, y, l)
         if (card == null) { if (!caughtSlide) { sfx.tick(); a.goNexus() }; return }
-        sfx.confirm(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+        sfx.open(); performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
         openWithZoom(card.pkg)
     }
 
@@ -757,7 +757,7 @@ class SwitcherView(private val a: SwitcherHost, private val sfx: Sfx) : View(a.c
         val l = live().toList()
         when (id) {
             A11Y_CLEAR, A11Y_PHONE, A11Y_HELPER, A11Y_RESTRICT -> { val r = a11yBounds(id) ?: return false; tap(r.centerX(), r.centerY(), l) }
-            else -> { val c = l.getOrNull(id) ?: return false; sfx.confirm(); openWithZoom(c.pkg) }
+            else -> { val c = l.getOrNull(id) ?: return false; sfx.open(); openWithZoom(c.pkg) }
         }
         return true
     }

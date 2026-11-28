@@ -1,148 +1,145 @@
 package com.gamehub.app
 
+import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
-import kotlin.math.PI
-import kotlin.math.exp
-import kotlin.math.sin
-import kotlin.random.Random
 
 /**
- * Menu sounds, generated in code: a soft glassy tink for moving, a rising two-note chime for opening, both ringing
- * out briefly as if in a big dark space. They play on a thread of their own (never holding up the screen), and
- * quick ticks overlap instead of cutting each other off.
+ * NEXUS's menu sounds: one for scrolling (each app passing the middle, the chosen one changing), one for tapping
+ * (buttons, choosing), and one for opening an app. Each is picked in Settings → Sound from NEXUS's own sounds
+ * (made up in code, see [SoundBank]), with a volume of its own. They play on a thread of their own (never holding
+ * up the screen), and quick ones overlap instead of cutting each other off.
  */
 class Sfx {
-    private val rate = 22050
-    @Volatile private var ticks: Array<AudioTrack?> = emptyArray()
-    private var nextTick = 0
-    @Volatile private var confirm: AudioTrack? = null
     private val thread = android.os.HandlerThread("nexus-sounds").apply { start() }
     private val h = android.os.Handler(thread.looper)
+    private var scrolls: Array<AudioTrack?> = emptyArray()
+    private var taps: Array<AudioTrack?> = emptyArray()
+    private var opens: Array<AudioTrack?> = emptyArray()
+    private var nextScroll = 0
+    private var nextTap = 0
+    private var nextOpen = 0
+    private var preview: AudioTrack? = null
+    /** Which choices the sounds were made for (they're made again when Settings changes them). */
+    private var built = -1
 
-    init {
-        h.post {
-            val data = buildTick()
-            ticks = Array(4) { make(data) }
-            confirm = make(buildConfirm())
-        }
+    init { h.post { rebuild() } }
+
+    private fun rebuild() {
+        val v = version
+        if (v == built) return
+        built = v
+        (scrolls + taps + opens).forEach { try { it?.release() } catch (_: Exception) {} }
+        scrolls = pool(SoundBank.click(scrollId), 4)
+        taps = pool(SoundBank.click(tapId), 3)
+        opens = pool(SoundBank.open(openId), 2)
     }
 
-    /**
-     * Moving between things: a soft glassy "tink" (a bell-like tone with the brighter overtones of glass and a breath
-     * of air) that rings out briefly in a big dark space, in the spirit of an old console's menus (an original sound).
-     */
-    private fun buildTick(): ShortArray {
-        val len = 0.5f
-        val n = (rate * len).toInt()
-        val r = Random(5)
-        val dry = FloatArray(n)
-        var hp = 0f; var px = 0f
-        for (i in 0 until n) {
-            val t = i.toFloat() / rate
-            val att = (t / 0.0015f).coerceAtMost(1f)
-            val f = 1720f
-            val body = sin(2 * PI * f * t).toFloat() * exp(-t * 48f) * 0.55f
-            val glass = sin(2 * PI * f * 2.76f * t).toFloat() * exp(-t * 95f) * 0.22f +
-                sin(2 * PI * f * 5.40f * t).toFloat() * exp(-t * 160f) * 0.08f
-            val nz = r.nextFloat() * 2f - 1f
-            hp = 0.7f * hp + nz - px; px = nz
-            val air = hp * exp(-t * 260f) * 0.10f
-            dry[i] = (body + glass + air) * att
-        }
-        return finish(space(dry, 0.70f, 0.4f, 0.36f), len, 0.08f, 0.45f)
-    }
-
-    /** Opening something: two soft glass notes a beat apart, rising, ringing out in the same space. */
-    private fun buildConfirm(): ShortArray {
-        val len = 1.0f
-        val n = (rate * len).toInt()
-        val dry = FloatArray(n)
-        for (i in 0 until n) {
-            val t = i.toFloat() / rate
-            var v = 0f
-            for ((start, f, amp) in listOf(Triple(0f, 1318.5f, 0.5f), Triple(0.075f, 1975.5f, 0.45f))) {
-                val tt = t - start
-                if (tt < 0f) continue
-                val env = (tt / 0.004f).coerceAtMost(1f) * exp(-tt * 6.5f)
-                v += (sin(2 * PI * f * tt).toFloat() * 0.55f + sin(2 * PI * f * 2.76f * tt).toFloat() * 0.16f * exp(-tt * 14f) +
-                    sin(2 * PI * f * 2f * tt).toFloat() * 0.12f) * env * amp
-            }
-            dry[i] = v
-        }
-        return finish(space(dry, 0.76f, 0.4f, 0.42f), len, 0.12f, 0.38f)
-    }
-
-    /**
-     * A small, dark-sounding room: four echoing delays (each softening as it repeats) and two diffusers, mixed in
-     * with the dry sound. [fb] how long it rings, [damp] how quickly the echoes lose their brightness.
-     */
-    private fun space(x: FloatArray, fb: Float, damp: Float, mix: Float): FloatArray {
-        val wet = FloatArray(x.size)
-        for (ms in floatArrayOf(29.7f, 37.1f, 41.1f, 43.7f)) {
-            val buf = FloatArray((rate * ms / 1000f).toInt()); var idx = 0; var lp = 0f
-            for (i in x.indices) {
-                val o = buf[idx]; lp = o * (1f - damp) + lp * damp
-                buf[idx] = x[i] + lp * fb; idx = (idx + 1) % buf.size
-                wet[i] += o / 4f
-            }
-        }
-        for (ms in floatArrayOf(5.0f, 1.7f)) {
-            val buf = FloatArray((rate * ms / 1000f).toInt()); var idx = 0
-            for (i in wet.indices) {
-                val b = buf[idx]; val v = wet[i] + b * 0.5f
-                wet[i] = b - v * 0.5f; buf[idx] = v; idx = (idx + 1) % buf.size
-            }
-        }
-        return FloatArray(x.size) { i -> x[i] * (1f - mix * 0.5f) + wet[i] * mix * 2.2f }
-    }
-
-    /** Fades the very end out over [fadeS], scales the loudest point to [peak] and turns it into 16-bit sound. */
-    private fun finish(y: FloatArray, len: Float, fadeS: Float, peak: Float): ShortArray {
-        var mx = 1e-6f
-        for (i in y.indices) {
-            val t = i.toFloat() / rate
-            y[i] *= ((len - t) / fadeS).coerceIn(0f, 1f)
-            mx = maxOf(mx, kotlin.math.abs(y[i]))
-        }
-        val k = peak / mx
-        return ShortArray(y.size) { i -> (y[i] * k * Short.MAX_VALUE).toInt().coerceIn(-32767, 32767).toShort() }
-    }
+    private fun pool(data: ShortArray?, n: Int): Array<AudioTrack?> = if (data == null) emptyArray() else Array(n) { make(data) }
 
     private fun make(data: ShortArray): AudioTrack? = try {
         AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_GAME).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
-            .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(rate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+            .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(SoundBank.RATE).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
             .setBufferSizeInBytes(data.size * 2)
             .setTransferMode(AudioTrack.MODE_STATIC)
             .build().also { it.write(data, 0, data.size) }
     } catch (_: Exception) { null }
 
-    private fun play(t: AudioTrack?) {
+    private fun play(t: AudioTrack?, vol: Float) {
         try {
             t ?: return
             if (t.playState == AudioTrack.PLAYSTATE_PLAYING) t.stop()
             t.reloadStaticData()
+            t.setVolume(vol)
             t.play()
         } catch (_: Exception) {}
     }
 
-    fun tick() {
+    private fun fire(kind: Int) {
         if (!on) return
         h.post {
-            val pool = ticks
-            if (pool.isEmpty()) return@post
-            nextTick = (nextTick + 1) % pool.size
-            play(pool[nextTick])
+            if (built != version) rebuild()
+            when (kind) {
+                SCROLL -> if (scrolls.isNotEmpty()) { nextScroll = (nextScroll + 1) % scrolls.size; play(scrolls[nextScroll], volume) }
+                TAP -> if (taps.isNotEmpty()) { nextTap = (nextTap + 1) % taps.size; play(taps[nextTap], volume) }
+                else -> if (opens.isNotEmpty()) { nextOpen = (nextOpen + 1) % opens.size; play(opens[nextOpen], volume) }
+            }
         }
     }
-    fun confirm() { if (on) h.post { play(confirm) } }
 
-    companion object {
-        /** Menu sounds on (Settings → Sound). */
-        @Volatile var on = true
+    /** Scrolling: an app passing the middle, or another one chosen. */
+    fun scroll() = fire(SCROLL)
+    /** Tapping a button or choosing something. */
+    fun tick() = fire(TAP)
+    /** Confirming something that isn't opening an app (it sounds like a tap). */
+    fun confirm() = fire(TAP)
+    /** Opening an app. */
+    fun open() = fire(OPEN)
+
+    /** Settings → Sound: plays one of the choices once (even with menu sounds off), at [vol]. */
+    fun preview(kind: Int, id: String, vol: Float = volume) {
+        h.post {
+            try { preview?.release() } catch (_: Exception) {}
+            val data = if (kind == OPEN) SoundBank.open(id) else SoundBank.click(id)
+            preview = data?.let { make(it) }
+            play(preview, vol)
+        }
     }
 
-    fun release() { h.post { ticks.forEach { it?.release() }; confirm?.release(); thread.quitSafely() } }
+    companion object {
+        const val SCROLL = 0
+        const val TAP = 1
+        const val OPEN = 2
+
+        /** Menu sounds on (Settings → Sound). */
+        @Volatile var on = true
+        @Volatile var scrollId = "glass"
+        @Volatile var tapId = "glass"
+        @Volatile var openId = "rise"
+        /** Menu sounds' volume (of the media volume), 0.2 to 1. */
+        @Volatile var volume = 1f
+        /** Goes up whenever a choice changes, so each player makes its sounds again. */
+        @Volatile var version = 0
+
+        /** Volume steps for Settings, quietest first. */
+        val LEVELS = floatArrayOf(0.2f, 0.4f, 0.6f, 0.8f, 1f)
+        val LEVEL_NAMES = arrayOf("Very low", "Low", "Medium", "High", "Full")
+        /** The nearest step to [v]. */
+        fun level(v: Float): Int = LEVELS.indices.minByOrNull { kotlin.math.abs(LEVELS[it] - v) } ?: 4
+        /** A volume as dots, filled up to its step: ●●●○○. */
+        fun dots(v: Float): String { val k = level(v); return "●".repeat(k + 1) + "○".repeat(LEVELS.size - k - 1) }
+
+        private fun prefs(c: Context) = c.getSharedPreferences("hub", Context.MODE_PRIVATE)
+
+        /** Reads the choices from Settings (at start-up, and after a change). */
+        fun load(c: Context) {
+            val p = prefs(c)
+            on = p.getBoolean("menuSounds", true)
+            scrollId = p.getString("sfxScroll", "glass") ?: "glass"
+            tapId = p.getString("sfxTap", "glass") ?: "glass"
+            openId = p.getString("sfxOpen", "rise") ?: "rise"
+            volume = p.getFloat("sfxVol", 1f).coerceIn(0.1f, 1f)
+            version++
+        }
+
+        fun setChoice(c: Context, kind: Int, id: String) {
+            prefs(c).edit().putString(when (kind) { SCROLL -> "sfxScroll"; TAP -> "sfxTap"; else -> "sfxOpen" }, id).apply()
+            load(c)
+        }
+
+        fun choice(kind: Int): String = when (kind) { SCROLL -> scrollId; TAP -> tapId; else -> openId }
+
+        fun setVolume(c: Context, v: Float) { prefs(c).edit().putFloat("sfxVol", v).apply(); load(c) }
+        fun setOn(c: Context, v: Boolean) { prefs(c).edit().putBoolean("menuSounds", v).apply(); load(c) }
+    }
+
+    fun release() {
+        h.post {
+            (scrolls + taps + opens).forEach { try { it?.release() } catch (_: Exception) {} }
+            try { preview?.release() } catch (_: Exception) {}
+            thread.quitSafely()
+        }
+    }
 }
