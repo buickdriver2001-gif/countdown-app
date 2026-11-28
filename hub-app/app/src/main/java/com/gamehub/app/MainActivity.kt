@@ -102,7 +102,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         val sizes = listOf(1 to 1, 2 to 1, 1 to 2, 2 to 2, 99 to 1)
         NexusUi.panel(this, "Tile size", g.name, sizes.map { (w, h) ->
             val cur = (if (w == 99) g.tileW >= hub.gridCols else g.tileW == w) && g.tileH == h
-            NexusUi.Option((if (cur) "✓  " else "     ") + (if (w == 99) "Full row" else sizeName(w, h)), primary = cur) {
+            NexusUi.Option(if (w == 99) "Full row" else sizeName(w, h), value = if (cur) "✓" else null) {
                 prefs.edit().putString("tile_${g.pkg}", "${w}x$h").apply()
                 refresh()
             }
@@ -113,7 +113,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
         val cur = prefs.getString("grid", "4x6")
         val grids = listOf("3x5" to "3 × 5  (big tiles)", "4x6" to "4 × 6  (standard)", "4x8" to "4 × 8  (compact)")
         NexusUi.panel(this, "Grid size", "Columns × rows that fit on one screen. More apps scroll.", grids.map { (k, label) ->
-            NexusUi.Option((if (k == cur) "✓  " else "     ") + label, primary = k == cur) {
+            NexusUi.Option(label, value = if (k == cur) "✓" else null) {
                 prefs.edit().putString("grid", k).apply()
                 refresh()
                 homeScreenSettings()
@@ -491,32 +491,42 @@ class MainActivity : Activity(), NexusUi.NavHost {
     /** Settings → Recent apps: status, setup steps, and an on/off switch for the square button. */
     private fun openAppsSettings() {
         val on = Recents.serviceOn(this)
+        val running = on && helperRunning()
         val replace = prefs.getBoolean("replaceRecents", true)
+        val back = { openAppsSettings() }
         val status = when {
-            on && helperRunning() -> "Helper is ON. Recent apps are being remembered."
-            on -> "The helper is switched on, but Android has stopped it. Tap Turn helper off below, then switch NEXUS Recent Apps off and back on."
-            else -> "Helper is OFF. Follow the two steps below to turn it on."
+            running -> "The helper is on: NEXUS Recent Apps, the lock screen and the buttons in apps can all work."
+            on -> "The helper is switched on, but Android has stopped it. Turn it off and on again in Accessibility."
+            else -> "The helper is off. Two steps turn it on:"
         }
         val opts = ArrayList<NexusUi.Option>()
         if (!on) {
-            opts.add(NexusUi.Option("1.  Turn on helper", primary = true) { openAccessibility() })
-            opts.add(NexusUi.Option("2.  Allow restricted settings (if asked)") { openAppInfo() })
-        } else opts.add(NexusUi.Option("Turn helper off") { openAccessibility() })
-        opts.add(NexusUi.Option("Square button opens NEXUS Recent Apps:  " + onOff(replace)) {
+            opts.add(NexusUi.Option("1.  Turn on the helper", primary = true, more = true, sub = "Accessibility → NEXUS Recent Apps") { openAccessibility() })
+            opts.add(NexusUi.Option("2.  Allow restricted settings", more = true, sub = "Only if Android says \"Restricted setting\"") { openAppInfo() })
+        } else opts.add(NexusUi.Option("Helper", value = if (running) "On" else "Stopped", more = true, sub = "Opens Accessibility, to turn it off or on") { openAccessibility() })
+        opts.add(NexusUi.Option.header("Recent Apps"))
+        opts.add(NexusUi.Option("Square button opens NEXUS Recent Apps", value = onOff(replace)) {
             prefs.edit().putBoolean("replaceRecents", !replace).apply()
             openAppsSettings()
         })
         val full = NexusAccessibility.fullCloseOn(this)
-        opts.add(NexusUi.Option("Fully close apps you swipe away:  " + onOff(full)) {
+        opts.add(NexusUi.Option("Fully close apps you swipe away", value = onOff(full)) {
             prefs.edit().putBoolean("fullClose", !full).apply()
             openAppsSettings()
         })
-        if (on && helperRunning() && full) opts.add(NexusUi.Option("Close every open app now") { askCloseEverything() })
+        if (running && full) opts.add(NexusUi.Option("Close every open app now") { askCloseEverything() })
         opts.add(NexusUi.Option("Show Recent Apps now") { openSwitcher() })
-        NexusUi.panel(this, "Recent Apps helper", "$status\n\nThe helper runs NEXUS Recent Apps, the NEXUS lock screen and NEXUS's buttons in apps.\n\n" +
-            "To turn it on: in Accessibility, choose NEXUS Recent Apps and switch it on. If Android says \"Restricted setting\", open App info, tap ⋮ at the top right, choose Allow restricted settings, then try again.\n\n" +
-            "Fully closing apps: Android only lets its own recent apps screen close other apps, so when you swipe an app away in NEXUS Recent Apps, NEXUS opens that screen behind Recent Apps and presses Close for you. While it's there, it also closes any app still open in the phone that NEXUS Recent Apps doesn't show, so the two always match. It only reads that screen, only while closing apps. Nothing is ever sent anywhere.",
-            opts, cancel = "Back", back = { homeSettings() })
+        opts.add(NexusUi.Option("About the helper", more = true) {
+            info("About the helper",
+                "The helper runs NEXUS Recent Apps, the NEXUS lock screen and NEXUS's buttons in apps.\n\n" +
+                "To turn it on: in Accessibility, choose NEXUS Recent Apps and switch it on. If Android says \"Restricted setting\", " +
+                "open App info, tap ⋮ at the top right, choose Allow restricted settings, then try again.\n\n" +
+                "Fully closing apps: Android only lets its own recent apps screen close other apps, so when you swipe an app away in " +
+                "NEXUS Recent Apps, NEXUS opens that screen behind Recent Apps and presses Close for you. While it's there, it also " +
+                "closes any app still open in the phone that NEXUS Recent Apps doesn't show, so the two always match. It only reads " +
+                "that screen, only while closing apps. Nothing is ever sent anywhere.", back)
+        })
+        NexusUi.panel(this, "Recent Apps helper", status, opts, cancel = "Back", back = { homeSettings() })
     }
 
     /** Settings → Recent Apps helper → Close every open app: everything open in the phone closes, with the closing cube. */
@@ -582,12 +592,18 @@ class MainActivity : Activity(), NexusUi.NavHost {
         if (android.os.SystemClock.uptimeMillis() - homeAskedAt < 700) homeAppSetting()
     }
 
+    /** The home screen NEXUS goes back to when it's closed, by name (for Settings). */
+    private fun normalHomeName(): String {
+        val cur = HomeMode.normalHome(this)
+        return try { HomeMode.otherHomes(this).firstOrNull { it.second == cur }?.first } catch (_: Exception) { null } ?: "Phone's own"
+    }
+
     private fun chooseNormalHome() {
         val homes = HomeMode.otherHomes(this)
         if (homes.isEmpty()) { NexusUi.note(this, "No other home screen found"); return }
         val current = HomeMode.normalHome(this)
         NexusUi.panel(this, "Your normal home screen", "Where NEXUS takes you when you close it.",
-            homes.map { h -> NexusUi.Option((if (h.second == current) "✓  " else "     ") + h.first, primary = h.second == current) { HomeMode.setNormalHome(this, h.second); homeScreenSettings() } },
+            homes.map { h -> NexusUi.Option(h.first, value = if (h.second == current) "✓" else null) { HomeMode.setNormalHome(this, h.second); homeScreenSettings() } },
             cancel = "Back", back = { homeScreenSettings() })
     }
 
@@ -629,62 +645,67 @@ class MainActivity : Activity(), NexusUi.NavHost {
     private fun lockSettings() {
         val on = LockActivity.enabled(this)
         val helper = Recents.serviceOn(this)
-        val msg = "When your screen turns on, NEXUS shows its own lock screen (clock, date, battery) on top of your phone's. " +
-            "Swipe up and your phone's normal PIN, pattern or fingerprint unlock appears, so your phone stays just as secure. " +
-            "It never covers calls or alarms, and the camera is still on the phone's lock screen underneath. " +
-            "Left alone, it fades out and the screen turns off (after 8 seconds unless you change it below).\n\n" +
-            "Notifications: NEXUS can show them on its lock screen too (tap one, unlock, and it opens). It follows the same " +
-            "privacy rules as your phone's lock screen: apps set to stay off the lock screen never appear, and with " +
-            "\"Hide sensitive content\" private notifications only show the app's name. Swipe one sideways to clear it. " +
-            "Nothing is stored or sent anywhere.\n\n" +
-            "Music playing: what's on in Apple Music (or any music app) shows with its album art, and play, pause and skip " +
-            "work without unlocking. Tap the song to unlock and open it." +
-            (if (!helper) "\n\nNeeds the Recent Apps helper switched on (Settings → Recent Apps helper)." else "")
+        val access = NexusNotifications.granted(this)
+        val back = { lockSettings() }
         val opts = ArrayList<NexusUi.Option>()
-        if (!helper) opts.add(NexusUi.Option("Turn on helper first", primary = true) { openAppsSettings() })
-        opts.add(NexusUi.Option(if (on) "Turn NEXUS lock screen OFF" else "Turn NEXUS lock screen ON", primary = helper && !on) {
+        if (!helper) opts.add(NexusUi.Option("Turn on the Recent Apps helper first", primary = true, more = true) { openAppsSettings() })
+        opts.add(NexusUi.Option("NEXUS lock screen", value = onOff(on), primary = helper && !on) {
             prefs.edit().putBoolean("lockScreen", !on).apply()
             NexusAccessibility.instance?.refreshCover()
             lockSettings()
             NexusUi.note(this, if (!on) "NEXUS lock screen on. Turn your screen off and on to see it." else "NEXUS lock screen off", long = !on)
         })
-        // Left alone, it fades out and the screen turns off
-        val off = LockActivity.offAfterSec(this)
-        opts.add(NexusUi.Option("Screen turns off after:  " + (if (off > 0) "$off seconds" else "phone's screen timeout")) {
-            prefs.edit().putInt("lockOffSec", when (off) { 8 -> 15; 15 -> 30; 30 -> 0; else -> 8 }).apply()
+        opts.add(NexusUi.Option.header("Look"))
+        opts.add(NexusUi.Option("Background", value = LockActivity.BACKGROUNDS.first { it.first == LockActivity.background(this) }.second, more = true) {
+            chooseLockBackground()
+        })
+        val music = LockActivity.musicOn(this)
+        if (access) opts.add(NexusUi.Option("Music playing", value = onOff(music), sub = "Album art, play, pause and skip") {
+            prefs.edit().putBoolean("lockMusic", !music).apply()
+            NexusNotifications.refresh()
             lockSettings()
         })
-        // Where unlocking takes you
-        val toHome = LockActivity.unlockToHome(this)
-        opts.add(NexusUi.Option("After unlocking:  " + (if (toHome) "NEXUS home screen" else "back to where you were")) {
-            prefs.edit().putBoolean("unlockToHome", !toHome).apply()
-            lockSettings()
-        })
-        // Notifications on the NEXUS lock screen
-        if (!NexusNotifications.granted(this)) {
-            opts.add(NexusUi.Option("Show notifications here: allow access") { askNotificationAccess() })
-        } else {
+        opts.add(NexusUi.Option.header("Notifications"))
+        if (!access) opts.add(NexusUi.Option("Show notifications and music", value = "Allow access", more = true) { askNotificationAccess(back = back) })
+        else {
             val mode = NexusNotifications.mode(this)
-            val name = when (mode) { "content" -> "Show all content"; "private" -> "Hide sensitive content"; else -> "Off" }
-            opts.add(NexusUi.Option("Notifications:  $name") {
+            val name = when (mode) { "content" -> "All content"; "private" -> "Hide sensitive"; else -> "Off" }
+            opts.add(NexusUi.Option("Notifications", value = name, sub = "Tap one to open it, swipe it sideways to clear it") {
                 NexusNotifications.setMode(this, when (mode) { "content" -> "private"; "private" -> "off"; else -> "content" })
                 lockSettings()
             })
             opts.add(NexusUi.Option("Send a test notification") { sendTestNotification() })
-            // What's behind it all
-            opts.add(NexusUi.Option("Background", value = LockActivity.BACKGROUNDS.first { it.first == LockActivity.background(this) }.second, more = true) {
-                chooseLockBackground()
-            })
-            // What's playing in a music app
-            val music = LockActivity.musicOn(this)
-            opts.add(NexusUi.Option("Music playing", value = onOff(music)) {
-                prefs.edit().putBoolean("lockMusic", !music).apply()
-                NexusNotifications.refresh()
-                lockSettings()
-            })
         }
-        NexusUi.panel(this, "NEXUS lock screen", msg, opts, cancel = "Back", back = { homeSettings() })
+        opts.add(NexusUi.Option.header("Timing"))
+        val off = LockActivity.offAfterSec(this)
+        opts.add(NexusUi.Option("Screen turns off after", value = if (off > 0) "$off seconds" else "Phone's timeout") {
+            prefs.edit().putInt("lockOffSec", when (off) { 8 -> 15; 15 -> 30; 30 -> 0; else -> 8 }).apply()
+            lockSettings()
+        })
+        val toHome = LockActivity.unlockToHome(this)
+        opts.add(NexusUi.Option("After unlocking", value = if (toHome) "NEXUS home" else "Where you were") {
+            prefs.edit().putBoolean("unlockToHome", !toHome).apply()
+            lockSettings()
+        })
+        opts.add(NexusUi.Option("About the lock screen", more = true) {
+            info("About the lock screen",
+                "When your screen turns on, NEXUS shows its own lock screen (clock, date, battery) on top of your phone's. " +
+                "Swipe up and your phone's normal PIN, pattern or fingerprint unlock appears, so your phone stays just as secure. " +
+                "It never covers calls or alarms, and the camera is still on the phone's lock screen underneath. " +
+                "Left alone, it fades out and the screen turns off.\n\n" +
+                "Notifications follow the same privacy rules as your phone's lock screen: apps set to stay off the lock screen " +
+                "never appear, and with Hide sensitive, private notifications only show the app's name. Tap one, unlock, and it " +
+                "opens; swipe one sideways to clear it.\n\n" +
+                "Music playing: what's on in Apple Music (or any music app) shows with its album art; play, pause and skip work " +
+                "without unlocking, and tapping the song unlocks and opens it.\n\nNothing is stored or sent anywhere.", back)
+        })
+        NexusUi.panel(this, "Lock screen", "Sits on top of your phone's own lock screen: your PIN, pattern or fingerprint still unlocks it.",
+            opts, cancel = "Back", back = { homeSettings() })
     }
+
+    /** A page that only explains something, with Back. */
+    private fun info(title: String, text: String, back: () -> Unit) =
+        NexusUi.panel(this, title, text, emptyList(), cancel = "Back", back = back)
 
     /** Settings → Lock screen → Background: one of NEXUS's, or a photo of your own (picked with the phone's photo picker). */
     private fun chooseLockBackground() {
@@ -907,9 +928,8 @@ class MainActivity : Activity(), NexusUi.NavHost {
             if (isHome) null else NexusUi.Option("Make NEXUS my home screen", primary = true) { openHomeSettings() },
             NexusUi.Option("Style", value = styleName(), more = true) { chooseHomeStyle() },
             if (homeStyle() != "tiles") null else NexusUi.Option("Grid size", value = prefs.getString("grid", "4x6")!!.replace("x", " × "), more = true) { chooseGrid() },
-            NexusUi.Option("Match wallpaper to NEXUS", more = true) { askWallpaper() },
-            NexusUi.Option("Home screen when NEXUS is closed", more = true) { chooseNormalHome() },
-            if (isHome) NexusUi.Option("NEXUS is your home screen", value = "✓") { openHomeSettings() } else null,
+            NexusUi.Option("Match wallpaper to NEXUS", more = true, sub = "Sets your phone's wallpaper to NEXUS's") { askWallpaper() },
+            NexusUi.Option("Home screen when NEXUS is closed", value = normalHomeName(), more = true) { chooseNormalHome() },
             if (hub.games.isEmpty()) null else NexusUi.Option("Remove all apps from home screen", danger = true) { askClearHome() }
         ), cancel = "Back", back = { homeSettings() })
     }
@@ -925,18 +945,22 @@ class MainActivity : Activity(), NexusUi.NavHost {
     private fun notificationSettings(back: () -> Unit) {
         if (!NexusNotifications.granted(this)) { askNotificationAccess(back = back); return }
         val boxes = NexusNotifications.boxesOn(this); val icons = NexusNotifications.barOn(this)
-        NexusUi.panel(this, "Notifications",
-            "Boxes: your notifications at the top of the home screen, newest first. Swipe up and down on them to scroll " +
-                "through, tap one to open it, swipe it sideways to clear it. They scroll away with your apps.\n\n" +
-                "Icons: which apps have notifications, in the status bar.\n\n" +
-                "Both only show while your phone is unlocked. Nothing is stored or sent anywhere.\n\n" +
-                "Swiping down from the top (or tapping the status bar) brings your phone's notification panel.",
+        val here = { notificationSettings(back) }
+        NexusUi.panel(this, "Notifications", "Only shown while your phone is unlocked. Nothing is stored or sent anywhere.",
             listOf(
-                NexusUi.Option("Boxes on the home screen:  " + onOff(boxes)) {
-                    NexusNotifications.setBoxesOn(this, !boxes); hub.notifBoxes = !boxes; notificationSettings(back)
+                NexusUi.Option("Boxes on the home screen", value = onOff(boxes), sub = "Newest at the top; tap to open, swipe sideways to clear") {
+                    NexusNotifications.setBoxesOn(this, !boxes); hub.notifBoxes = !boxes; here()
                 },
-                NexusUi.Option("Icons in the status bar:  " + onOff(icons)) {
-                    NexusNotifications.setBarOn(this, !icons); hub.notifIcons = !icons; notificationSettings(back)
+                NexusUi.Option("Icons in the status bar", value = onOff(icons), sub = "Which apps have notifications") {
+                    NexusNotifications.setBarOn(this, !icons); hub.notifIcons = !icons; here()
+                },
+                NexusUi.Option("About notifications", more = true) {
+                    info("About notifications",
+                        "Boxes: your notifications at the top of the home screen, newest first. Swipe up and down on them to scroll " +
+                        "through, tap one to open it, swipe it sideways to clear it. They scroll away with your apps.\n\n" +
+                        "Icons: which apps have notifications, in NEXUS's status bar.\n\n" +
+                        "Swiping down from the top (or tapping the status bar) brings your phone's notification panel. " +
+                        "The NEXUS lock screen's notifications are set in Settings → Lock screen.", here)
                 }
             ), cancel = "Back", back = back)
     }
@@ -944,11 +968,11 @@ class MainActivity : Activity(), NexusUi.NavHost {
     /** Settings → Buttons in apps. */
     private fun buttonSettings() {
         NexusUi.panel(this, "Buttons in apps",
-            "NEXUS's Back, Home and Recent buttons can take the place of the phone's own while you use your apps. " +
-                "They need the phone's 3-button navigation, and step aside for full-screen videos and games, the lock screen and TalkBack.",
+            "NEXUS's Back, Home and Recent buttons in place of the phone's own while you use your apps. They need the phone's " +
+                "3-button navigation, and step aside for full-screen videos and games, the lock screen and TalkBack.",
             listOf(
-                NexusUi.Option("NEXUS buttons in apps:  " + onOff(NexusAccessibility.appButtonsOn(this))) { toggleAppButtons() },
-                NexusUi.Option("Button order:  " + NavBar.name(NavBar.order(this))) {
+                NexusUi.Option("Buttons in apps", value = onOff(NexusAccessibility.appButtonsOn(this))) { toggleAppButtons() },
+                NexusUi.Option("Button order", value = NavBar.name(NavBar.order(this)), sub = "Also for NEXUS's own screens") {
                     NavBar.setOrder(this, NavBar.next(NavBar.order(this))); applyNavBar()
                     NexusAccessibility.instance?.refreshAppButtons(); buttonSettings()
                 }
@@ -1038,10 +1062,10 @@ class MainActivity : Activity(), NexusUi.NavHost {
 
     /** Settings → Help. */
     private fun helpSettings() {
-        NexusUi.panel(this, "Help", null, listOf(
-            NexusUi.Option("How it works") { howItWorks() },
-            NexusUi.Option("Tutorial") { showTutorial() },
-            NexusUi.Option("Report a problem") { reportProblem() }
+        NexusUi.panel(this, "Help & guide", null, listOf(
+            NexusUi.Option("How it works", more = true, sub = "Everything NEXUS does, in short") { howItWorks() },
+            NexusUi.Option("Guided tour", more = true, sub = "The welcome steps again") { showTutorial() },
+            NexusUi.Option("Report a problem", more = true, sub = "Details to copy and send") { reportProblem() }
         ), cancel = "Back", back = { homeSettings() })
     }
 
