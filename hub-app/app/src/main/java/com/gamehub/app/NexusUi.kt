@@ -37,7 +37,8 @@ object NexusUi {
      * play a sound of their own). [setValue] changes the value shown while the panel stays open.
      */
     class Option(val label: String, val primary: Boolean = false, val danger: Boolean = false, val value: String? = null,
-                 val more: Boolean = false, val sound: Boolean = true, val action: () -> Unit) {
+                 val more: Boolean = false, val sound: Boolean = true,
+                 /** A short line under the name (what this choice is). */ val sub: String? = null, val action: () -> Unit) {
         internal var valueView: TextView? = null
         fun setValue(v: String) { valueView?.text = v }
         companion object {
@@ -88,7 +89,9 @@ object NexusUi {
         })
         col.addView(View(a).apply { setBackgroundColor(Color.argb(150, 140, 190, 255)) },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (1 * d).toInt().coerceAtLeast(1)).apply { topMargin = (10 * d).toInt(); bottomMargin = (12 * d).toInt() })
-        if (message != null) col.addView(TextView(a).apply {
+        // Everything under the title scrolls together, so a long page never pushes its choices out of reach
+        val body = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        if (message != null) body.addView(TextView(a).apply {
             text = message; setTextColor(MUTED); textSize = 14f; typeface = light; setLineSpacing(0f, 1.2f)
             setPadding(0, 0, 0, (12 * d).toInt())
         })
@@ -98,7 +101,7 @@ object NexusUi {
             background = glass(d, 6f)
             setPadding((12 * d).toInt(), (10 * d).toInt(), (12 * d).toInt(), (10 * d).toInt())
         } else null
-        if (field != null) col.addView(field, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = (12 * d).toInt() })
+        if (field != null) body.addView(field, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = (12 * d).toInt() })
         val list = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         val host0 = a as? NavHost
         for (o in options) {
@@ -112,7 +115,9 @@ object NexusUi {
             if (code == android.view.KeyEvent.KEYCODE_BACK && e.action == android.view.KeyEvent.ACTION_UP) { dialog.dismiss(); back(); true }
             else code == android.view.KeyEvent.KEYCODE_BACK
         }
-        col.addView(ScrollView(a).apply { addView(list) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        body.addView(list)
+        col.addView(ScrollView(a).apply { addView(body); isVerticalScrollBarEnabled = true; isScrollbarFadingEnabled = false },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         // Going from one page of a menu to the next: the backdrop stays as it is (no fading out and in again)
         val switching = System.currentTimeMillis() - lastClosedAt < 450
         val root = android.widget.FrameLayout(a)
@@ -278,16 +283,27 @@ object NexusUi {
             background = if (o.primary) glass(d, 6f, strong = true) else if (quiet) null else glass(d, 6f)
             isClickable = true
             setOnClickListener { click() }
-            contentDescription = if (value.isNullOrEmpty()) name else "$name, $value"
+            contentDescription = (if (value.isNullOrEmpty()) name else "$name, $value") + (if (o.sub.isNullOrEmpty()) "" else ". ${o.sub}")
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = (6 * d).toInt() }
         }
-        box.addView(TextView(a).apply {
+        val left = LinearLayout(a).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, (12 * d).toInt(), (8 * d).toInt(), (12 * d).toInt())
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        left.addView(TextView(a).apply {
             text = name
             textSize = 15f; typeface = light; letterSpacing = 0.06f
             setTextColor(when { o.danger -> Color.rgb(255, 150, 130); quiet -> MUTED; else -> TEXT })
-            setPadding(0, (12 * d).toInt(), (8 * d).toInt(), (12 * d).toInt())
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        })
+        if (!o.sub.isNullOrEmpty()) left.addView(TextView(a).apply {
+            text = o.sub
+            textSize = 12.5f; typeface = light; letterSpacing = 0.02f; setLineSpacing(0f, 1.1f)
+            setTextColor(MUTED); setPadding(0, (3 * d).toInt(), 0, 0)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        })
+        box.addView(left, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val v = TextView(a).apply {
             text = value ?: ""
             textSize = 14f; typeface = light; letterSpacing = 0.04f

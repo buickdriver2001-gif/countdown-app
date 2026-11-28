@@ -883,7 +883,8 @@ class MainActivity : Activity(), NexusUi.NavHost {
         NexusUi.panel(this, "Settings", "NEXUS $version", listOfNotNull(
             if (!isHome) NexusUi.Option("Make NEXUS my home screen", primary = true) { openHomeSettings() } else null,
             NexusUi.Option.header("Home screen"),
-            NexusUi.Option("Style & layout", value = styleName(), more = true) { homeScreenSettings() },
+            NexusUi.Option("Home style", value = styleName(), more = true) { chooseHomeStyle(back = back) },
+            NexusUi.Option("Layout & wallpaper", more = true) { homeScreenSettings() },
             NexusUi.Option("App order", value = if (alphabetical()) "A–Z" else "Your own") { toggleAlphabetical(back = back) },
             NexusUi.Option("Notifications", value = notifSummary(), more = true) { notificationSettings(back = back) },
             NexusUi.Option.header("Sound"),
@@ -899,10 +900,10 @@ class MainActivity : Activity(), NexusUi.NavHost {
         ), cancel = "Done")
     }
 
-    /** Settings → Style & layout. */
+    /** Settings → Layout & wallpaper (the style itself is Settings → Home style). */
     private fun homeScreenSettings() {
         val isHome = HomeMode.isDefault(this)
-        NexusUi.panel(this, "Style & layout", null, listOfNotNull(
+        NexusUi.panel(this, "Layout & wallpaper", null, listOfNotNull(
             if (isHome) null else NexusUi.Option("Make NEXUS my home screen", primary = true) { openHomeSettings() },
             NexusUi.Option("Style", value = styleName(), more = true) { chooseHomeStyle() },
             if (homeStyle() != "tiles") null else NexusUi.Option("Grid size", value = prefs.getString("grid", "4x6")!!.replace("x", " × "), more = true) { chooseGrid() },
@@ -1051,7 +1052,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
                 "• Tap ALL APPS to see every app. Type to search; Enter opens the top match.\n" +
                 "• Tap ADD APP to add apps to NEXUS: tick as many as you like, then tap ADD.\n" +
                 "• Swipe down from the top (or tap the top bar) for your phone's notification panel. With Notification access, the top bar shows which apps have notifications and the newest show as boxes at the top of the home screen: tap to open, swipe sideways to clear (Settings → Notifications).\n" +
-                "• Settings → Style & layout → Style: List (one app per line), Data grid (glass blocks with spinning icons), Archive (3D blocks in a gray room), Dashboard (big sliding panels), Desktop (icons and a taskbar) or Tiles. Settings → App order: A–Z or your own.\n" +
+                "• Settings → Home style: List (one app per line), Data grid (glass blocks with spinning icons), Archive (3D blocks in a gray room), Dashboard (big sliding panels), Desktop (icons and a taskbar) or Tiles. Settings → App order: A–Z or your own.\n" +
                 "• Settings → Sounds & music: pick the scrolling, tapping and opening sounds and the home screen music, and how loud each is.\n" +
                 "• Recent Apps (the square button, once the helper is on): tap a card to switch to that app, swipe it up to close the app, or tap beside the cards to go home. With no apps open, it takes you to the home screen. Android only lets its own recent apps screen fully close apps, so NEXUS opens that screen behind Recent Apps and presses Close for you, right away (switch this off under Recent Apps helper).\n" +
                 "• Buttons in apps: NEXUS's Back, Home and Recent buttons in place of the phone's own (needs 3-button navigation).\n" +
@@ -1084,24 +1085,23 @@ class MainActivity : Activity(), NexusUi.NavHost {
         else -> null
     }
 
-    /** Settings → Style & layout → Style: the list, the data grid, the archive or tiles (switches as you tap). */
-    private fun chooseHomeStyle() {
+    /** Settings → Home style: the list, the data grid, the archive or tiles (switches as you tap). */
+    private fun chooseHomeStyle(back: () -> Unit = { homeScreenSettings() }) {
         val keys = listOf("ps2", "grid", "archive", "dash", "desk", "tiles")
         val about = mapOf(
-            "ps2" to "Your apps one per line, the one in the middle glowing brightest.",
-            "grid" to "Glass blocks with each app's icon floating inside.",
-            "archive" to "3D blocks over a soft gray room: tap one and it spins, tap again and it flies in.",
-            "dash" to "Big panels that slide past, the one in the middle lit up, over flowing ribbons of light. Comes with its own sounds.",
-            "desk" to "Icons with their names on a desktop, and a taskbar with the clock. Comes with its own sounds.",
-            "tiles" to "A grid of tiles in sizes you pick.")
+            "ps2" to "One app per line, the middle one glowing",
+            "grid" to "Glass blocks with spinning icons",
+            "archive" to "3D blocks in a soft gray room",
+            "dash" to "Big sliding panels, with its own sounds",
+            "desk" to "Icons and a taskbar, with its own sounds",
+            "tiles" to "Tiles in sizes you pick")
         val opts = ArrayList<NexusUi.Option>()
-        for (k in keys) opts.add(NexusUi.Option(styleName(k), value = if (k == homeStyle()) "✓" else "") {
+        for (k in keys) opts.add(NexusUi.Option(styleName(k), value = if (k == homeStyle()) "✓" else "", sub = about[k]) {
             applyHomeStyle(k)
             for ((i, o) in opts.withIndex()) o.setValue(if (keys[i] == k) "✓" else "")
         })
-        NexusUi.panel(this, "Home screen style",
-            keys.joinToString("\n") { styleName(it) + ": " + about[it] } + "\n\nTap one to switch to it.",
-            opts, cancel = "Back", onSelect = false, back = { homeScreenSettings() })
+        NexusUi.panel(this, "Home style", "Tap one to switch to it.",
+            opts, cancel = "Back", onSelect = false, back = back)
     }
 
     private fun applyHomeStyle(s: String) {
