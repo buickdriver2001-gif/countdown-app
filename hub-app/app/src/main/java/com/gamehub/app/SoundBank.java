@@ -419,15 +419,19 @@ public final class SoundBank {
             case "musicbox": musicBox(out, n); break;
             default: drone(out, n); break;
         }
-        // Same loudness for every loop (by its average level); the odd peak above half scale is rounded off gently
+        // How loud: set by the whole sound (as each loop was made to sound), before the deep lows go
         double sum = 0;
         for (int i = n; i < 2 * n; i++) sum += out[i] * (double) out[i];
         double g = BG_RMS / (Math.sqrt(sum / n) + 1e-9);
+        // Then the deep lows a phone's speaker can't play are taken away (pushed hard, they only make it buzz and
+        // crackle): a steep cut below about 130 Hz. (Over both loops, so it has settled long before the kept one.)
+        highPass(out, 130, 2);
+        // The odd peak above 0.45 of full scale is rounded off gently, never past 0.7
         short[] s = new short[n];
         for (int i = 0; i < n; i++) {
             double v = out[n + i] * g, m = Math.abs(v);
-            if (m > 0.5) m = 0.5 + (m - 0.5) / (1 + (m - 0.5) / 0.3);
-            s[i] = (short) Math.round(Math.copySign(Math.min(m, 0.8), v) * 32767);
+            if (m > 0.45) m = 0.45 + (m - 0.45) / (1 + (m - 0.45) / 0.25);
+            s[i] = (short) Math.round(Math.copySign(Math.min(m, 0.7), v) * 32767);
         }
         return s;
     }
@@ -513,7 +517,7 @@ public final class SoundBank {
             float high = nz[i % n] - low - 1.1f * band;
             band += fk * high; low += fk * band;
             float gust = (float) Math.pow(0.55 + 0.45 * Math.sin(TAU * p * 3 + 0.8) * Math.sin(TAU * p + 0.2), 1.4);
-            float tones = 0.18f * (sn(q(73.42) * t) + sn(q(73.6) * t + 0.3)) * 0.5f + 0.1f * sn(110.0 * t + 0.5);
+            float tones = 0.18f * (sn(q(146.83) * t) + sn(q(147.2) * t + 0.3)) * 0.5f + 0.1f * sn(220.0 * t + 0.5);
             float ch = 0;
             double tl = t % LOOP_S;
             for (double[] c : chimes) for (double tt : new double[]{tl - c[0], tl + LOOP_S - c[0]}) {
@@ -595,9 +599,10 @@ public final class SoundBank {
         for (int i = 0; i < out.length; i++) {
             double t = (double) i / RATE, p = ph(t);
             double beat = t % 2.0;
-            // A soft, round thump that drops in pitch (its phase follows the falling pitch)
-            double phase = 48 * beat + 40 * (1 - Math.exp(-beat * 18)) / 18;
-            float thump = (float) (Math.sin(TAU * phase) * Math.exp(-beat * 7) * Math.min(1.0, beat / 0.004)) * 0.9f;
+            // A soft, round thump that drops in pitch (its phase follows the falling pitch), pitched where a phone's
+            // speaker can play it, with an overtone to give it body
+            double phase = 150 * beat + 70 * (1 - Math.exp(-beat * 18)) / 18;
+            float thump = (float) ((Math.sin(TAU * phase) + 0.35 * Math.sin(TAU * 2 * phase)) * Math.exp(-beat * 8) * Math.min(1.0, beat / 0.004)) * 0.8f;
             float pad = 0;
             for (int k = 0; k < ch.length; k++) pad += padNote(ch[k], t, k * 0.21) * (0.3f - k * 0.04f);
             double cut = 300 + 900 * (0.5 - 0.5 * Math.cos(TAU * p));
@@ -640,6 +645,27 @@ public final class SoundBank {
     // ------------------------------------------------------------------ shaping
 
     /**
+     * Takes away the lows below [hz] (Butterworth high-pass: [stages] 1 = gentle, 12 dB an octave; 2 = steep, 24 dB
+     * an octave), in place.
+     */
+    private static void highPass(float[] x, double hz, int stages) {
+        double[] qs = stages >= 2 ? new double[]{0.54119610, 1.30656296} : new double[]{0.70710678};
+        for (double qv : qs) {
+            double w0 = TAU * hz / RATE, cw = Math.cos(w0), alpha = Math.sin(w0) / (2 * qv);
+            double a0 = 1 + alpha;
+            double b0 = (1 + cw) / 2 / a0, b1 = -(1 + cw) / a0, b2 = (1 + cw) / 2 / a0;
+            double a1 = -2 * cw / a0, a2 = (1 - alpha) / a0;
+            double x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+            for (int i = 0; i < x.length; i++) {
+                double xi = x[i];
+                double yi = b0 * xi + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+                x2 = x1; x1 = xi; y2 = y1; y1 = yi;
+                x[i] = (float) yi;
+            }
+        }
+    }
+
+    /**
      * A small, dark-sounding room: four echoing delays (each softening as it repeats) and two diffusers, mixed in
      * with the dry sound. [fb] how long it rings, [damp] how quickly the echoes lose their brightness.
      */
@@ -672,6 +698,8 @@ public final class SoundBank {
      * [loud] (so every choice sounds about as loud as the others), never letting a peak go past 0.7. Then 16-bit.
      */
     private static short[] finish(float[] y, float len, float fadeS, float loud) {
+        // (No lows the phone's speaker can't play)
+        highPass(y, 110, 1);
         float mx = 1e-6f;
         for (int i = 0; i < y.length; i++) {
             float t = (float) i / RATE;

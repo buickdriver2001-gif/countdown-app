@@ -25,5 +25,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: nexus-build-${{ github.run_number }}
-          name: NEXUS build ${{ github.run_number }}
+          name: ${{ github.run_number == 161 && 'NEXUS 1.0' || format('NEXUS build {0}', github.run_number) }}
           files: hub-app/NEXUS.apk

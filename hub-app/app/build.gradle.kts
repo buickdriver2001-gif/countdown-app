@@ -11,10 +11,16 @@ android {
         applicationId = "com.gamehub.app"
         minSdk = 26
         targetSdk = 35
-        // Each GitHub build gets a higher number, so updates install cleanly and show their version
+        // Each GitHub build gets a higher number, so updates install cleanly. NEXUS 1.0 is build 161; each build
+        // after it is 1.0.1, 1.0.2, ... (the builds before it were the 1.N previews)
         val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        val first = 161
         versionCode = build
-        versionName = "1.$build"
+        versionName = when {
+            build == first -> "1.0"
+            build > first -> "1.0.${build - first}"
+            else -> "1.$build"
+        }
     }
 
     signingConfigs {
