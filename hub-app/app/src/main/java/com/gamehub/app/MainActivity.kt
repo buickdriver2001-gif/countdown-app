@@ -352,7 +352,7 @@ class MainActivity : Activity(), NexusUi.NavHost {
             ok = try { pi.send(this, 0, null, null, null, null, startOpts(from)); true } catch (_: Exception) { false }
         }
         if (!ok) ok = try {
-            packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true } ?: false
+            AppActions.launchIntent(this, pkg)?.let { startActivity(it); true } ?: false
         } catch (_: Exception) { false }
         if (ok) leftForApp = true
         else NexusUi.note(this, "That notification couldn't be opened")

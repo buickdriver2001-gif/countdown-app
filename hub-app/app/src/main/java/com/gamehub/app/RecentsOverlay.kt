@@ -303,7 +303,7 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
     override fun focused() = true
 
     override fun openApp(pkg: String, revealed: Boolean, picture: Bitmap?): Boolean {
-        val i = svc.packageManager.getLaunchIntentForPackage(pkg) ?: return false
+        val i = AppActions.launchIntent(svc, pkg) ?: return false
         // Apps still closing underneath: open it the moment they're done (leaving now would stop them closing).
         // Its card already fills the screen meanwhile.
         if (whenClosed { openApp(pkg, revealed, picture) }) return true
@@ -470,7 +470,7 @@ class RecentsOverlay(private val svc: NexusAccessibility) : SwitcherHost {
             svc.isPhoneLauncher(over) || over == "com.android.systemui" -> return // (opened over the phone's own recent apps)
             else -> ours // the app you were in was closed: the home screen
         }
-        val i = svc.packageManager.getLaunchIntentForPackage(target) ?: return
+        val i = (if (target == ours) svc.packageManager.getLaunchIntentForPackage(target) else AppActions.launchIntent(svc, target)) ?: return
         if (target == ours) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION).putExtra("fromApp", true)
         else i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
         restoring = target; openedOver = target

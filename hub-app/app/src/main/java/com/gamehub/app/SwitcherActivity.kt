@@ -130,7 +130,7 @@ class SwitcherActivity : Activity(), SwitcherHost {
 
     /** Opens an app. [revealed]: its card has already grown to fill the screen, so it just comes alive. */
     override fun openApp(pkg: String, revealed: Boolean, picture: android.graphics.Bitmap?): Boolean {
-        val i = packageManager.getLaunchIntentForPackage(pkg) ?: return false
+        val i = AppActions.launchIntent(this, pkg) ?: return false
         // NEXUS's own quick fade covers the opening (instead of the phone's slide-in): the app fades in over its
         // card, or out of the NEXUS dark
         val veiled = NexusAccessibility.instance?.veilForLaunch(pkg, picture, if (picture != null) 0L else 90L) == true

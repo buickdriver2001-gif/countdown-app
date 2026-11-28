@@ -254,7 +254,7 @@ class LockActivity : Activity() {
             pi.send(this, 0, null, null, null, null, opts); true
         } catch (_: Exception) { false }
         if (!ok) musicPkg?.let { p ->
-            try { packageManager.getLaunchIntentForPackage(p)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } } catch (_: Exception) {}
+            try { AppActions.launchIntent(this, p)?.let { startActivity(it) } } catch (_: Exception) {}
         }
         musicIntent = null; musicPkg = null
     }
@@ -274,7 +274,7 @@ class LockActivity : Activity() {
         }
         if (!ok) {
             // No way in from the notification itself: just open the app
-            try { packageManager.getLaunchIntentForPackage(item.pkg)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } } catch (_: Exception) {}
+            try { AppActions.launchIntent(this, item.pkg)?.let { startActivity(it) } } catch (_: Exception) {}
         }
         if (item.autoCancel) NexusNotifications.dismiss(item.key)
     }
